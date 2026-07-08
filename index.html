@@ -284,17 +284,17 @@ th.num{text-align:right}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="6" width="19" height="13" rx="2.5"/><circle cx="12" cy="12.5" r="3"/><path d="M6 9.5h.01M18 15.5h.01"/></svg>
     เงินเดือน</button>
 
-  <div class="nav-label">Administration</div>
+  <div class="nav-label" data-admin-section="1">Administration</div>
   <button class="nav-item" data-page="assets" onclick="go('assets',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l9-5 9 5v10l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v10"/></svg>
     จัดการทรัพย์สิน</button>
-  <button class="nav-item locked" onclick="toast('เมนูนี้อยู่ในเฟส 2')">
+  <button class="nav-item locked" data-future="1" onclick="toast('เมนูนี้อยู่ในเฟส 2')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l4 4v14a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M15 3v5h4"/></svg>
     จัดการเอกสาร <span class="soon">เฟส 2</span></button>
   <button class="nav-item" data-page="news" onclick="go('news',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a4 4 0 014-4h4l6-4v16l-6-4H8a4 4 0 01-4-4z"/></svg>
-    ข่าวประกาศ <span class="soon" style="background:var(--green);color:#fff">2 new</span></button>
-  <button class="nav-item locked" onclick="toast('ทริปท่องเที่ยวบริษัทอยู่ในเฟส 3')">
+    ข่าวประกาศ</button>
+  <button class="nav-item locked" data-future="1" onclick="toast('ทริปท่องเที่ยวบริษัทอยู่ในเฟส 3')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 10.5c0-3.6 3.6-6.5 8-6.5s8 2.9 8 6.5c0 5-8 10-8 10s-8-5-8-10z"/><circle cx="12" cy="10.5" r="2.5"/></svg>
     ทริปบริษัท <span class="soon">เฟส 3</span></button>
 
@@ -495,7 +495,6 @@ function mapEmployeeRow(row){
     bank: row.bank_account || "",
     payMethod: row.payment_method || "bank",
     promptpayId: row.promptpay_id || "",
-    promptpayQrPath: row.promptpay_qr_path || "",
     payeeName: row.payee_name || "",
     payeeRelation: row.payee_relation || "",
     phone: row.phone || "",
@@ -616,6 +615,10 @@ async function loadSettings(){
   settings.biweeklyAnchorDate = data.biweekly_anchor_date || "2026-01-02";
   settings.biweeklyPayOffsetDays = data.biweekly_pay_offset_days!=null?Number(data.biweekly_pay_offset_days):3;
   if(settings.biweeklyEnabled){ payrollState.status.biweekly = payrollState.status.biweekly || "draft"; }
+  // ลายเซ็น HR กลาง — ใช้บนสลิปทุกใบทุกจุด (ไม่ผูกกับผู้ที่ล็อกอิน)
+  settings.payrollSignerSignature = data.payroll_signer_signature || null;
+  settings.payrollSignerName = data.payroll_signer_name || "";
+  settings.payrollSignerTitle = data.payroll_signer_title || "ฝ่ายบุคคล (HR)";
   refreshCycleLabels();
   // OT
   settings.otCalcType = data.ot_calc_type;
@@ -842,8 +845,15 @@ function isoDate(d){const p=n=>String(n).padStart(2,"0");return `${d.getFullYear
 function currentPeriod(cy){
   const today = new Date();
   if(cy==="monthly"){
-    const cut = Number(settings.monthlyCutoffDay)||25; // วันตัดรอบตั้งได้ในแท็บ "รอบการจ่าย"
+    const cutRaw = Number(settings.monthlyCutoffDay)||25; // วันตัดรอบตั้งได้ในแท็บ "รอบการจ่าย"
     const y=today.getFullYear(), m=today.getMonth();
+    // cutRaw = 31 (ค่าพิเศษ) หมายถึง "สิ้นเดือน" → งวดคือ วันที่ 1 ถึง วันสุดท้ายของเดือนนี้
+    if(cutRaw>=31){
+      const start = new Date(y, m, 1);
+      const end   = new Date(y, m+1, 0); // วันสุดท้ายของเดือนปัจจุบัน
+      return {start: isoDate(start), end: isoDate(end)};
+    }
+    const cut = cutRaw;
     const start = today.getDate()<=cut ? new Date(y,m-1,cut+1) : new Date(y,m,cut+1);
     const end   = today.getDate()<=cut ? new Date(y,m,cut)     : new Date(y,m+1,cut);
     return {start: isoDate(start), end: isoDate(end)};
@@ -871,7 +881,7 @@ const DOW_TH = ["อาทิตย์","จันทร์","อังคาร
 function refreshCycleLabels(){
   const cut = Number(settings.monthlyCutoffDay)||25;
   const payD = Number(settings.monthlyPayDay)||0;
-  CYCLES.monthly.cut = `ตัดรอบ: วันที่ ${cut} ของเดือน`;
+  CYCLES.monthly.cut = cut>=31 ? "ตัดรอบ: สิ้นเดือน (1 – วันสุดท้ายของเดือน)" : `ตัดรอบ: วันที่ ${cut} ของเดือน`;
   CYCLES.monthly.pay = `จ่าย: ${payD===0?"วันสุดท้ายของเดือน":"วันที่ "+payD+" ของเดือน"}`;
   CYCLES.monthly.period = periodLabel(currentPeriod("monthly"));
   const cd = settings.weeklyCutoffDow!=null?Number(settings.weeklyCutoffDow):5;
@@ -1270,8 +1280,8 @@ function slipDataFromRecord(r){
     deductNote: [r.leave_deduction?`หักขาด/ลาเกินโควตา ฿${fmt(r.leave_deduction)}`:"", r.deduction_remarks||""].filter(Boolean).join(" · "),
     net: Number(r.net_pay)||0,
     printDate: new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}),
-    signatureHtml: signatures[loggedInEmployeeId]?`<img src="${signatures[loggedInEmployeeId]}" style="height:48px;object-fit:contain">`:`<div style="font-family:'Segoe Script',cursive;font-size:26px;color:#1a1a1a;font-style:italic;border-bottom:2px solid #1a1a1a;padding:0 6px 2px">${E(loggedInEmployeeId)?E(loggedInEmployeeId).name:"—"}</div>`,
-    signerLine: `${E(loggedInEmployeeId)?E(loggedInEmployeeId).name:""} · ${roleOf(loggedInEmployeeId)} · ลงนามอิเล็กทรอนิกส์ ✓`
+    signatureHtml: settings.payrollSignerSignature?`<img src="${settings.payrollSignerSignature}" style="height:48px;object-fit:contain">`:`<div style="font-family:'Segoe Script',cursive;font-size:26px;color:#1a1a1a;font-style:italic;border-bottom:2px solid #1a1a1a;padding:0 6px 2px">${settings.payrollSignerName||"ฝ่ายบุคคล"}</div>`,
+    signerLine: `${settings.payrollSignerName||"ฝ่ายบุคคล"} · ${settings.payrollSignerTitle||"ฝ่ายบุคคล (HR)"} · ลงนามอิเล็กทรอนิกส์ ✓`
   };
 }
 function openHistSlip(recId){
@@ -1383,6 +1393,30 @@ function parseBank(str){
   if(!str||str==="—") return {bank:"", acc:""};
   const parts = str.split(" "); return {bank:parts[0], acc:parts.slice(1).join(" ")};
 }
+// สรุปช่องทางรับเงินของพนักงาน (ธนาคาร / พร้อมเพย์) + ผู้รับเงินจริง (กรณีบัญชีครอบครัว)
+// คืน {ok:มีข้อมูลครบไหม, methodLabel, dest, payeeLine(html)}
+function payInfo(e){
+  const method = e.payMethod || "bank";
+  let ok=false, methodLabel="", dest="";
+  if(method==="promptpay"){
+    methodLabel = "พร้อมเพย์";
+    dest = e.promptpayId || "";
+    ok = !!dest;
+  } else {
+    methodLabel = "ธนาคาร";
+    dest = e.bank && e.bank!=="—" ? e.bank : "";
+    ok = !!dest;
+  }
+  // แสดงชื่อผู้รับเงินจริงถ้าไม่ใช่ตัวเอง (บัญชีครอบครัว)
+  let payeeLine = "";
+  const rel = e.payeeRelation || "";
+  if(e.payeeName && rel && rel!=="ตัวเอง"){
+    payeeLine = `<div style="font-size:11px;color:#b5820a;margin-top:2px">👥 โอนให้: ${e.payeeName}${rel?` (${rel})`:""}</div>`;
+  } else if(e.payeeName){
+    payeeLine = `<div style="font-size:11px;color:var(--muted);margin-top:2px">ชื่อบัญชี: ${e.payeeName}</div>`;
+  }
+  return {ok, methodLabel, dest, payeeLine};
+}
 function thaiDateToJS(str){
   if(!str) return null;
   if(/^\d{4}-\d{2}-\d{2}$/.test(str)){ // ISO date จาก Supabase (date column) — ค.ศ. อยู่แล้ว
@@ -1432,20 +1466,22 @@ function toggleNotifPanel(e){
   if(!opening) return;
   const items = [];
   if(canViewAll()){
-    items.push(["🎂","วันเกิดพนักงานวันนี้","1 รายการ · สมชาย ใจดี"]);
-    items.push(["📝","ครบกำหนดทดลองงาน",`${employees.filter(e=>e.status==='probation').length} ท่าน ใน 30 วัน`]);
-    items.push(["✅","รออนุมัติการลา",`${pendingCount()} รายการใหม่`]);
-    items.push(["💰","งวดจ่ายใกล้ถึง","Monthly Payroll ตัดรอบใน 21 วัน"]);
+    const pend = pendingCount();
+    if(pend>0) items.push(["✅","การลารออนุมัติ",`${pend} รายการ`]);
+    const probCount = employees.filter(e=>e.status==='probation').length;
+    if(probCount>0) items.push(["📝","พนักงานทดลองงาน",`${probCount} ท่าน`]);
   } else if(isTeamLead()){
-    const teamPending = leaves.filter(l=>{const emp=E(l.emp);return emp.supervisor===myEmp().name && l.supStatus==="pending";}).length;
-    items.push(["✅","ใบลาทีมรออนุมัติ",`${teamPending} รายการ`]);
+    const me = myEmp();
+    const teamPending = leaves.filter(l=>{const emp=E(l.emp);return emp && me && emp.supervisor===me.name && l.supStatus==="pending";}).length;
+    if(teamPending>0) items.push(["✅","ใบลาทีมรออนุมัติ",`${teamPending} รายการ`]);
   } else {
-    const mine = leaves.filter(l=>l.emp===loggedInEmployeeId);
-    const approved = mine.filter(l=>l.hrStatus==="approved").length;
+    const mine = leaves.filter(l=>String(l.emp)===String(loggedInEmployeeId));
     const pending = mine.filter(l=>l.supStatus==="pending"||l.hrStatus==="pending").length;
+    const approved = mine.filter(l=>l.hrStatus==="approved").length;
+    const rejected = mine.filter(l=>l.supStatus==="rejected"||l.hrStatus==="rejected").length;
     if(pending) items.push(["⏳","ใบลาของคุณรออนุมัติ",`${pending} รายการ`]);
-    if(approved) items.push(["✅","ใบลาของคุณได้รับการอนุมัติ",`${approved} รายการ`]);
-    items.push(["💰","เงินเดือนงวดนี้",`฿${fmt(calcPay(myEmp()).net)} · จ่าย 31 ก.ค. 2569`]);
+    if(approved) items.push(["✅","ใบลาที่อนุมัติแล้ว",`${approved} รายการ`]);
+    if(rejected) items.push(["❌","ใบลาที่ไม่อนุมัติ",`${rejected} รายการ`]);
   }
   panel.innerHTML = items.length===0 ? `<div class="hint" style="padding:16px;text-align:center">ไม่มีการแจ้งเตือนใหม่ 🎉</div>` :
     items.map(([icon,title,sub])=>`
@@ -1864,7 +1900,7 @@ function renderOffboardWizard(id){
       <div style="margin:8px 0 6px;display:flex;flex-direction:column;gap:6px">
         <label style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f8f9fc;border-radius:9px;cursor:pointer;font-size:13px"><input type="checkbox" class="obAccess" data-key="clockin"> ⛔ ปิดสิทธิ์ Clock In (สถานะพ้นสภาพจะบล็อกอัตโนมัติ)</label>
         <label style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f8f9fc;border-radius:9px;cursor:pointer;font-size:13px"><input type="checkbox" class="obAccess" data-key="ess"> ⛔ ปิดสิทธิ์ Employee Self-Service</label>
-        <label style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f8f9fc;border-radius:9px;cursor:pointer;font-size:13px"><input type="checkbox" class="obAccess" data-key="auth"> ⛔ รับทราบ: ปิดบัญชีเข้าระบบ (Auth) — Super Admin ปิดใน Supabase Dashboard</label>
+        <label style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#f8f9fc;border-radius:9px;cursor:pointer;font-size:13px"><input type="checkbox" class="obAccess" data-key="auth"> ⛔ รับทราบ: ระบบจะปิดบัญชีเข้าเว็บ + ยกเลิกการผูก LINE ให้อัตโนมัติเมื่อกดยืนยัน</label>
       </div>
       <div class="field" style="margin-top:10px"><label>หมายเหตุเพิ่มเติม</label><input id="obNote" placeholder="เช่น ส่งมอบงานให้..., ค้างคืนชุดฟอร์ม"></div>
       <div class="hint" style="margin-top:10px;padding:9px 12px;background:#fdecec;border-radius:9px;color:#b02a2a">⚠️ ต้องติ๊กรับคืนทรัพย์สิน/ปิดสิทธิ์ครบทุกข้อ จึงจะกดยืนยันได้ — ระบบจะคืนทรัพย์สินเข้าคลัง + บันทึกประวัติโอนย้าย + Audit Log ให้อัตโนมัติ</div>
@@ -1886,6 +1922,20 @@ async function completeOffboarding(id){
   const allBoxes = [...assetBoxes, ...fixedBoxes, ...accessBoxes];
   if(allBoxes.some(b=>!b.checked)){ toast("⚠️ ยังติ๊กเช็คลิสต์ไม่ครบ — ต้องรับคืนทรัพย์สินและปิดสิทธิ์ครบทุกข้อก่อน"); return; }
   const note = document.getElementById("obNote").value.trim()||null;
+  // ยืนยันก่อนตัดสิทธิ์ทุกช่องทาง (ตามที่เลือกไว้ — auto แต่ยืนยันทุกครั้ง)
+  const hasAuth = !!e.authUserId;
+  const hasLine = !!e.lineUserId;
+  const cutMsg = [
+    "ยืนยันทำให้ " + e.name + " พ้นสภาพ?",
+    "",
+    "ระบบจะตัดสิทธิ์ทุกช่องทางอัตโนมัติ:",
+    hasAuth ? "• ปิดบัญชีเข้าเว็บ (ล็อกอินไม่ได้อีก)" : "• (ไม่มีบัญชีเว็บให้ปิด)",
+    hasLine ? "• ยกเลิกการผูก LINE (ใช้ลงเวลา/ยื่นลาผ่าน LINE ไม่ได้อีก)" : "• (ยังไม่ได้ผูก LINE)",
+    "• เปลี่ยนสถานะเป็นพ้นสภาพ + คืนทรัพย์สินเข้าคลัง",
+    "",
+    "ดำเนินการต่อ?"
+  ].join("\n");
+  if(!confirm(cutMsg)) return;
   toast("⏳ กำลังดำเนินการ Offboarding...");
   for(const b of assetBoxes){
     const aid = Number(b.dataset.id);
@@ -1904,10 +1954,27 @@ async function completeOffboarding(id){
   });
   const { error } = await sb.from("employees").update({ status:"terminated", end_date:lastDay, resign_reason:reason }).eq("id", id);
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
-  logAudit("employee","Offboarding พ้นสภาพสมบูรณ์", `${e.name} (${e.code}) · วันสุดท้าย ${isoToThaiDisplay(lastDay)} · ${reason} · คืนทรัพย์สิน ${assetBoxes.length} ชิ้น`);
+  // ตัดสิทธิ์เว็บ (ban auth) + ยกเลิกผูก LINE อัตโนมัติ ผ่าน edge function
+  let cutResult = "";
+  try{
+    const { data: sess } = await sb.auth.getSession();
+    const token = sess?.session?.access_token;
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/manage-employee-account`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+token },
+      body: JSON.stringify({ action:"disable_and_unlink_line", employee_id:id })
+    });
+    const j = await res.json().catch(()=>({}));
+    if(res.ok && j.ok){
+      cutResult = ` · ${j.bannedAuth?'ปิดบัญชีเว็บ✓':''}${j.unlinkedLine?' ยกเลิก LINE✓':''}`;
+    } else if(j.error){
+      toast("⚠️ ตัดสิทธิ์อัตโนมัติไม่สำเร็จ: " + j.error + " (สถานะพ้นสภาพบันทึกแล้ว)");
+    }
+  }catch(err){ toast("⚠️ ตัดสิทธิ์อัตโนมัติมีปัญหา: " + err.message); }
+  logAudit("employee","Offboarding พ้นสภาพสมบูรณ์", `${e.name} (${e.code}) · วันสุดท้าย ${isoToThaiDisplay(lastDay)} · ${reason} · คืนทรัพย์สิน ${assetBoxes.length} ชิ้น${cutResult}`);
   await Promise.all([loadEmployees(), loadAssets()]);
   closeModal(); render("employees");
-  toast(`✓ Offboarding ${e.name} เสร็จสมบูรณ์ — พ้นสภาพ · คืนทรัพย์สิน ${assetBoxes.length} ชิ้นเข้าคลัง · ปิดสิทธิ์แล้ว`);
+  toast(`✓ Offboarding ${e.name} เสร็จสมบูรณ์ — พ้นสภาพ · คืนทรัพย์สิน ${assetBoxes.length} ชิ้น · ตัดสิทธิ์ทุกช่องทางแล้ว${cutResult}`);
 }
 
 /* Employee edit modal — 2 tabs */
@@ -1943,48 +2010,10 @@ async function uploadEmpFile(input, empId){
   reRenderEmpModal();
   toast("อัปโหลดเอกสารแล้ว ✓");
 }
-// ===== วิธีจ่ายเงิน: สลับฟิลด์ตามที่เลือก + จัดการรูป QR พร้อมเพย์ (เก็บใน bucket employee-files ใต้ prefix promptpay-qr/) =====
+// ===== วิธีจ่ายเงิน: สลับฟิลด์ตามที่เลือก (ธนาคาร / พร้อมเพย์) =====
 function togglePayMethod(m){
   document.querySelectorAll(".pm-bank").forEach(el=>el.style.display = m==="bank" ? "flex" : "none");
   document.querySelectorAll(".pm-promptpay").forEach(el=>el.style.display = m==="promptpay" ? "flex" : "none");
-  document.querySelectorAll(".pm-promptpayqr").forEach(el=>el.style.display = m==="promptpay_qr" ? "flex" : "none");
-}
-async function uploadPromptpayQr(input, empId){
-  const file = input.files[0]; if(!file) return;
-  input.value = "";
-  if(!file.type.startsWith("image/")){ toast("รองรับเฉพาะไฟล์รูปภาพ"); return; }
-  if(file.size > 5*1024*1024){ toast("ไฟล์ใหญ่เกิน 5 MB"); return; }
-  const ext = (file.name.split(".").pop()||"png").toLowerCase().replace(/[^a-z0-9]/g,"");
-  const path = `promptpay-qr/${empId}_${Date.now()}.${ext}`;
-  toast("⏳ กำลังอัปโหลดรูป QR...");
-  const up = await sb.storage.from("employee-files").upload(path, file, { contentType: file.type, upsert: true });
-  if(up.error){ toast("อัปโหลดไม่สำเร็จ: " + up.error.message); return; }
-  // ลบรูปเก่า (ถ้ามี) แล้วอัปเดต path ใหม่
-  const emp = E(empId);
-  const oldPath = emp?.promptpayQrPath;
-  const { error } = await sb.from("employees").update({ promptpay_qr_path: path, payment_method: "promptpay_qr" }).eq("id", empId);
-  if(error){ await sb.storage.from("employee-files").remove([path]); toast("บันทึกไม่สำเร็จ: " + error.message); return; }
-  if(oldPath && oldPath!==path){ await sb.storage.from("employee-files").remove([oldPath]).catch(()=>{}); }
-  logAudit("employee","แนบรูป QR พร้อมเพย์", `${emp?.name||("#"+empId)}`);
-  await loadEmployees();
-  reRenderEmpModal();
-  toast("แนบรูป QR พร้อมเพย์แล้ว ✓");
-}
-async function viewPromptpayQr(empId){
-  const emp = E(empId); if(!emp?.promptpayQrPath){ toast("ยังไม่มีรูป QR"); return; }
-  const { data, error } = await sb.storage.from("employee-files").createSignedUrl(emp.promptpayQrPath, 300);
-  if(error){ toast("เปิดรูปไม่สำเร็จ: " + error.message); return; }
-  window.open(data.signedUrl, "_blank");
-}
-async function removePromptpayQr(empId){
-  const emp = E(empId); if(!emp?.promptpayQrPath) return;
-  if(!confirm("ยืนยันลบรูป QR พร้อมเพย์?")) return;
-  await sb.storage.from("employee-files").remove([emp.promptpayQrPath]).catch(()=>{});
-  const { error } = await sb.from("employees").update({ promptpay_qr_path: null }).eq("id", empId);
-  if(error){ toast("ลบไม่สำเร็จ: " + error.message); return; }
-  await loadEmployees();
-  reRenderEmpModal();
-  toast("ลบรูป QR แล้ว");
 }
 async function viewEmpFile(fileId, empId){
   const f = (empFilesCache[empId]||[]).find(x=>String(x.id)===String(fileId)); if(!f) return;
@@ -2109,16 +2138,10 @@ function empInfoForm(e){
     <div class="field" style="grid-column:span 2"><label>วิธีการจ่ายเงิน</label><select id="empPayMethod" onchange="togglePayMethod(this.value)">
       <option value="bank" ${(e.payMethod||'bank')==='bank'?'selected':''}>โอนเข้าบัญชีธนาคาร</option>
       <option value="promptpay" ${e.payMethod==='promptpay'?'selected':''}>พร้อมเพย์ (เบอร์มือถือ / เลขบัตร ปชช.)</option>
-      <option value="promptpay_qr" ${e.payMethod==='promptpay_qr'?'selected':''}>พร้อมเพย์ (แนบรูป QR)</option>
     </select></div>
     <div class="field pm-bank" style="display:${(e.payMethod||'bank')==='bank'?'flex':'none'}"><label>ธนาคาร</label><select id="bankName"><option value="">-- เลือกธนาคาร --</option>${THAI_BANKS.map(b=>`<option ${bk.bank===b.split(" ")[0]?'selected':''}>${b}</option>`).join("")}</select></div>
     <div class="field pm-bank" style="display:${(e.payMethod||'bank')==='bank'?'flex':'none'}"><label>เลขที่บัญชี</label><input id="empBankAcc" value="${bk.acc}" placeholder="xxx-x-xxxxx-x"></div>
     <div class="field pm-promptpay" style="grid-column:span 2;display:${e.payMethod==='promptpay'?'flex':'none'}"><label>พร้อมเพย์ (เบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก)</label><input id="empPromptpayId" value="${e.promptpayId||''}" placeholder="เช่น 0812345678 หรือ 1234567890123"></div>
-    <div class="field pm-promptpayqr" style="grid-column:span 2;display:${e.payMethod==='promptpay_qr'?'flex':'none'};flex-direction:column;align-items:flex-start;gap:8px">
-      <label>รูป QR พร้อมเพย์</label>
-      ${e.promptpayQrPath?`<div style="display:flex;align-items:center;gap:10px"><button class="btn ghost xs" type="button" onclick="viewPromptpayQr('${e.id}')">🖼️ ดูรูป QR ที่แนบไว้</button><button class="btn ghost xs" type="button" onclick="removePromptpayQr('${e.id}')">🗑️ ลบรูป</button></div>`:`<div class="hint">ยังไม่ได้แนบรูป QR</div>`}
-      ${e.id?`<input type="file" accept="image/*" onchange="uploadPromptpayQr(this, '${e.id}')" style="font-size:12px">`:`<div class="hint">บันทึกพนักงานก่อน แล้วจึงแนบรูป QR ได้</div>`}
-    </div>
     <div class="field" style="grid-column:span 2"><label>ชื่อเจ้าของบัญชี/พร้อมเพย์ที่รับเงิน <span class="hint">(เว้นว่างได้ถ้าเป็นชื่อพนักงานเอง)</span></label><input id="empPayeeName" value="${e.payeeName||''}" placeholder="เช่น กรณีใช้บัญชีครอบครัว ใส่ชื่อเจ้าของบัญชีจริง"></div>
     <div class="field"><label>ความสัมพันธ์กับผู้รับเงิน</label><select id="empPayeeRelation">
       ${["","ตัวเอง","คู่สมรส","บิดา","มารดา","บุตร","พี่/น้อง","ญาติ","อื่นๆ"].map(r=>`<option value="${r}" ${(e.payeeRelation||'')===r?'selected':''}>${r||'-- ไม่ระบุ (ตัวเอง) --'}</option>`).join("")}</select></div>
@@ -2229,6 +2252,12 @@ async function saveEmp(id,isNew){
     toast("เลขพร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก"); return;
   }
 
+  const payeeNameRaw = (val("empPayeeName")||"").trim();
+  const payeeRelationRaw = val("empPayeeRelation") || "";
+  // ถ้าไม่ได้ระบุชื่อผู้รับเงินคนอื่น → ถือว่าโอนเข้าบัญชีตัวเองอัตโนมัติ
+  const payeeName = payeeNameRaw || null;
+  const payeeRelation = payeeNameRaw ? (payeeRelationRaw || "ตัวเอง") : "ตัวเอง";
+
   const payload = {
     code, full_name: name, department: dept, position: pos,
     nationality: nat, doc_type: nat==="MM" ? "Work Permit" : "บัตร ปชช.",
@@ -2236,8 +2265,8 @@ async function saveEmp(id,isNew){
     bank_account,
     payment_method: payMethod,
     promptpay_id: payMethod==="promptpay" ? (promptpayId||null) : null,
-    payee_name: (val("empPayeeName")||"").trim() || null,
-    payee_relation: val("empPayeeRelation") || null,
+    payee_name: payeeName,
+    payee_relation: payeeRelation,
     employment_type: val("empType") || "monthly",
     payment_cycle: val("empCycle") || "monthly",
     base_wage: Number(val("empRate")) || 0,
@@ -2270,6 +2299,30 @@ async function saveEmp(id,isNew){
 }
 
 /* ================== PAGE: ORG CHART ================== */
+let orgChartRows = null; // null=ยังไม่โหลด | array — โครงสร้างองค์กรเต็ม (ทุก role ดูได้ผ่าน RPC)
+async function loadOrgChart(){
+  const { data, error } = await sb.rpc("org_chart");
+  orgChartRows = error ? [] : (data||[]).map(r=>({
+    id:r.id, name:r.full_name||"(ไม่ระบุ)", pos:r.pos||"—", dept:r.dept||"—",
+    supervisorId:r.supervisor_id||null, color:r.color||"#3b7bf6", status:r.status||"active"
+  }));
+  if(error) console.error("loadOrgChart", error);
+}
+function buildOrgTreeFrom(list){
+  const actives = list.filter(e=>e.status!=="terminated");
+  const byId = new Set(actives.map(e=>String(e.id)));
+  const childrenOf = {};
+  const roots = [];
+  actives.forEach(e=>{
+    const supId = e.supervisorId!=null ? String(e.supervisorId) : null;
+    if(supId && byId.has(supId) && supId!==String(e.id)){
+      (childrenOf[supId] = childrenOf[supId]||[]).push(e);
+    } else {
+      roots.push(e);
+    }
+  });
+  return {roots, childrenOf};
+}
 function buildOrgTree(){
   const actives = employees.filter(e=>e.status!=="terminated");
   const byId = new Set(actives.map(e=>String(e.id)));
@@ -2311,12 +2364,18 @@ function renderOrgNode(e, childrenOf){
   </div>`;
 }
 function pgOrg(){
-  if(employees.length===0) return `<div class="card"><div class="hint" style="text-align:center;padding:30px">ยังไม่มีข้อมูลพนักงาน</div></div>`;
-  const {roots, childrenOf} = buildOrgTree();
+  // โหลดโครงสร้างองค์กรเต็มผ่าน RPC (ทุก role เห็นเหมือน HR แต่ดูอย่างเดียว แก้ไม่ได้)
+  if(orgChartRows===null){ orgChartRows="loading"; loadOrgChart().then(()=>{ if(currentPage==="orgchart") render("orgchart"); }); }
+  if(!Array.isArray(orgChartRows)) return `<div class="card"><div class="hint" style="text-align:center;padding:30px">⏳ กำลังโหลดโครงสร้างองค์กร...</div></div>`;
+  if(orgChartRows.length===0) return `<div class="card"><div class="hint" style="text-align:center;padding:30px">ยังไม่มีข้อมูลพนักงาน</div></div>`;
+  const {roots, childrenOf} = buildOrgTreeFrom(orgChartRows);
+  const readOnlyNote = canViewAll()
+    ? 'ผังตามสายบังคับบัญชาจริง (หัวหน้างาน) · แก้ไขสายบังคับบัญชาได้ที่โปรไฟล์พนักงาน'
+    : 'ผังตามสายบังคับบัญชาจริง (หัวหน้างาน) · 👁️ ดูอย่างเดียว';
   return `
   <div class="card">
     <h3>🏢 โครงสร้างองค์กร</h3>
-    <div class="hint">ผังตามสายบังคับบัญชาจริง (หัวหน้างาน) — พนักงานที่ไม่ได้ระบุหัวหน้างาน หรือระดับเดียวกัน จะเรียงต่อแถวกัน · แก้ไขสายบังคับบัญชาได้ที่ด้านบนของหน้านี้ หรือโปรไฟล์พนักงาน</div>
+    <div class="hint">${readOnlyNote}</div>
     <div style="overflow-x:auto;padding:24px 12px">
       <div style="display:flex;gap:32px;justify-content:${roots.length>3?'flex-start':'center'};align-items:flex-start;min-width:fit-content">
         ${roots.map(r=>renderOrgNode(r, childrenOf)).join("")}
@@ -2844,18 +2903,22 @@ function attLoc(){
 /* ================== PAGE: LEAVE ================== */
 function pgLeave(){
   const t = subTab.leave;
-  const tab=(k,label,icon,badge)=>`<button class="${t===k?'on':''}" onclick="setSub('leave','${k}')">${icon} ${label}${badge?' <span class="dot"></span>':''}</button>`;
+  const isPlainEmp = !canViewAll() && !isTeamLead();
+  // พนักงานทั่วไปไม่เห็นประเภทลา/ปฏิทินการลา — ถ้าแท็บปัจจุบันเป็นอันที่ถูกซ่อน เด้งกลับแดชบอร์ด
+  if(isPlainEmp && (t==="types"||t==="calendar"||t==="report")){ subTab.leave="dashboard"; return pgLeave(); }
+  const tt = subTab.leave;
+  const tab=(k,label,icon,badge)=>`<button class="${tt===k?'on':''}" onclick="setSub('leave','${k}')">${icon} ${label}${badge?' <span class="dot"></span>':''}</button>`;
   return `
   <div class="subtabs-wrap"><button class="subtab-arrow left" onclick="scrollSubtabs(this,-160)">‹</button><div class="subtabs">
     ${tab("dashboard","แดชบอร์ด","📊")}
-    ${tab("types","ประเภทลา","🏷️")}
+    ${isPlainEmp?'':tab("types","ประเภทลา","🏷️")}
     ${tab("submit","ยื่นใบลา","📝")}
     ${canApproveLeave()?tab("approve","อนุมัติลา","✅",pendingCount()>0):''}
-    ${tab("calendar","ปฏิทินการลา","📅")}
+    ${isPlainEmp?'':tab("calendar","ปฏิทินการลา","📅")}
     ${tab("quota","สิทธิ์วันลา","🎫")}
     ${canViewAll()?tab("report","รายงาน","📈"):''}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${t==="dashboard"?leaveDash():t==="types"?leaveTypes():t==="submit"?leaveSubmit():t==="approve"?(canApproveLeave()?leaveApprove():noAccessCard("เฉพาะหัวหน้างาน HR และ Super Admin เท่านั้นที่อนุมัติใบลาได้")):t==="calendar"?leaveCal():t==="report"?(canViewAll()?leaveReport():noAccessCard()):leaveQuota()}`;
+  ${tt==="dashboard"?leaveDash():tt==="types"?(isPlainEmp?leaveDash():leaveTypes()):tt==="submit"?leaveSubmit():tt==="approve"?(canApproveLeave()?leaveApprove():noAccessCard("เฉพาะหัวหน้างาน HR และ Super Admin เท่านั้นที่อนุมัติใบลาได้")):tt==="calendar"?(isPlainEmp?leaveDash():leaveCal()):tt==="report"?(canViewAll()?leaveReport():noAccessCard()):leaveQuota()}`;
 }
 function leaveReport(){
   const data = filteredLeaves();
@@ -3182,6 +3245,13 @@ async function actLeave(id,level,status){
   if(bothApprovedNow){
     await syncLeaveToAttendance(l.emp, l.dateISO);
     notifyLineBestEffort(l.emp, `✅ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ได้รับการอนุมัติแล้วครบทุกขั้นตอน — HRMS CENTER`);
+  } else if(status==="rejected"){
+    // แจ้งกลับ LINE ทันทีเมื่อไม่อนุมัติ (ไม่ว่าระดับหัวหน้าหรือ HR)
+    const who = level==="sup" ? "หัวหน้างาน" : "ฝ่ายบุคคล (HR)";
+    notifyLineBestEffort(l.emp, `❌ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ไม่ได้รับการอนุมัติจาก${who} — หากมีข้อสงสัยกรุณาติดต่อ${who}โดยตรง · HRMS CENTER`);
+  } else if(status==="approved" && level==="sup"){
+    // หัวหน้าอนุมัติแล้ว รอ HR — แจ้งความคืบหน้า
+    notifyLineBestEffort(l.emp, `⏳ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ผ่านการอนุมัติจากหัวหน้างานแล้ว รอ HR อนุมัติขั้นสุดท้าย — HRMS CENTER`);
   }
   await loadLeaves();
   logAudit("leave", `${status==='approved'?'อนุมัติ':'ปฏิเสธ'}ใบลา (ระดับ${level==='sup'?'หัวหน้า':' HR'})`, `${e?e.name:'พนักงาน'} · ${l.date||l.dateISO||""}`);
@@ -3208,12 +3278,13 @@ function leaveCal(){
   const daysInMonth = 31;
   const events = {};
   myVisibleLeaves().forEach(l=>{
+    // แสดงเฉพาะใบลาที่ "อนุมัติครบแล้ว" เท่านั้น — ที่ยังรอ/ไม่อนุมัติ ไม่โชว์ชื่อในปฏิทิน
+    if(l.hrStatus!=="approved") return;
     const d = parseInt(l.date.split(" ")[0]);
     if(l.date.includes("ก.ค.")){
       (events[d]=events[d]||[]).push({emp:E(l.emp), type:l.type, status:l.hrStatus, sup:l.supStatus});
     }
   });
-  events[15] = events[15] || [];
 
   let html = '';
   ["อา","จ","อ","พ","พฤ","ศ","ส"].forEach(d=>html+=`<div class="cal-head">${d}</div>`);
@@ -3225,7 +3296,7 @@ function leaveCal(){
     const ev = events[d]||[];
     html += `<div class="cal-day ${isSun?'sun':''} ${isToday?'today':''}">
       <div class="num">${d}${isSun?'<div style="font-size:9px;font-weight:400;color:#c1c6d1">หยุด</div>':''}</div>
-      ${ev.map(e=>`<span class="cal-tag ${e.type==='personal'?'':e.type==='sick'?'p':'s'}" title="${e.emp.name} - ${LT(e.type).name}">${e.emp.name.replace(/\(.*\)/,"").split(" ")[0]}</span>`).join("")}
+      ${ev.filter(e=>e.emp).map(e=>`<span class="cal-tag ${e.type==='personal'?'':e.type==='sick'?'p':'s'}" title="${e.emp.name} - ${LT(e.type).name}">${e.emp.name.replace(/\(.*\)/,"").split(" ")[0]}</span>`).join("")}
     </div>`;
   }
 
@@ -3267,10 +3338,10 @@ function leaveQuota(){
         </div>`;}).join("")}
     </div>
 
-    <div class="card" style="margin-top:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px dashed #b9ccf5">
+    ${canViewAll()?`<div class="card" style="margin-top:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px dashed #b9ccf5">
       <h3>🗺️ เฟส 2: พักร้อนตามกฎหมาย</h3>
       <div class="hint" style="margin-top:6px">ตามกฎหมายแรงงาน พนักงานที่ทำงานครบ 1 ปีมีสิทธิพักร้อน 6 วัน/ปี · ระบบวางโครงตารางไว้แล้ว รอเปิดใช้เฟส 2</div>
-    </div>
+    </div>`:''}
   </div>`;
 }
 
@@ -3470,6 +3541,7 @@ function openCycleSettingsModal(){
       <div style="border-top:1px solid var(--line);margin:14px 0;padding-top:14px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px"><input type="checkbox" id="cyBiweekOn" ${settings.biweeklyEnabled?'checked':''} onchange="document.getElementById('cyBiweekOpts').style.display=this.checked?'grid':'none'">
         <b>➕ เปิดใช้รอบเพิ่ม: Biweekly (จ่ายทุก 2 สัปดาห์)</b></label>
+        <div class="hint" style="font-size:10.5px;margin:4px 0 0">เช่น ทำงาน จ–ส สองสัปดาห์ จ่ายวันเสาร์ → ตั้ง "วันเริ่มนับรอบ" เป็นวันจันทร์ต้นรอบ และจ่าย 5 วันหลังตัดรอบ (จันทร์+12 วัน = เสาร์สัปดาห์ที่ 2)</div>
         <div id="cyBiweekOpts" style="display:${settings.biweeklyEnabled?'grid':'none'};grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
           <div class="field"><label>ชื่อที่แสดง</label><input id="cyNameBiweekly" value="${(settings.cycleLabels?.biweekly||'Biweekly Payroll').replace(/"/g,'&quot;')}"></div>
           <div class="field"><label>วันเริ่มนับรอบ (Anchor)</label><input type="date" id="cyBiAnchor" value="${settings.biweeklyAnchorDate||'2026-01-02'}"></div>
@@ -3477,12 +3549,16 @@ function openCycleSettingsModal(){
         </div>
         <div class="hint" style="margin-top:6px;font-size:10.5px">ปิดสวิตช์นี้ = ซ่อนการ์ดรอบ Biweekly ออกจากหน้าเลือกรอบทันที (เทียบเท่าการลบออกจากมุมมองการใช้งาน)</div>
       </div>
-      <b style="font-size:13.5px">Monthly</b>
+      <b style="font-size:13.5px">Monthly (รายเดือน)</b>
       <div class="grid" style="grid-template-columns:1fr 1fr;margin:8px 0 14px;gap:12px">
-        <div class="field"><label>ตัดรอบวันที่</label><input type="number" id="cyCut" min="1" max="28" value="${settings.monthlyCutoffDay||25}"><span class="hint" style="font-size:10.5px">งวด = วันที่ ${(settings.monthlyCutoffDay||25)+1} เดือนก่อน ถึง วันที่ตัดรอบ</span></div>
+        <div class="field"><label>รอบการตัด</label><select id="cyCut">
+          <option value="31" ${(settings.monthlyCutoffDay||25)>=31?'selected':''}>สิ้นเดือน (วันที่ 1 – วันสุดท้ายของเดือน)</option>
+          ${[25,20,15,10,5].map(d=>`<option value="${d}" ${(settings.monthlyCutoffDay||25)===d?'selected':''}>ตัดรอบวันที่ ${d} (${d+1} เดือนก่อน – ${d})</option>`).join("")}
+        </select></div>
         <div class="field"><label>วันจ่าย</label><select id="cyPay"><option value="0" ${!settings.monthlyPayDay?'selected':''}>สิ้นเดือน</option>${[1,5,10,15,25,28].map(d=>`<option value="${d}" ${settings.monthlyPayDay===d?'selected':''}>วันที่ ${d}</option>`).join("")}</select></div>
       </div>
-      <b style="font-size:13.5px">Weekly</b>
+      <b style="font-size:13.5px">Weekly (รายวัน จ่ายรายสัปดาห์)</b>
+      <div class="hint" style="font-size:10.5px;margin:2px 0 6px">เช่น ทำงาน จ–ส จ่ายทุกเสาร์ → ตั้งตัดรอบ + จ่าย = เสาร์</div>
       <div class="grid" style="grid-template-columns:1fr 1fr;margin:8px 0;gap:12px">
         <div class="field"><label>ตัดรอบทุกวัน</label><select id="cyWCut">${DOW_TH.map((d,i)=>`<option value="${i}" ${(settings.weeklyCutoffDow??5)===i?'selected':''}>${d}</option>`).join("")}</select></div>
         <div class="field"><label>จ่ายทุกวัน</label><select id="cyWPay">${DOW_TH.map((d,i)=>`<option value="${i}" ${(settings.weeklyPayDow??1)===i?'selected':''}>${d}</option>`).join("")}</select></div>
@@ -3504,7 +3580,7 @@ async function saveCycleSettings(){
   const biweekly_enabled = document.getElementById("cyBiweekOn").checked;
   const payload = {
     cycle_labels,
-    monthly_cutoff_day: Math.min(28, Math.max(1, Number(document.getElementById("cyCut").value)||25)),
+    monthly_cutoff_day: Math.min(31, Math.max(1, Number(document.getElementById("cyCut").value)||25)),
     monthly_pay_day: Number(document.getElementById("cyPay").value)||0,
     weekly_cutoff_dow: Number(document.getElementById("cyWCut").value),
     weekly_pay_dow: Number(document.getElementById("cyWPay").value),
@@ -3977,7 +4053,7 @@ function pySlip(){
         <td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td>
         <td>${e?(e.type==="monthly"?'<span class="pill blue">รายเดือน</span>':'<span class="pill purple">รายวัน</span>'):'—'}</td>
         <td class="num"><b>฿${fmt(net)}</b></td>
-        <td>${signatures[loggedInEmployeeId]?'<span class="pill green">✓ เซ็นแล้ว (ลายเซ็นจริง)</span>':'<span class="pill amber">✓ เซ็นแล้ว (ข้อความ)</span>'}<div style="font-size:10.5px;color:var(--muted)">${isHist?payDate:'งวดปัจจุบัน'}</div></td>
+        <td>${settings.payrollSignerSignature?'<span class="pill green">✓ ลายเซ็น HR</span>':'<span class="pill amber">✓ ลายเซ็น HR (ข้อความ)</span>'}<div style="font-size:10.5px;color:var(--muted)">${isHist?payDate:'งวดปัจจุบัน'}</div></td>
         <td style="text-align:center">
           ${isHist
             ? `<button class="btn ghost xs" onclick="openHistSlip(${recId})">👁 ดู (snapshot)</button>
@@ -4027,6 +4103,9 @@ function applyRoleUI(){
     const el = document.querySelector(`[data-page=${p}]`);
     if(el) el.style.display = canAccessAdmin() ? "" : "none";
   });
+  // ซ่อนเมนู "เฟสถัดไป" (จัดการเอกสาร/ทริปบริษัท) จากพนักงานทั่วไป — ไม่ให้เห็นสิ่งที่ยังไม่เปิด
+  const isPlainEmp = !canViewAll() && !isTeamLead();
+  document.querySelectorAll('[data-future="1"]').forEach(el=>{ el.style.display = isPlainEmp ? "none" : ""; });
 }
 
 function setLoginBusy(busy){
@@ -4059,6 +4138,7 @@ async function doLogin(){
 // ดึง role + ข้อมูลพนักงานของตัวเอง ผ่าน RPC ที่เป็น SECURITY DEFINER (current_employee_id / current_role_name)
 // เพื่อเลี่ยงปัญหา RLS block การอ่านตาราง user_roles ตรงๆ
 async function afterLogin(){
+  resetAppState(); // ล้างแคชของบัญชีก่อนหน้าให้หมดก่อนโหลดข้อมูลบัญชีใหม่
   const [{ data: empIdData, error: empIdErr }, { data: roleData, error: roleErr }] = await Promise.all([
     sb.rpc("current_employee_id"),
     sb.rpc("current_role_name")
@@ -4099,13 +4179,32 @@ function showLogin(msg){
   const e=document.getElementById("loginError");
   if(msg){ e.textContent=msg; e.style.display="block"; } else { e.style.display="none"; }
 }
+// ล้าง state/แคชทั้งหมด — เรียกตอน logout และตอนเริ่ม login ใหม่ กันข้อมูลของบัญชีเก่าค้าง
+function resetAppState(){
+  loggedInEmployeeId = null;
+  currentRoleCode = null;
+  employees = []; leaves = []; attendanceToday = []; bonusRecords = []; otRequests = []; announcements = [];
+  // แคชที่โหลดแบบ lazy — รีเซ็ตเป็น null/ค่าเริ่มต้น เพื่อบังคับโหลดใหม่ให้บัญชีถัดไป
+  auditRows = []; auditLoaded = false; auditLoading = false;
+  payrollHistRows = []; payrollHistLoaded = false; payrollHistLoading = false;
+  payrollState = { cycle:"monthly", status:{monthly:"draft", weekly:"draft", daily:"draft"} };
+  holidayRows = null; empFilesCache = {}; empModalCtx = null;
+  missingRows = null; adjustRows = null; payCategories = null;
+  advanceRows = null; ytdRows = null; orgUnits = null; userRolesRows = null;
+  orgChartRows = null;
+  assetRecords = []; assetsLoaded = false; assetsLoading = false;
+  signatures = {};
+  // รีเซ็ตการนำทาง — กันหน้า/แท็บเดิมของบัญชีก่อนค้าง
+  currentPage = "dashboard";
+  subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work" };
+  slipPeriod = {monthly:"current", weekly:"current", daily:"current"};
+  slipPeriod.biweekly = "current";
+}
 async function logout(){
   const me = myEmp();
   if(me){ try{ await sb.from("audit_log").insert({user_name:`${me.name} (${me.code||"-"})`, category:"auth", action:"ออกจากระบบ", ip:"Web App"}); }catch(e){} }
   await sb.auth.signOut();
-  loggedInEmployeeId = null;
-  currentRoleCode = null;
-  employees = []; leaves = []; attendanceToday = []; bonusRecords = []; otRequests = []; announcements = [];
+  resetAppState();
   showLogin();
   toast("ออกจากระบบแล้ว");
 }
@@ -4117,7 +4216,7 @@ async function checkSession(){
 // ฟัง event ของ Supabase Auth เอง (เช่น token refresh, sign out จากแท็บอื่น)
 sb.auth.onAuthStateChange((event) => {
   if(event === "SIGNED_OUT" && loggedInEmployeeId){
-    loggedInEmployeeId = null; currentRoleCode = null; employees = []; leaves = []; attendanceToday = [];
+    resetAppState();
     showLogin();
   }
 });
@@ -4133,19 +4232,44 @@ setInterval(async ()=>{
   // ถ้า error (เน็ตหลุด/token กำลัง refresh) ห้ามเด้งออก — กันบั๊กจอค้างแล้วเด้งพ้นสภาพผิดๆ
   if(!error && data && data.status==="terminated"){
     await sb.auth.signOut();
-    loggedInEmployeeId = null; currentRoleCode = null; employees = []; leaves = []; attendanceToday = [];
+    resetAppState();
     showLogin("บัญชีนี้ถูกเปลี่ยนเป็น \"พ้นสภาพ\" ระหว่างที่คุณล็อกอินอยู่ — ระบบตัดสิทธิ์การใช้งานทันที");
   }
 }, 30000);
 
 function handleSigUpload(input){
   const file = input.files[0];
-  if(!file || !canSign(loggedInEmployeeId)) return;
+  if(!file || !canViewAll()) return;
+  if(file.size > 2*1024*1024){ toast("ไฟล์ใหญ่เกิน 2 MB"); return; }
   const reader = new FileReader();
-  reader.onload = ev => { signatures[loggedInEmployeeId] = ev.target.result; render("settings"); toast(`อัปโหลดลายเซ็นของ "${E(loggedInEmployeeId).name}" แล้ว ✓ ระบบจะใช้เซ็นสลิปทุกใบที่ผู้ใช้นี้ออกให้อัตโนมัติ`); };
+  reader.onload = async ev => {
+    const dataUrl = ev.target.result;
+    const { error } = await sb.from("settings").update({ payroll_signer_signature: dataUrl }).eq("id",1);
+    if(error){ toast("บันทึกลายเซ็นไม่สำเร็จ: "+error.message); return; }
+    settings.payrollSignerSignature = dataUrl;
+    logAudit("settings","อัปโหลดลายเซ็น HR","ลายเซ็นกลางสำหรับสลิปเงินเดือน");
+    render("settings");
+    toast("บันทึกลายเซ็น HR แล้ว ✓ จะใช้บนสลิปเงินเดือนทุกใบ");
+  };
   reader.readAsDataURL(file);
 }
-function removeSignature(){ signatures[loggedInEmployeeId]=null; render("settings"); toast("ลบลายเซ็นแล้ว"); }
+async function removeSignature(){
+  if(!canViewAll()) return;
+  const { error } = await sb.from("settings").update({ payroll_signer_signature: null }).eq("id",1);
+  if(error){ toast("ลบไม่สำเร็จ: "+error.message); return; }
+  settings.payrollSignerSignature = null;
+  render("settings"); toast("ลบรูปลายเซ็นแล้ว");
+}
+async function savePayrollSigner(){
+  if(!canViewAll()) return;
+  const name = (document.getElementById("signerName")?.value||"").trim();
+  const title = (document.getElementById("signerTitle")?.value||"").trim() || "ฝ่ายบุคคล (HR)";
+  const { error } = await sb.from("settings").update({ payroll_signer_name: name||null, payroll_signer_title: title }).eq("id",1);
+  if(error){ toast("บันทึกไม่สำเร็จ: "+error.message); return; }
+  settings.payrollSignerName = name; settings.payrollSignerTitle = title;
+  logAudit("settings","ตั้งค่าผู้ลงนามสลิป", `${name} · ${title}`);
+  render("settings"); toast("บันทึกชื่อผู้ลงนามแล้ว ✓");
+}
 function syncTopbarUser(){
   const emp = E(loggedInEmployeeId);
   if(!emp) return;
@@ -4156,11 +4280,11 @@ function syncTopbarUser(){
 }
 function signatureBlock(size){
   size = size||44;
-  const emp = E(loggedInEmployeeId);
-  const sig = signatures[loggedInEmployeeId];
+  const sig = settings.payrollSignerSignature;
+  const name = settings.payrollSignerName || "ฝ่ายบุคคล";
   return sig
     ? `<img src="${sig}" style="height:${size}px;object-fit:contain">`
-    : `<div style="font-family:'Segoe Script',cursive;font-size:${size*0.55}px;color:#1a1a1a;font-style:italic;border-bottom:2px solid #1a1a1a;padding:0 6px 2px">${emp?emp.name:"—"}</div>`;
+    : `<div style="font-family:'Segoe Script',cursive;font-size:${size*0.55}px;color:#1a1a1a;font-style:italic;border-bottom:2px solid #1a1a1a;padding:0 6px 2px">${name}</div>`;
 }
 function openSlip(id, overrideNet, periodLabel, isHist){
   const e=E(id), p=calcPay(e);
@@ -4268,14 +4392,15 @@ function pyBank(){
     </div>
 
     <table style="margin-top:16px">
-      <tr><th>พนักงาน</th><th>บัญชีปลายทาง</th><th class="num">ยอดโอน</th><th>สถานะ</th></tr>
-      ${list.map(e=>{const p=calcPay(e);return `<tr>
+      <tr><th>พนักงาน</th><th>ช่องทาง</th><th>ปลายทาง</th><th class="num">ยอดโอน</th><th>สถานะ</th></tr>
+      ${list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return `<tr>
         <td>${empCell(e)}</td>
-        <td style="font-family:monospace;font-size:12.5px">${e.bank||'<span style="color:var(--red)">⚠ ยังไม่มีข้อมูลบัญชี</span>'}</td>
+        <td><span class="pill ${pi.methodLabel==='พร้อมเพย์'?'purple':'blue'}">${pi.methodLabel}</span></td>
+        <td style="font-family:monospace;font-size:12.5px">${pi.ok?pi.dest:'<span style="color:var(--red);font-family:inherit">⚠ ยังไม่มีข้อมูล</span>'}${pi.payeeLine}</td>
         <td class="num"><b>฿${fmt(p.net)}</b></td>
-        <td>${e.bank?'<span class="pill green">พร้อมโอน</span>':'<span class="pill red">รอกรอกบัญชี</span>'}</td>
+        <td>${pi.ok?'<span class="pill green">พร้อมโอน</span>':'<span class="pill red">รอกรอกข้อมูล</span>'}</td>
       </tr>`;}).join("")}
-      <tr style="background:#f8f9fc"><td colspan="2" style="text-align:right;font-weight:600">ยอดรวม</td>
+      <tr style="background:#f8f9fc"><td colspan="3" style="text-align:right;font-weight:600">ยอดรวม</td>
       <td class="num"><b class="display" style="font-size:18px;color:var(--accent)">฿${fmt(total)}</b></td><td></td></tr>
     </table>
 
@@ -5650,25 +5775,28 @@ function stUsers(){
   return usersCard + `
 
   <div class="card" style="margin-top:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px solid #b9ccf5">
-    <h3>✍️ ลายเซ็นอิเล็กทรอนิกส์ (e-Signature)</h3>
-    <div class="hint">ลายเซ็นผูกกับ <b>ผู้ใช้ที่ล็อกอินอยู่ในขณะนั้นจริง ๆ</b> (${E(loggedInEmployeeId).name}) ไม่ใช่ค่าคงที่ — เฉพาะ role ที่มีสิทธิ์ <b>อนุมัติออกสลิปเงินเดือน</b> (Super Admin / HR) เท่านั้นที่อัปโหลดลายเซ็นของตัวเองได้ พอออก/อนุมัติสลิป ระบบจะดึงรูปลายเซ็นของผู้ใช้ที่ล็อกอินอยู่ตอนนั้นไปแปะให้อัตโนมัติ</div>
+    <h3>✍️ ลายเซ็นผู้อนุมัติสลิปเงินเดือน (HR)</h3>
+    <div class="hint">ลายเซ็นกลางของฝ่ายบุคคล — ใช้บนสลิปเงินเดือน <b>ทุกใบทุกจุด</b> เหมือนกันหมด ไม่ว่าใครจะเป็นผู้ออก/ดู/พิมพ์ (เฉพาะ Super Admin / HR เท่านั้นที่ตั้งค่าได้)</div>
 
-    ${!canSign(loggedInEmployeeId)?`
-    <div class="hint" style="margin-top:14px;padding:12px;background:var(--red-soft);color:var(--red);border-radius:10px">🚫 บัญชี "${E(loggedInEmployeeId).name}" (บทบาท: ${roleOf(loggedInEmployeeId)}) ไม่มีสิทธิ์อนุมัติออกสลิปเงินเดือน จึงอัปโหลดลายเซ็นไม่ได้ — ลอง logout แล้วล็อกอินด้วย SM-001 หรือ SM-002 แทน</div>`:`
-    <div style="display:flex;align-items:center;gap:20px;margin-top:16px;flex-wrap:wrap">
+    ${!canViewAll()?`
+    <div class="hint" style="margin-top:14px;padding:12px;background:var(--red-soft,#fdecec);color:var(--red);border-radius:10px">🚫 เฉพาะ Super Admin / HR เท่านั้นที่ตั้งค่าลายเซ็นผู้อนุมัติได้</div>`:`
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+      <div class="field"><label>ชื่อผู้ลงนาม (HR)</label><input id="signerName" value="${(settings.payrollSignerName||'').replace(/"/g,'&quot;')}" placeholder="เช่น นางสาวสมหญิง ใจดี"></div>
+      <div class="field"><label>ตำแหน่ง</label><input id="signerTitle" value="${(settings.payrollSignerTitle||'ฝ่ายบุคคล (HR)').replace(/"/g,'&quot;')}" placeholder="เช่น ผู้จัดการฝ่ายบุคคล"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:20px;margin-top:12px;flex-wrap:wrap">
       <div style="width:220px;height:100px;border:2px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;background:#fafbfd">
-        ${signatures[loggedInEmployeeId]?`<img src="${signatures[loggedInEmployeeId]}" style="max-width:90%;max-height:80%;object-fit:contain">`:'<span class="hint">ยังไม่มีลายเซ็น</span>'}
+        ${settings.payrollSignerSignature?`<img src="${settings.payrollSignerSignature}" style="max-width:90%;max-height:80%;object-fit:contain">`:'<span class="hint">ยังไม่มีรูปลายเซ็น (จะใช้ชื่อแบบลายมือแทน)</span>'}
       </div>
       <div style="display:flex;flex-direction:column;gap:8px">
-        <div style="font-size:13px"><b>${E(loggedInEmployeeId).name}</b> <span class="pill ${loggedInEmployeeId==='EMP001'?'red':'amber'}" style="margin-left:4px">${roleOf(loggedInEmployeeId)}</span></div>
-        <div class="hint">อัปโหลดไฟล์ภาพลายเซ็นของผู้ใช้นี้ (PNG พื้นหลังโปร่งใสจะสวยสุด) หรือถ่ายรูปลายเซ็นบนกระดาษแล้วอัปโหลด</div>
+        <div class="hint">อัปโหลดรูปลายเซ็น HR (PNG พื้นหลังโปร่งใสสวยสุด) — ถ้าไม่มีรูป ระบบจะใช้ชื่อผู้ลงนามเป็นลายมือแทน</div>
         <div style="display:flex;gap:8px">
           <label class="btn primary sm" style="cursor:pointer">📤 อัปโหลดลายเซ็น<input type="file" accept="image/*" style="display:none" onchange="handleSigUpload(this)"></label>
-          ${signatures[loggedInEmployeeId]?'<button class="btn danger sm" onclick="removeSignature()">🗑 ลบ</button>':''}
+          ${settings.payrollSignerSignature?'<button class="btn danger sm" onclick="removeSignature()">🗑 ลบรูป</button>':''}
+          <button class="btn ghost sm" onclick="savePayrollSigner()">💾 บันทึกชื่อ/ตำแหน่ง</button>
         </div>
       </div>
     </div>`}
-    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#fff;border-radius:10px">💡 ลองกด logout แล้วเข้าใหม่ด้วยรหัสพนักงานอื่น (เช่น SM-002) แล้วอัปโหลดลายเซ็นคนละรูป จะเห็นว่าสลิปที่ออกตอนล็อกอินเป็นคนละคนจะขึ้นชื่อ+ลายเซ็นต่างกันจริง ๆ ไปดูได้ที่ <b>เงินเดือน → สลิปเงินเดือน → ดู</b></div>
   </div>`;
 }
 
