@@ -469,7 +469,7 @@ const dynamicAuthStorage = {
   setItem: (key, value) => { (rememberMe ? localStorage : sessionStorage).setItem(key, value); },
   removeItem: (key) => { localStorage.removeItem(key); sessionStorage.removeItem(key); }
 };
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { storage: dynamicAuthStorage } });
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { storage: dynamicAuthStorage, persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
 
 // แปลงแถวข้อมูลพนักงานจาก Supabase (employees table) ให้อยู่ในรูปแบบที่หน้า UI เดิมใช้งาน
 // หมายเหตุ: att / leaveUsed / files / deductions / wfh ยังไม่มีแหล่งข้อมูลจริงจาก Supabase ในเฟสนี้
@@ -493,6 +493,11 @@ function mapEmployeeRow(row){
     start: row.start_date || "",
     end: row.end_date || "",
     bank: row.bank_account || "",
+    payMethod: row.payment_method || "bank",
+    promptpayId: row.promptpay_id || "",
+    promptpayQrPath: row.promptpay_qr_path || "",
+    payeeName: row.payee_name || "",
+    payeeRelation: row.payee_relation || "",
     phone: row.phone || "",
     email: row.email || "",
     address: "",
@@ -1938,6 +1943,49 @@ async function uploadEmpFile(input, empId){
   reRenderEmpModal();
   toast("อัปโหลดเอกสารแล้ว ✓");
 }
+// ===== วิธีจ่ายเงิน: สลับฟิลด์ตามที่เลือก + จัดการรูป QR พร้อมเพย์ (เก็บใน bucket employee-files ใต้ prefix promptpay-qr/) =====
+function togglePayMethod(m){
+  document.querySelectorAll(".pm-bank").forEach(el=>el.style.display = m==="bank" ? "flex" : "none");
+  document.querySelectorAll(".pm-promptpay").forEach(el=>el.style.display = m==="promptpay" ? "flex" : "none");
+  document.querySelectorAll(".pm-promptpayqr").forEach(el=>el.style.display = m==="promptpay_qr" ? "flex" : "none");
+}
+async function uploadPromptpayQr(input, empId){
+  const file = input.files[0]; if(!file) return;
+  input.value = "";
+  if(!file.type.startsWith("image/")){ toast("รองรับเฉพาะไฟล์รูปภาพ"); return; }
+  if(file.size > 5*1024*1024){ toast("ไฟล์ใหญ่เกิน 5 MB"); return; }
+  const ext = (file.name.split(".").pop()||"png").toLowerCase().replace(/[^a-z0-9]/g,"");
+  const path = `promptpay-qr/${empId}_${Date.now()}.${ext}`;
+  toast("⏳ กำลังอัปโหลดรูป QR...");
+  const up = await sb.storage.from("employee-files").upload(path, file, { contentType: file.type, upsert: true });
+  if(up.error){ toast("อัปโหลดไม่สำเร็จ: " + up.error.message); return; }
+  // ลบรูปเก่า (ถ้ามี) แล้วอัปเดต path ใหม่
+  const emp = E(empId);
+  const oldPath = emp?.promptpayQrPath;
+  const { error } = await sb.from("employees").update({ promptpay_qr_path: path, payment_method: "promptpay_qr" }).eq("id", empId);
+  if(error){ await sb.storage.from("employee-files").remove([path]); toast("บันทึกไม่สำเร็จ: " + error.message); return; }
+  if(oldPath && oldPath!==path){ await sb.storage.from("employee-files").remove([oldPath]).catch(()=>{}); }
+  logAudit("employee","แนบรูป QR พร้อมเพย์", `${emp?.name||("#"+empId)}`);
+  await loadEmployees();
+  reRenderEmpModal();
+  toast("แนบรูป QR พร้อมเพย์แล้ว ✓");
+}
+async function viewPromptpayQr(empId){
+  const emp = E(empId); if(!emp?.promptpayQrPath){ toast("ยังไม่มีรูป QR"); return; }
+  const { data, error } = await sb.storage.from("employee-files").createSignedUrl(emp.promptpayQrPath, 300);
+  if(error){ toast("เปิดรูปไม่สำเร็จ: " + error.message); return; }
+  window.open(data.signedUrl, "_blank");
+}
+async function removePromptpayQr(empId){
+  const emp = E(empId); if(!emp?.promptpayQrPath) return;
+  if(!confirm("ยืนยันลบรูป QR พร้อมเพย์?")) return;
+  await sb.storage.from("employee-files").remove([emp.promptpayQrPath]).catch(()=>{});
+  const { error } = await sb.from("employees").update({ promptpay_qr_path: null }).eq("id", empId);
+  if(error){ toast("ลบไม่สำเร็จ: " + error.message); return; }
+  await loadEmployees();
+  reRenderEmpModal();
+  toast("ลบรูป QR แล้ว");
+}
 async function viewEmpFile(fileId, empId){
   const f = (empFilesCache[empId]||[]).find(x=>String(x.id)===String(fileId)); if(!f) return;
   const { data, error } = await sb.storage.from("employee-files").createSignedUrl(f.storage_path, 300);
@@ -2058,8 +2106,22 @@ function empInfoForm(e){
     <div class="field"><label>ตำแหน่ง *</label><select id="empPos">${!Array.isArray(orgUnits)?`<option value="${e.pos||''}">${e.pos||'— กำลังโหลด... —'}</option>`:orgUnitsOf("position").length===0?`<option value="${e.pos||''}">${e.pos||'— ยังไม่มีตำแหน่ง ไปเพิ่มที่ตั้งค่า → โครงสร้างองค์กร —'}</option>`:orgUnitsOf("position").map(u=>`<option value="${u.name}" ${e.pos===u.name?'selected':''}>${u.name}</option>`).join("")}</select></div>
     <div class="field"><label>หัวหน้างาน</label><select id="empSupervisor"><option value="">-- ไม่มี --</option>${employees.filter(x=>x.id!==e.id).map(x=>`<option value="${x.id}" ${e.supervisorId===x.id?'selected':''}>${x.name}</option>`).join("")}</select></div>
     <div class="field"><label>ประเภทพนักงาน *</label><select id="empType" onchange="document.getElementById('wfhWrap').style.display=this.value==='monthly'?'flex':'none'"><option value="monthly" ${e.type==='monthly'?'selected':''}>รายเดือน</option><option value="daily" ${e.type==='daily'?'selected':''}>รายวัน</option></select></div>
-    <div class="field"><label>ธนาคาร</label><select id="bankName"><option value="">-- เลือกธนาคาร --</option>${THAI_BANKS.map(b=>`<option ${bk.bank===b.split(" ")[0]?'selected':''}>${b}</option>`).join("")}</select></div>
-    <div class="field"><label>เลขที่บัญชี</label><input id="empBankAcc" value="${bk.acc}" placeholder="xxx-x-xxxxx-x"></div>
+    <div class="field" style="grid-column:span 2"><label>วิธีการจ่ายเงิน</label><select id="empPayMethod" onchange="togglePayMethod(this.value)">
+      <option value="bank" ${(e.payMethod||'bank')==='bank'?'selected':''}>โอนเข้าบัญชีธนาคาร</option>
+      <option value="promptpay" ${e.payMethod==='promptpay'?'selected':''}>พร้อมเพย์ (เบอร์มือถือ / เลขบัตร ปชช.)</option>
+      <option value="promptpay_qr" ${e.payMethod==='promptpay_qr'?'selected':''}>พร้อมเพย์ (แนบรูป QR)</option>
+    </select></div>
+    <div class="field pm-bank" style="display:${(e.payMethod||'bank')==='bank'?'flex':'none'}"><label>ธนาคาร</label><select id="bankName"><option value="">-- เลือกธนาคาร --</option>${THAI_BANKS.map(b=>`<option ${bk.bank===b.split(" ")[0]?'selected':''}>${b}</option>`).join("")}</select></div>
+    <div class="field pm-bank" style="display:${(e.payMethod||'bank')==='bank'?'flex':'none'}"><label>เลขที่บัญชี</label><input id="empBankAcc" value="${bk.acc}" placeholder="xxx-x-xxxxx-x"></div>
+    <div class="field pm-promptpay" style="grid-column:span 2;display:${e.payMethod==='promptpay'?'flex':'none'}"><label>พร้อมเพย์ (เบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก)</label><input id="empPromptpayId" value="${e.promptpayId||''}" placeholder="เช่น 0812345678 หรือ 1234567890123"></div>
+    <div class="field pm-promptpayqr" style="grid-column:span 2;display:${e.payMethod==='promptpay_qr'?'flex':'none'};flex-direction:column;align-items:flex-start;gap:8px">
+      <label>รูป QR พร้อมเพย์</label>
+      ${e.promptpayQrPath?`<div style="display:flex;align-items:center;gap:10px"><button class="btn ghost xs" type="button" onclick="viewPromptpayQr('${e.id}')">🖼️ ดูรูป QR ที่แนบไว้</button><button class="btn ghost xs" type="button" onclick="removePromptpayQr('${e.id}')">🗑️ ลบรูป</button></div>`:`<div class="hint">ยังไม่ได้แนบรูป QR</div>`}
+      ${e.id?`<input type="file" accept="image/*" onchange="uploadPromptpayQr(this, '${e.id}')" style="font-size:12px">`:`<div class="hint">บันทึกพนักงานก่อน แล้วจึงแนบรูป QR ได้</div>`}
+    </div>
+    <div class="field" style="grid-column:span 2"><label>ชื่อเจ้าของบัญชี/พร้อมเพย์ที่รับเงิน <span class="hint">(เว้นว่างได้ถ้าเป็นชื่อพนักงานเอง)</span></label><input id="empPayeeName" value="${e.payeeName||''}" placeholder="เช่น กรณีใช้บัญชีครอบครัว ใส่ชื่อเจ้าของบัญชีจริง"></div>
+    <div class="field"><label>ความสัมพันธ์กับผู้รับเงิน</label><select id="empPayeeRelation">
+      ${["","ตัวเอง","คู่สมรส","บิดา","มารดา","บุตร","พี่/น้อง","ญาติ","อื่นๆ"].map(r=>`<option value="${r}" ${(e.payeeRelation||'')===r?'selected':''}>${r||'-- ไม่ระบุ (ตัวเอง) --'}</option>`).join("")}</select></div>
     <div class="field"><label>รอบจ่ายเงิน *</label><select id="empCycle">${activeCycleKeys().map(k=>`<option value="${k}" ${e.cycle===k?'selected':''}>${CYCLES[k].name.split(" ")[0]}</option>`).join("")}</select></div>
     <div class="field"><label>อัตราค่าจ้าง (บาท) *</label><input id="empRate" type="number" value="${e.rate||0}"></div>
     <div class="field"><label>วันเริ่มงาน *</label><input id="empStart" type="date" value="${beToISO(e.start)}"></div>
@@ -2161,12 +2223,21 @@ async function saveEmp(id,isNew){
   const status = val("empStatus") || "probation";
   const supervisorRaw = val("empSupervisor");
   const supervisor_id = supervisorRaw ? Number(supervisorRaw) : null;
+  const payMethod = val("empPayMethod") || "bank";
+  const promptpayId = (val("empPromptpayId")||"").replace(/[\s-]/g,"");
+  if(payMethod==="promptpay" && promptpayId && !/^(\d{10}|\d{13})$/.test(promptpayId)){
+    toast("เลขพร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก"); return;
+  }
 
   const payload = {
     code, full_name: name, department: dept, position: pos,
     nationality: nat, doc_type: nat==="MM" ? "Work Permit" : "บัตร ปชช.",
     phone: val("empPhone"), email: val("empEmail"),
     bank_account,
+    payment_method: payMethod,
+    promptpay_id: payMethod==="promptpay" ? (promptpayId||null) : null,
+    payee_name: (val("empPayeeName")||"").trim() || null,
+    payee_relation: val("empPayeeRelation") || null,
     employment_type: val("empType") || "monthly",
     payment_cycle: val("empCycle") || "monthly",
     base_wage: Number(val("empRate")) || 0,
@@ -4054,13 +4125,18 @@ sb.auth.onAuthStateChange((event) => {
 // แต่เช็คฝั่ง UI ด้วยเพื่อเด้งออกจากระบบทันทีให้ผู้ใช้เห็นชัดเจน)
 setInterval(async ()=>{
   if(!loggedInEmployeeId) return;
+  // เช็คว่ายังมี session อยู่ไหมก่อน — ถ้า token หมดอายุ ให้ auto-refresh จัดการ ไม่เด้งออกเอง
+  const { data: { session } } = await sb.auth.getSession();
+  if(!session) return; // ไม่มี session (เช่นเพิ่ง logout) — ปล่อยให้ onAuthStateChange จัดการ ไม่ต้องทำอะไร
   const { data, error } = await sb.from("employees").select("status").eq("id", loggedInEmployeeId).single();
-  if(error || !data || data.status==="terminated"){
+  // สำคัญ: เด้งออกเฉพาะเมื่ออ่านสำเร็จ "และ" สถานะเป็น terminated จริงๆ เท่านั้น
+  // ถ้า error (เน็ตหลุด/token กำลัง refresh) ห้ามเด้งออก — กันบั๊กจอค้างแล้วเด้งพ้นสภาพผิดๆ
+  if(!error && data && data.status==="terminated"){
     await sb.auth.signOut();
     loggedInEmployeeId = null; currentRoleCode = null; employees = []; leaves = []; attendanceToday = [];
     showLogin("บัญชีนี้ถูกเปลี่ยนเป็น \"พ้นสภาพ\" ระหว่างที่คุณล็อกอินอยู่ — ระบบตัดสิทธิ์การใช้งานทันที");
   }
-}, 15000);
+}, 30000);
 
 function handleSigUpload(input){
   const file = input.files[0];
