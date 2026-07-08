@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ลงเวลา · HRMS CENTER</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  :root{ --accent:#f7941d; --navy:#161b26; }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(135deg,#161b26,#1e2f4d 60%,#3a5a8c);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans Thai",sans-serif;
+    color:#fff; padding:20px;
+  }
+  .card{
+    width:100%; max-width:380px; background:#fff; color:#1a1a1a; border-radius:20px;
+    padding:28px 24px; box-shadow:0 20px 60px rgba(0,0,0,.35); text-align:center;
+  }
+  .logo{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#ff9f2e,#f27c0e);
+    display:grid;place-items:center;margin:0 auto 14px;font-size:26px;color:#fff;font-weight:700}
+  h1{font-size:18px;margin:0 0 4px}
+  .hint{color:#888;font-size:13px;margin-bottom:22px}
+  .status{
+    font-size:14px; padding:12px 14px; border-radius:12px; margin-bottom:18px; line-height:1.6; display:none;
+  }
+  .status.show{display:block}
+  .status.ok{background:#f0fdf4;color:#15803d;border:1px solid #86efac}
+  .status.err{background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5}
+  .status.info{background:#f0f7ff;color:#1d4ed8;border:1px solid #93c5fd}
+  .btnrow{display:flex; gap:10px}
+  button{
+    flex:1; border:none; border-radius:14px; padding:16px 10px; font-size:15px; font-weight:700;
+    cursor:pointer; transition:transform .1s, opacity .2s;
+  }
+  button:active{transform:scale(.97)}
+  button:disabled{opacity:.5; cursor:not-allowed}
+  .btn-in{background:linear-gradient(135deg,#ff9f2e,#f27c0e); color:#fff}
+  .btn-out{background:#eef0f4; color:#333}
+  .profile{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:18px}
+  .avatar{width:40px;height:40px;border-radius:50%;object-fit:cover;background:#eee}
+  .name{font-weight:700;font-size:14.5px}
+  .footer{margin-top:20px;font-size:11.5px;color:#aaa}
+  .spinner{
+    width:18px;height:18px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;
+    display:inline-block;vertical-align:middle;margin-right:6px;animation:spin .7s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">H</div>
+    <h1 id="companyName">HRMS CENTER</h1>
+    <div class="hint">ลงเวลาเข้า-ออกงานผ่าน LINE · ใช้พิกัด GPS ยืนยันตำแหน่ง</div>
+
+    <div id="profile" class="profile" style="display:none">
+      <img id="avatar" class="avatar" src="">
+      <div class="name" id="displayName"></div>
+    </div>
+
+    <div id="statusBox" class="status"></div>
+
+    <div class="btnrow">
+      <button id="btnIn" class="btn-in" onclick="doAction('in')">📍 ลงเวลาเข้า</button>
+      <button id="btnOut" class="btn-out" onclick="doAction('out')">🚪 ลงเวลาออก</button>
+    </div>
+
+    <div class="footer">ต้องอนุญาตให้เข้าถึงตำแหน่งที่ตั้ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท</div>
+  </div>
+
+<script>
+const CONFIG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-config";
+const CHECKIN_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-checkin";
+
+const statusBox = document.getElementById("statusBox");
+const btnIn = document.getElementById("btnIn");
+const btnOut = document.getElementById("btnOut");
+
+function showStatus(msg, type){
+  statusBox.textContent = msg;
+  statusBox.className = "status show " + type;
+}
+function setBusy(busy, label){
+  btnIn.disabled = busy; btnOut.disabled = busy;
+  if(busy) showStatus((label||"กำลังดำเนินการ...") , "info");
+}
+
+function getPosition(){
+  return new Promise((resolve)=>{
+    if(!navigator.geolocation){ resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({lat: pos.coords.latitude, lng: pos.coords.longitude}),
+      () => resolve(null),
+      { enableHighAccuracy:true, timeout:8000 }
+    );
+  });
+}
+
+async function doAction(action){
+  setBusy(true, action==="in" ? "📍 กำลังตรวจสอบตำแหน่งของคุณ..." : "กำลังบันทึกเวลาออกงาน...");
+  try{
+    if(!liff.isLoggedIn()){ liff.login(); return; }
+    const idToken = liff.getIDToken();
+    if(!idToken) throw new Error("ไม่สามารถยืนยันตัวตนกับ LINE ได้ กรุณาเปิดหน้านี้ผ่านแอป LINE อีกครั้ง");
+
+    let coords = null;
+    if(action === "in"){
+      coords = await getPosition();
+    }
+
+    const res = await fetch(CHECKIN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken, lat: coords?.lat, lng: coords?.lng, action })
+    });
+    const json = await res.json().catch(()=>({error:"เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง"}));
+    if(!res.ok || json.error) throw new Error(json.error || "เกิดข้อผิดพลาด");
+
+    showStatus("✅ " + json.message, "ok");
+    if(action === "in") btnIn.disabled = true; else { btnIn.disabled = true; btnOut.disabled = true; }
+  }catch(err){
+    showStatus("⚠️ " + err.message, "err");
+  }finally{
+    if(statusBox.className.indexOf("info") > -1) statusBox.className = "status";
+    btnIn.disabled = statusBox.className.indexOf("ok")>-1 ? true : false;
+  }
+}
+
+async function init(){
+  try{
+    const cfgRes = await fetch(CONFIG_URL);
+    const cfg = await cfgRes.json();
+    if(cfg.companyName) document.getElementById("companyName").textContent = cfg.companyName;
+    if(!cfg.liffId) throw new Error("ระบบยังไม่ได้ตั้งค่า LIFF ID — ให้ผู้ดูแลระบบตั้งค่าในเมนู ตั้งค่าระบบ → ช่องทางแจ้งเตือน");
+
+    await liff.init({ liffId: cfg.liffId });
+    if(!liff.isLoggedIn()){
+      showStatus("กำลังเข้าสู่ระบบผ่าน LINE...", "info");
+      liff.login();
+      return;
+    }
+    const profile = await liff.getProfile();
+    document.getElementById("profile").style.display = "flex";
+    document.getElementById("avatar").src = profile.pictureUrl || "";
+    document.getElementById("displayName").textContent = profile.displayName || "";
+  }catch(err){
+    showStatus("⚠️ " + err.message, "err");
+    btnIn.disabled = true; btnOut.disabled = true;
+  }
+}
+init();
+</script>
+</body>
+</html>
