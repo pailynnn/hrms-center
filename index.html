@@ -285,6 +285,11 @@ th.num{text-align:right}
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="6" width="19" height="13" rx="2.5"/><circle cx="12" cy="12.5" r="3"/><path d="M6 9.5h.01M18 15.5h.01"/></svg>
     เงินเดือน</button>
 
+  <div class="nav-label">Operations</div>
+  <button class="nav-item" data-page="projects" onclick="go('projects',this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5M16 4v5"/><circle cx="8" cy="14" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="14" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="14" r="1.4" fill="currentColor" stroke="none"/></svg>
+    งานโครงการ <span id="projectAlertBadge" class="badge" style="display:none">0</span></button>
+
   <div class="nav-label" data-admin-section="1">Administration</div>
   <button class="nav-item" data-page="assets" onclick="go('assets',this)">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8l9-5 9 5v10l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v10"/></svg>
@@ -403,7 +408,7 @@ let attendanceToday = [];
 /* ============ AUDIT LOG (ตาราง audit_log จริงใน Supabase — append-only) ============ */
 const AUDIT_CATS = {
   auth:"เข้า-ออกระบบ", attendance:"ลงเวลา/OT", employee:"ข้อมูลพนักงาน", leave:"การลา",
-  payroll:"เงินเดือน", settings:"ตั้งค่าระบบ", news:"ข่าวประกาศ", files:"เอกสารแนบ", assets:"ทรัพย์สิน", other:"อื่นๆ"
+  payroll:"เงินเดือน", settings:"ตั้งค่าระบบ", news:"ข่าวประกาศ", files:"เอกสารแนบ", assets:"ทรัพย์สิน", project:"งานโครงการ", other:"อื่นๆ"
 };
 let auditRows = [];
 let auditLoaded = false, auditLoading = false;
@@ -1335,7 +1340,7 @@ const DEDUCTION_TYPES = [
  {code:"advance", name:"หักเงินเบิกล่วงหน้า", desc:"เงินที่พนักงานเบิกล่วงหน้าไปก่อน"},
  {code:"uniform", name:"หักค่าเครื่องแบบพนักงาน", desc:"ชุดยูนิฟอร์ม/อุปกรณ์ความปลอดภัย"}
 ];
-let subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work" };
+let subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work", projects:"board" };
 
 /* ================== HELPERS ================== */
 const E = id => employees.find(e=>String(e.id)===String(id));
@@ -1354,6 +1359,19 @@ function leaveStatus(l){
 }
 function pendingCount(){return leaves.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").length;}
 function updateBadge(){const b=document.getElementById("leaveBadge");const c=pendingCount();b.textContent=c;b.style.display=c?"inline-block":"none";}
+// อัปเดต badge เตือนที่เมนู "งานโครงการ" — HR/หัวหน้างานเห็นจำนวนทีมที่ยังไม่ถูกมอบหมายงานวันนี้ · พนักงานทั่วไปเห็นว่ามีการโยกย้ายตัวเองที่ยัง active อยู่หรือไม่
+function updateProjectBadge(){
+  const b = document.getElementById("projectAlertBadge"); if(!b) return;
+  let c = 0;
+  if(!projectsLoaded){ b.style.display="none"; return; }
+  if(canManageProjects()){
+    const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISODate()).map(d=>String(d.group_id)));
+    c = projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));}).length;
+  } else {
+    c = transferCovering(loggedInEmployeeId, todayISODate()) ? 1 : 0;
+  }
+  b.textContent = c; b.style.display = c?"inline-block":"none";
+}
 /* ============ HOLIDAY CALENDAR (ตาราง holidays) ============ */
 let holidayRows = null; // null = ยังไม่โหลด
 async function ensureHolidaysLoaded(){
@@ -1446,7 +1464,7 @@ function tenureText(e){
 }
 
 /* ================== ROUTING ================== */
-const PAGES = {dashboard:"Dashboard", employees:"จัดการพนักงาน", orgchart:"โครงสร้างองค์กร", attendance:"ลงเวลาทำงาน", leave:"จัดการการลา", payroll:"เงินเดือนและค่าจ้าง", assets:"จัดการทรัพย์สิน", news:"ข่าวประกาศ", settings:"ตั้งค่าระบบ", audit:"Audit Log"};
+const PAGES = {dashboard:"Dashboard", employees:"จัดการพนักงาน", orgchart:"โครงสร้างองค์กร", attendance:"ลงเวลาทำงาน", leave:"จัดการการลา", payroll:"เงินเดือนและค่าจ้าง", projects:"งานโครงการ", assets:"จัดการทรัพย์สิน", news:"ข่าวประกาศ", settings:"ตั้งค่าระบบ", audit:"Audit Log"};
 const SUBS = {
   dashboard:"Aluminium Glass PRO · ภาพรวมทั้งระบบ",
   employees:"ทะเบียนพนักงาน จัดการข้อมูลและเอกสาร",
@@ -1454,6 +1472,7 @@ const SUBS = {
   attendance:"ลงเวลาแบบผูกพิกัด — ป้องกันเข้างานจากนอกออฟฟิศ",
   leave:"บริหารจัดการการลา อนุมัติ และตัดสิทธิ์อัตโนมัติครบวงจร",
   payroll:"จัดการเงินเดือน ภาษี ประกันสังคม และสวัสดิการแบบครบวงจร",
+  projects:"แบ่งทีมตามโครงการ มอบหมายงานรายวัน และโยกย้ายกำลังคนระหว่างโครงการ",
   assets:"ทะเบียนทรัพย์สินบริษัท จำนวน ราคา และผู้ครอบครอง",
   news:"ประกาศ + ส่งผ่าน LINE / Email อัตโนมัติ",
   settings:"ตั้งค่าเวลา นโยบาย พิกัดออฟฟิศ และเฟสถัดไป",
@@ -1471,10 +1490,20 @@ function toggleNotifPanel(e){
     if(pend>0) items.push(["✅","การลารออนุมัติ",`${pend} รายการ`]);
     const probCount = employees.filter(e=>e.status==='probation').length;
     if(probCount>0) items.push(["📝","พนักงานทดลองงาน",`${probCount} ท่าน`]);
+    if(projectsLoaded){
+      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISODate()).map(d=>String(d.group_id)));
+      const unassigned = projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));});
+      if(unassigned.length>0) items.push(["📋","ทีมที่ยังไม่ถูกมอบหมายงานวันนี้",`${unassigned.length} ทีม`]);
+    }
   } else if(isTeamLead()){
     const me = myEmp();
     const teamPending = leaves.filter(l=>{const emp=E(l.emp);return emp && me && emp.supervisor===me.name && l.supStatus==="pending";}).length;
     if(teamPending>0) items.push(["✅","ใบลาทีมรออนุมัติ",`${teamPending} รายการ`]);
+    if(projectsLoaded){
+      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISODate()).map(d=>String(d.group_id)));
+      const unassigned = projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));});
+      if(unassigned.length>0) items.push(["📋","ทีมที่ยังไม่ถูกมอบหมายงานวันนี้",`${unassigned.length} ทีม`]);
+    }
   } else {
     const mine = leaves.filter(l=>String(l.emp)===String(loggedInEmployeeId));
     const pending = mine.filter(l=>l.supStatus==="pending"||l.hrStatus==="pending").length;
@@ -1483,6 +1512,13 @@ function toggleNotifPanel(e){
     if(pending) items.push(["⏳","ใบลาของคุณรออนุมัติ",`${pending} รายการ`]);
     if(approved) items.push(["✅","ใบลาที่อนุมัติแล้ว",`${approved} รายการ`]);
     if(rejected) items.push(["❌","ใบลาที่ไม่อนุมัติ",`${rejected} รายการ`]);
+    if(projectsLoaded){
+      const tr = transferCovering(loggedInEmployeeId, todayISODate());
+      if(tr){
+        const toG = PG(tr.to_group_id), toP = toG?PJ(toG.project_id):null;
+        items.push(["🔁","คุณถูกย้ายไปช่วยงานชั่วคราว",`${toP?toP.name:'-'}${tr.end_date?' ถึง '+isoToThaiDisplay(tr.end_date):''}`]);
+      }
+    }
   }
   panel.innerHTML = items.length===0 ? `<div class="hint" style="padding:16px;text-align:center">ไม่มีการแจ้งเตือนใหม่ 🎉</div>` :
     items.map(([icon,title,sub])=>`
@@ -1520,7 +1556,7 @@ let currentPage = "dashboard";
 function render(page){
   currentPage = page;
   const c = document.getElementById("content");
-  const F = {dashboard:pgDashboard, employees:pgEmployees, orgchart:pgOrg, attendance:pgAttendance, leave:pgLeave, payroll:pgPayroll, assets:pgAssets, news:pgNews, settings:pgSettings, audit:pgAudit};
+  const F = {dashboard:pgDashboard, employees:pgEmployees, orgchart:pgOrg, attendance:pgAttendance, leave:pgLeave, payroll:pgPayroll, projects:pgProjects, assets:pgAssets, news:pgNews, settings:pgSettings, audit:pgAudit};
   c.innerHTML = `<div class="page">${F[page]()}</div>`;
   window.scrollTo({top:0});
   updateSubtabArrows();
@@ -4288,6 +4324,8 @@ async function afterLogin(){
     return false;
   }
   await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits()]);
+  await loadProjectsModule(); projectsLoaded = true;
+  updateProjectBadge();
   await loadPayrollStatus();
   await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy)));
   syncTopbarUser();
@@ -4315,6 +4353,8 @@ function resetAppState(){
   employees = []; leaves = []; attendanceToday = []; bonusRecords = []; otRequests = []; announcements = [];
   // แคชที่โหลดแบบ lazy — รีเซ็ตเป็น null/ค่าเริ่มต้น เพื่อบังคับโหลดใหม่ให้บัญชีถัดไป
   auditRows = []; auditLoaded = false; auditLoading = false;
+  projects = []; projectGroups = []; groupMembers = []; teamTransfers = []; dailyAssignments = []; projectPlans = [];
+  projectsLoaded = false; projectsLoading = false; prjActiveProject = null;
   payrollHistRows = []; payrollHistLoaded = false; payrollHistLoading = false;
   payrollState = { cycle:"monthly", status:{monthly:"draft", weekly:"draft", daily:"draft"} };
   holidayRows = null; empFilesCache = {}; empModalCtx = null;
@@ -4325,7 +4365,7 @@ function resetAppState(){
   signatures = {};
   // รีเซ็ตการนำทาง — กันหน้า/แท็บเดิมของบัญชีก่อนค้าง
   currentPage = "dashboard";
-  subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work" };
+  subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work", projects:"board" };
   slipPeriod = {monthly:"current", weekly:"current", daily:"current"};
   slipPeriod.biweekly = "current";
 }
@@ -5974,6 +6014,715 @@ function stPhase2(){
       <div class="hint" style="margin-top:4px">${f[3]}</div>
     </div>`).join("")}
   </div>`;
+}
+
+/* ================== PAGE: PROJECTS & TEAM ASSIGNMENT — ตาราง projects/project_groups/project_group_members/team_transfers/daily_assignments/project_plans ================== */
+// โครงสร้าง: โครงการ (projects) → แบ่งเป็นทีม/กลุ่ม (project_groups มีหัวหน้าทีม) → มีสมาชิก (project_group_members ปัจจุบันคนละ 1 ทีมเท่านั้น)
+// โยกย้ายคน/ทั้งทีมข้ามโครงการชั่วคราวถูกบันทึกลง team_transfers (ประวัติ) · งานประจำวันอยู่ใน daily_assignments · แผนระยะยาวอยู่ใน project_plans
+let projects = [], projectGroups = [], groupMembers = [], teamTransfers = [], dailyAssignments = [], projectPlans = [];
+let projectsLoaded = false, projectsLoading = false;
+let prjFilter = { status:"active" };
+let dispatchDate = todayISODate();
+async function loadProjectsModule(){
+  const [pRes, gRes, mRes, tRes, dRes, plRes] = await Promise.all([
+    sb.from("projects").select("*").order("start_date",{ascending:false}),
+    sb.from("project_groups").select("*"),
+    sb.from("project_group_members").select("*"),
+    sb.from("team_transfers").select("*").order("created_at",{ascending:false}).limit(200),
+    sb.from("daily_assignments").select("*"),
+    sb.from("project_plans").select("*").order("start_date",{ascending:true})
+  ]);
+  if(pRes.error){ console.error("loadProjectsModule projects", pRes.error); toast("โหลดข้อมูลโครงการไม่สำเร็จ — ตรวจสอบว่าสร้างตารางใน Supabase แล้วหรือยัง"); return; }
+  projects = pRes.data||[];
+  projectGroups = gRes.error?[]:(gRes.data||[]);
+  groupMembers = mRes.error?[]:(mRes.data||[]);
+  teamTransfers = tRes.error?[]:(tRes.data||[]);
+  dailyAssignments = dRes.error?[]:(dRes.data||[]);
+  projectPlans = plRes.error?[]:(plRes.data||[]);
+}
+function ensureProjectsLoaded(){
+  if(projectsLoaded || projectsLoading) return;
+  projectsLoading = true;
+  loadProjectsModule().then(()=>{ projectsLoaded = true; projectsLoading = false; updateProjectBadge(); if(currentPage==="projects") render("projects"); });
+}
+const PROJECT_STATUS = { active:{label:"กำลังดำเนินงาน",color:"green"}, pending:{label:"ยังไม่เริ่ม",color:"amber"}, done:{label:"เสร็จสิ้น",color:"gray"} };
+function canManageProjects(){ return canViewAll() || isTeamLead(); }
+function PG(id){ return projectGroups.find(g=>String(g.id)===String(id)); }
+function PJ(id){ return projects.find(p=>String(p.id)===String(id)); }
+function groupsOf(projectId){ return projectGroups.filter(g=>String(g.project_id)===String(projectId)); }
+function membersOf(groupId){ return groupMembers.filter(m=>String(m.group_id)===String(groupId)).map(m=>({...m, e:E(m.employee_id)})).filter(m=>m.e); }
+function memberCountOf(projectId){ return groupsOf(projectId).reduce((s,g)=>s+membersOf(g.id).length,0); }
+function requiredOf(projectId){ return groupsOf(projectId).reduce((s,g)=>s+(Number(g.required_headcount)||0),0); }
+function currentGroupOfEmployee(empId){ const m = groupMembers.find(x=>String(x.employee_id)===String(empId)); return m ? PG(m.group_id) : null; }
+// หา transfer ล่าสุดของพนักงานที่ "ครอบคลุม" วันที่ dateISO (start_date<=date<=(end_date||อนาคตไม่จำกัด)) — ใช้แจ้งเตือนว่าโดนย้ายชั่วคราว
+function transferCovering(empId, dateISO){
+  return teamTransfers.find(t=>String(t.employee_id)===String(empId) && t.start_date<=dateISO && (!t.end_date || t.end_date>=dateISO));
+}
+
+function pgProjects(){
+  ensureProjectsLoaded();
+  if(!projectsLoaded){
+    return `<div class="card" style="text-align:center;padding:40px"><div class="hint">⏳ กำลังโหลดข้อมูลโครงการ...</div></div>`;
+  }
+  const canManage = canManageProjects();
+  const isPlainEmp = !canManage;
+  // พนักงานทั่วไปไม่เห็นภาพรวมทั้งบริษัท/โยกย้ายกำลังคน — ถ้าแท็บปัจจุบันเป็นอันที่ถูกซ่อน เด้งไปแท็บมอบหมายงานรายวัน
+  if(isPlainEmp && (subTab.projects==="board"||subTab.projects==="transfer"||!subTab.projects)){ subTab.projects="dispatch"; }
+  const t = subTab.projects || (isPlainEmp?"dispatch":"board");
+  const tab=(k,label,icon)=>`<button class="${t===k?'on':''}" onclick="setSub('projects','${k}')">${icon} ${label}</button>`;
+  return `
+  <div class="subtabs-wrap"><button class="subtab-arrow left" onclick="scrollSubtabs(this,-160)">‹</button><div class="subtabs">
+    ${isPlainEmp?'':tab("board","ภาพรวมโครงการ","📁")}
+    ${tab("teams","ทีมงาน","👥")}
+    ${canManage?tab("transfer","โยกย้ายกำลังคน","🔁"):''}
+    ${tab("dispatch","มอบหมายงานรายวัน","📋")}
+    ${tab("plan","แผนระยะยาว","🗓️")}
+  </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
+  ${isPlainEmp
+    ? ({teams:prjMyTeam, dispatch:prjMyDispatch, plan:prjMyPlan})[t]()
+    : ({board:prjBoard, teams:prjTeams, transfer:prjTransfer, dispatch:prjDispatch, plan:prjPlan})[t]()}`;
+}
+
+/* ---------- 1) ภาพรวมโครงการ (Project Board) ---------- */
+function prjBoard(){
+  const canManage = canManageProjects();
+  const list = projects.filter(p=>prjFilter.status==="all"||p.status===prjFilter.status);
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h3>📁 ภาพรวมโครงการ (${list.length})</h3>
+      <select style="margin-left:auto;padding:8px 10px;border:1.5px solid var(--line);border-radius:9px" onchange="prjFilter.status=this.value;render('projects')">
+        <option value="active" ${prjFilter.status==='active'?'selected':''}>กำลังดำเนินงาน</option>
+        <option value="pending" ${prjFilter.status==='pending'?'selected':''}>ยังไม่เริ่ม</option>
+        <option value="done" ${prjFilter.status==='done'?'selected':''}>เสร็จสิ้น</option>
+        <option value="all" ${prjFilter.status==='all'?'selected':''}>ทั้งหมด</option>
+      </select>
+      ${canManage?'<button class="btn primary" onclick="openProjectModal(null)">+ โครงการใหม่</button>':''}
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+    ${list.length===0?'<div class="hint" style="padding:20px">ไม่มีโครงการในสถานะนี้</div>':list.map(p=>{
+      const have = memberCountOf(p.id), need = requiredOf(p.id), diff = have-need;
+      const grps = groupsOf(p.id);
+      return `
+      <div class="card" style="cursor:pointer" onclick="openProjectDetail('${p.id}')">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <div style="flex:1">
+            <b style="font-size:15px">${p.name}</b>
+            <div class="hint" style="margin-top:2px">${p.customer||'—'} ${p.site?'· 📍'+p.site:''}</div>
+          </div>
+          ${canManage?`<button class="btn ghost xs" onclick="event.stopPropagation();openProjectModal('${p.id}')">✏️</button>`:''}
+          <span class="pill ${PROJECT_STATUS[p.status]?.color||'gray'}">${PROJECT_STATUS[p.status]?.label||p.status}</span>
+        </div>
+        <div class="hint" style="margin-top:8px">${p.start_date?isoToThaiDisplay(p.start_date):'—'} ${p.end_date?' – '+isoToThaiDisplay(p.end_date):''}</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <span class="pill blue">👥 ${grps.length} ทีม</span>
+          <span class="pill ${diff<0?'red':'green'}">มี ${have}${need?` / ต้องใช้ ${need}`:''} คน${need&&diff!==0?` (${diff<0?'ขาด '+Math.abs(diff):'เหลือ '+diff})`:''}</span>
+        </div>
+      </div>`;}).join("")}
+  </div>`;
+}
+function openProjectModal(id){
+  const p = id ? PJ(id) : {id:null,name:"",customer:"",site:"",start_date:todayISODate(),end_date:"",status:"pending"};
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">📁</div>
+      <div><h3 style="font-size:16px">${id?"แก้ไขโครงการ":"เพิ่มโครงการใหม่"}</h3></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="grid" style="grid-template-columns:1fr">
+        <div class="field"><label>ชื่อโครงการ *</label><input id="pjName" value="${(p.name||'').replace(/"/g,'&quot;')}" placeholder="เช่น โรงแรม ABC"></div>
+        <div class="field"><label>ลูกค้า</label><input id="pjCustomer" value="${(p.customer||'').replace(/"/g,'&quot;')}"></div>
+        <div class="field"><label>สถานที่</label><input id="pjSite" value="${(p.site||'').replace(/"/g,'&quot;')}"></div>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="field"><label>วันที่เริ่ม</label><input id="pjStart" type="date" value="${p.start_date||''}"></div>
+        <div class="field"><label>วันที่สิ้นสุด (ประมาณ)</label><input id="pjEnd" type="date" value="${p.end_date||''}"></div>
+        <div class="field" style="grid-column:span 2"><label>สถานะ</label><select id="pjStatus">
+          ${Object.entries(PROJECT_STATUS).map(([k,v])=>`<option value="${k}" ${p.status===k?'selected':''}>${v.label}</option>`).join("")}
+        </select></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="saveProject(${id?`'${id}'`:'null'})">💾 บันทึก</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function saveProject(id){
+  const payload = {
+    name: document.getElementById("pjName").value.trim(),
+    customer: document.getElementById("pjCustomer").value.trim(),
+    site: document.getElementById("pjSite").value.trim(),
+    start_date: document.getElementById("pjStart").value || null,
+    end_date: document.getElementById("pjEnd").value || null,
+    status: document.getElementById("pjStatus").value
+  };
+  if(!payload.name){ toast("กรุณากรอกชื่อโครงการ"); return; }
+  const { error } = id ? await sb.from("projects").update(payload).eq("id", id) : await sb.from("projects").insert(payload);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  closeModal();
+  logAudit("project", id?"แก้ไขโครงการ":"เพิ่มโครงการใหม่", payload.name);
+  await loadProjectsModule();
+  render("projects");
+  toast(`บันทึกโครงการ "${payload.name}" แล้ว ✓`);
+}
+function openProjectDetail(id){ subTab.projects="teams"; prjActiveProject = id; render("projects"); }
+
+/* ---------- 2) ทีมงาน (Groups + Members ต่อโครงการ) ---------- */
+let prjActiveProject = null;
+function prjTeams(){
+  const canManage = canManageProjects();
+  if(!prjActiveProject || !PJ(prjActiveProject)) prjActiveProject = projects[0]?.id || null;
+  if(!prjActiveProject) return `<div class="card"><div class="hint" style="text-align:center;padding:30px">ยังไม่มีโครงการในระบบ — ${canManage?'<a href="javascript:void(0)" onclick="setSub(\'projects\',\'board\')">เพิ่มโครงการก่อน</a>':'รอ HR เพิ่มโครงการ'}</div></div>`;
+  const p = PJ(prjActiveProject);
+  const grps = groupsOf(prjActiveProject);
+  const assignedIds = new Set(groupMembers.map(m=>String(m.employee_id)));
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="field" style="min-width:220px"><label>เลือกโครงการ</label>
+        <select onchange="prjActiveProject=this.value;render('projects')">
+          ${projects.map(x=>`<option value="${x.id}" ${String(x.id)===String(prjActiveProject)?'selected':''}>${x.name}</option>`).join("")}
+        </select>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+        <span class="pill blue">👥 รวม ${memberCountOf(prjActiveProject)} คน / ${grps.length} ทีม</span>
+        ${canManage?`<button class="btn primary sm" onclick="openGroupModal(null)">+ เพิ่มทีม</button>`:''}
+      </div>
+    </div>
+    <div class="hint" style="margin-top:8px">${p.customer||'—'} ${p.site?'· 📍'+p.site:''} · ${PROJECT_STATUS[p.status]?.label||p.status}</div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+    ${grps.length===0?'<div class="hint" style="padding:16px">ยังไม่มีทีมในโครงการนี้</div>':grps.map(g=>{
+      const mem = membersOf(g.id);
+      const leader = g.leader_employee_id ? E(g.leader_employee_id) : null;
+      return `
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:10px">
+          <b style="font-size:14.5px;flex:1">👷 ${g.name}</b>
+          <span class="pill ${mem.length<(g.required_headcount||0)?'red':'green'}">${mem.length}${g.required_headcount?'/'+g.required_headcount:''} คน</span>
+          ${canManage?`<button class="btn ghost xs" onclick="openGroupModal('${g.id}')">✏️</button>`:''}
+        </div>
+        <div class="hint" style="margin-top:4px">หัวหน้าทีม: <b>${leader?leader.name:'— ยังไม่กำหนด —'}</b></div>
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+          ${mem.length===0?'<div class="hint" style="font-size:12px">ยังไม่มีสมาชิก</div>':mem.map(m=>`
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#f8f9fc;border-radius:8px">
+            <div class="emp-ava" style="width:26px;height:26px;font-size:10px;background:${m.e.color}">${initials(m.e.name)}</div>
+            <div style="flex:1;font-size:12.5px">${m.e.name}${m.member_status==='borrowed'?' <span class="pill purple" style="font-size:9.5px">ยืมตัว</span>':''}</div>
+            ${canManage?`<button class="btn ghost xs" onclick="removeGroupMember('${m.id}')">✕</button>`:''}
+          </div>`).join("")}
+        </div>
+        ${canManage?`<button class="btn ghost xs" style="margin-top:10px" onclick="openAddMemberModal('${g.id}')">+ เพิ่มสมาชิก</button>`:''}
+      </div>`;}).join("")}
+  </div>`;
+}
+function openGroupModal(id){
+  const g = id ? PG(id) : {id:null, project_id:prjActiveProject, name:"", leader_employee_id:"", required_headcount:0};
+  const available = employees.filter(e=>e.status!=="terminated");
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--blue);border-radius:10px;display:grid;place-items:center;color:#fff">👷</div>
+      <div><h3 style="font-size:16px">${id?"แก้ไขทีม":"เพิ่มทีมใหม่"}</h3><div class="hint">${PJ(prjActiveProject)?.name||''}</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>ชื่อทีม *</label><input id="grpName" value="${(g.name||'').replace(/"/g,'&quot;')}" placeholder="เช่น ทีมติดตั้ง"></div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="field"><label>หัวหน้าทีม</label><select id="grpLeader"><option value="">-- ยังไม่กำหนด --</option>${available.map(e=>`<option value="${e.id}" ${String(g.leader_employee_id)===String(e.id)?'selected':''}>${e.name}</option>`).join("")}</select></div>
+        <div class="field"><label>จำนวนคนที่ต้องการ (ประมาณ)</label><input id="grpNeed" type="number" min="0" value="${g.required_headcount||0}"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      ${id?`<button class="btn danger" style="margin-right:auto" onclick="deleteGroup('${id}')">🗑 ลบทีม</button>`:''}
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="saveGroup(${id?`'${id}'`:'null'})">💾 บันทึก</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function saveGroup(id){
+  const payload = {
+    project_id: prjActiveProject,
+    name: document.getElementById("grpName").value.trim(),
+    leader_employee_id: document.getElementById("grpLeader").value || null,
+    required_headcount: Number(document.getElementById("grpNeed").value)||0
+  };
+  if(!payload.name){ toast("กรุณากรอกชื่อทีม"); return; }
+  const { error } = id ? await sb.from("project_groups").update(payload).eq("id", id) : await sb.from("project_groups").insert(payload);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  closeModal();
+  logAudit("project", id?"แก้ไขทีม":"เพิ่มทีมใหม่", `${payload.name} · ${PJ(prjActiveProject)?.name||''}`);
+  await loadProjectsModule();
+  render("projects");
+  toast(`บันทึกทีม "${payload.name}" แล้ว ✓`);
+}
+async function deleteGroup(id){
+  const g = PG(id); if(!g) return;
+  if(membersOf(id).length>0){ toast("ทีมนี้ยังมีสมาชิกอยู่ — ย้ายสมาชิกออกก่อนจึงจะลบทีมได้"); return; }
+  const { error } = await sb.from("project_groups").delete().eq("id", id);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  closeModal();
+  logAudit("project", "ลบทีม", g.name);
+  await loadProjectsModule();
+  render("projects");
+  toast("ลบทีมแล้ว ✓");
+}
+function openAddMemberModal(groupId){
+  const g = PG(groupId);
+  const assignedIds = new Set(groupMembers.map(m=>String(m.employee_id)));
+  const avail = employees.filter(e=>e.status==="active"||e.status==="probation").filter(e=>!assignedIds.has(String(e.id)));
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--green);border-radius:10px;display:grid;place-items:center;color:#fff">➕</div>
+      <div><h3 style="font-size:16px">เพิ่มสมาชิกเข้าทีม</h3><div class="hint">${g?.name||''}</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      ${avail.length===0?'<div class="hint" style="text-align:center;padding:16px">ไม่มีพนักงานว่าง — ทุกคนถูกจัดเข้าทีมอื่นอยู่แล้ว (ใช้เมนู "โยกย้ายกำลังคน" หากต้องการย้าย)</div>':`
+      <div class="field"><label>เลือกพนักงาน</label>
+        <select id="addMemberEmp">${avail.map(e=>`<option value="${e.id}">${e.code} — ${e.name} (${e.dept})</option>`).join("")}</select>
+      </div>`}
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      ${avail.length>0?`<button class="btn primary" onclick="addGroupMember('${groupId}')">✓ เพิ่มเข้าทีม</button>`:''}
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function addGroupMember(groupId){
+  const empId = document.getElementById("addMemberEmp").value;
+  const { error } = await sb.from("project_group_members").insert({ group_id: groupId, employee_id: empId, member_status:"primary", since_date: todayISODate() });
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  closeModal();
+  logAudit("project", "เพิ่มสมาชิกเข้าทีม", `${E(empId)?.name||''} → ${PG(groupId)?.name||''}`);
+  await loadProjectsModule();
+  render("projects");
+  toast("เพิ่มสมาชิกเข้าทีมแล้ว ✓");
+}
+async function removeGroupMember(memberRowId){
+  const row = groupMembers.find(m=>String(m.id)===String(memberRowId)); if(!row) return;
+  const e = E(row.employee_id);
+  if(!confirm(`นำ "${e?.name||''}" ออกจากทีมนี้?`)) return;
+  const { error } = await sb.from("project_group_members").delete().eq("id", memberRowId);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  logAudit("project", "นำสมาชิกออกจากทีม", `${e?.name||''} · ${PG(row.group_id)?.name||''}`);
+  await loadProjectsModule();
+  render("projects");
+  toast("นำออกจากทีมแล้ว ✓");
+}
+
+/* ---------- 3) โยกย้ายกำลังคน (Transfer คน/ทั้งทีม ข้ามโครงการชั่วคราว) ---------- */
+function prjTransfer(){
+  const activeTransfers = teamTransfers.filter(t=>!t.end_date || t.end_date>=todayISODate());
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h3>🔁 โยกย้ายกำลังคนระหว่างโครงการ</h3>
+      <button class="btn primary" style="margin-left:auto" onclick="openTransferModal()">+ โยกย้าย</button>
+    </div>
+    <div class="hint">ย้ายพนักงานคนเดียวหรือทั้งทีมไปช่วยอีกโครงการชั่วคราว — ระบุวันที่เริ่ม/สิ้นสุด และเหตุผล ระบบเก็บประวัติให้อัตโนมัติ</div>
+  </div>
+  <div class="card">
+    <h3>📜 ประวัติการโยกย้าย (ล่าสุด ${activeTransfers.length?activeTransfers.length+' รายการที่ยังทำงานอยู่':''})</h3>
+    <table style="margin-top:10px">
+      <tr><th>พนักงาน</th><th>จากทีม/โครงการ</th><th>ไปทีม/โครงการ</th><th>ช่วงเวลา</th><th>เหตุผล</th><th>สถานะ</th></tr>
+      ${teamTransfers.length===0?'<tr><td colspan="6" class="hint" style="text-align:center;padding:16px">ยังไม่มีประวัติการโยกย้าย</td></tr>':teamTransfers.map(t=>{
+        const e = E(t.employee_id);
+        const fromG = t.from_group_id?PG(t.from_group_id):null, toG = t.to_group_id?PG(t.to_group_id):null;
+        const fromP = fromG?PJ(fromG.project_id):null, toP = toG?PJ(toG.project_id):null;
+        const active = !t.end_date || t.end_date>=todayISODate();
+        return `<tr>
+        <td>${e?empCell(e):'<span class="hint">ไม่พบพนักงาน</span>'}</td>
+        <td style="font-size:12px">${fromG?fromG.name:'—'}${fromP?'<div class="hint" style="font-size:10.5px">'+fromP.name+'</div>':''}</td>
+        <td style="font-size:12px">${toG?toG.name:'—'}${toP?'<div class="hint" style="font-size:10.5px">'+toP.name+'</div>':''}</td>
+        <td style="font-size:12px;white-space:nowrap">${isoToThaiDisplay(t.start_date)}${t.end_date?' – '+isoToThaiDisplay(t.end_date):' (ไม่ระบุสิ้นสุด)'}</td>
+        <td class="hint" style="font-size:12px;max-width:160px">${t.reason||"—"}</td>
+        <td>${active?'<span class="pill green">กำลังช่วยงาน</span>':'<span class="pill gray">สิ้นสุดแล้ว</span>'}</td>
+      </tr>`;}).join("")}
+    </table>
+  </div>`;
+}
+function openTransferModal(){
+  const allMembers = groupMembers.map(m=>({...m, e:E(m.employee_id), g:PG(m.group_id)})).filter(m=>m.e && m.g);
+  document.getElementById("modalBox").className="modal modal-lg";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--purple);border-radius:10px;display:grid;place-items:center;color:#fff">🔁</div>
+      <div><h3 style="font-size:16px">โยกย้ายกำลังคน</h3><div class="hint">ย้ายรายคน หรือทั้งทีมไปช่วยอีกโครงการ</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>รูปแบบการย้าย</label>
+        <select id="trMode" onchange="toggleTransferMode()">
+          <option value="member">ย้ายเฉพาะบางคน</option>
+          <option value="team">ย้ายทั้งทีม</option>
+        </select>
+      </div>
+      <div id="trModeMember">
+        <div class="field"><label>เลือกพนักงาน (เลือกได้หลายคน)</label>
+          <select id="trEmpIds" multiple size="6" style="width:100%">
+            ${allMembers.map(m=>`<option value="${m.e.id}">${m.e.name} — ${m.g.name} (${PJ(m.g.project_id)?.name||''})</option>`).join("")}
+          </select>
+          <div class="hint" style="margin-top:4px">กด Ctrl/Cmd ค้างเพื่อเลือกหลายคน</div>
+        </div>
+      </div>
+      <div id="trModeTeam" style="display:none">
+        <div class="field"><label>เลือกทีมที่จะย้ายทั้งทีม</label>
+          <select id="trGroupId">
+            ${projectGroups.map(g=>`<option value="${g.id}">${g.name} — ${PJ(g.project_id)?.name||''} (${membersOf(g.id).length} คน)</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>ไปยังทีม/โครงการปลายทาง *</label>
+        <select id="trToGroup">
+          <option value="">-- เลือกทีมปลายทาง --</option>
+          ${projectGroups.map(g=>`<option value="${g.id}">${g.name} — ${PJ(g.project_id)?.name||''}</option>`).join("")}
+        </select>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="field"><label>วันที่เริ่ม *</label><input id="trStart" type="date" value="${todayISODate()}"></div>
+        <div class="field"><label>วันที่สิ้นสุด (เว้นว่าง = ไม่ระบุ)</label><input id="trEnd" type="date"></div>
+      </div>
+      <div class="field"><label>เหตุผล</label><textarea id="trReason" rows="2" placeholder="เช่น โครงการ B ขาดคนเร่งด่วน"></textarea></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="doTransfer()">✓ ยืนยันโยกย้าย</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+function toggleTransferMode(){
+  const mode = document.getElementById("trMode").value;
+  document.getElementById("trModeMember").style.display = mode==="member"?"block":"none";
+  document.getElementById("trModeTeam").style.display = mode==="team"?"block":"none";
+}
+async function doTransfer(){
+  const mode = document.getElementById("trMode").value;
+  const toGroupId = document.getElementById("trToGroup").value;
+  const start = document.getElementById("trStart").value;
+  const end = document.getElementById("trEnd").value || null;
+  const reason = document.getElementById("trReason").value.trim();
+  if(!toGroupId){ toast("กรุณาเลือกทีมปลายทาง"); return; }
+  if(!start){ toast("กรุณาเลือกวันที่เริ่ม"); return; }
+
+  let empIds = [];
+  if(mode==="member"){
+    empIds = [...document.getElementById("trEmpIds").selectedOptions].map(o=>o.value);
+    if(empIds.length===0){ toast("กรุณาเลือกพนักงานอย่างน้อย 1 คน"); return; }
+  } else {
+    const groupId = document.getElementById("trGroupId").value;
+    if(!groupId){ toast("กรุณาเลือกทีมที่จะย้าย"); return; }
+    empIds = membersOf(groupId).map(m=>m.employee_id);
+    if(empIds.length===0){ toast("ทีมนี้ยังไม่มีสมาชิก"); return; }
+  }
+  if(String(toGroupId) && empIds.some(id=>{const cur=groupMembers.find(m=>String(m.employee_id)===String(id)); return cur && String(cur.group_id)===String(toGroupId);})){
+    toast("มีพนักงานบางคนอยู่ทีมปลายทางอยู่แล้ว"); return;
+  }
+
+  const rows = [];
+  for(const empId of empIds){
+    const cur = groupMembers.find(m=>String(m.employee_id)===String(empId));
+    rows.push({ employee_id: empId, from_group_id: cur?cur.group_id:null, to_group_id: toGroupId, start_date: start, end_date: end, reason, created_by: loggedInEmployeeId });
+  }
+  const { error: trErr } = await sb.from("team_transfers").insert(rows);
+  if(trErr){ toast("เกิดข้อผิดพลาด: "+trErr.message); return; }
+  // ย้ายสมาชิกจริง: ลบสมาชิกภาพเดิม แล้วเพิ่มเข้าทีมใหม่ (สถานะ "ยืมตัว" ถ้ามีวันสิ้นสุด, "ประจำ" ถ้าย้ายถาวร)
+  await sb.from("project_group_members").delete().in("employee_id", empIds);
+  await sb.from("project_group_members").insert(empIds.map(id=>({ group_id: toGroupId, employee_id: id, member_status: end?"borrowed":"primary", since_date: start })));
+  closeModal();
+  const toG = PG(toGroupId);
+  logAudit("project", mode==="team"?"โยกย้ายทั้งทีม":"โยกย้ายพนักงาน", `${empIds.length} คน → ${toG?.name||''} (${PJ(toG?.project_id)?.name||''})`);
+  await loadProjectsModule();
+  render("projects");
+  toast(`โยกย้าย ${empIds.length} คนแล้ว ✓`);
+  updateProjectBadge();
+}
+
+/* ---------- 4) มอบหมายงานรายวัน (Daily Dispatch) ---------- */
+function prjDispatch(){
+  const canManage = canManageProjects();
+  const todays = dailyAssignments.filter(d=>d.work_date===dispatchDate);
+  const assignedGroupIds = new Set(todays.map(d=>String(d.group_id)));
+  const activeGroups = projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active";});
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h3>📋 มอบหมายงานรายวัน</h3>
+      <div class="field" style="margin-left:auto"><input type="date" value="${dispatchDate}" onchange="dispatchDate=this.value;render('projects')"></div>
+      ${canManage?`<button class="btn primary sm" onclick="openDispatchModal()">+ มอบหมายทีม</button>`:''}
+    </div>
+    <div class="hint">วันที่ ${isoToThaiDisplay(dispatchDate)} · ${todays.length} ทีมถูกมอบหมายงานแล้ว จากทั้งหมด ${activeGroups.length} ทีมที่กำลังทำงาน</div>
+    ${canManage&&todays.length>0?`<button class="btn ghost sm" style="margin-top:10px" onclick="sendAllDispatchLine()">📢 ส่ง LINE แจ้งทุกทีมของวันนี้</button>`:''}
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+    ${todays.length===0?'<div class="hint" style="padding:16px">ยังไม่มีการมอบหมายงานวันนี้</div>':todays.map(d=>{
+      const g = PG(d.group_id), p = g?PJ(g.project_id):null;
+      const mem = g?membersOf(g.id):[];
+      return `
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px">
+          <b style="font-size:14px;flex:1">👷 ${g?g.name:'ทีมที่ถูกลบ'}</b>
+          ${canManage?`<button class="btn ghost xs" onclick="sendDispatchLine('${d.id}')" title="ส่ง LINE แจ้งทีมนี้">📱</button><button class="btn ghost xs" onclick="deleteDispatch('${d.id}')">✕</button>`:''}
+        </div>
+        <div class="hint" style="margin-top:2px">📁 ${p?p.name:'—'}</div>
+        <div style="margin-top:8px;font-size:12.5px">
+          ${d.zone?`<div>📍 โซน/พื้นที่: <b>${d.zone}</b></div>`:''}
+          ${d.time_from||d.time_to?`<div>🕐 เวลา: <b>${d.time_from||'—'} – ${d.time_to||'—'}</b></div>`:''}
+          ${d.task_note?`<div style="margin-top:4px">📝 ${d.task_note}</div>`:''}
+        </div>
+        <div class="hint" style="margin-top:8px;font-size:11px">${mem.length} คน: ${mem.map(m=>m.e.name).join(", ")||'—'}</div>
+      </div>`;}).join("")}
+  </div>
+  ${activeGroups.filter(g=>!assignedGroupIds.has(String(g.id))).length>0?`
+  <div class="card" style="margin-top:16px;background:#fff9f0;border:1px solid #f2c98a">
+    <h3>⚠️ ทีมที่ยังไม่ถูกมอบหมายงานวันนี้</h3>
+    <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">
+      ${activeGroups.filter(g=>!assignedGroupIds.has(String(g.id))).map(g=>`<span class="pill amber">${g.name} (${PJ(g.project_id)?.name||''})</span>`).join("")}
+    </div>
+  </div>`:''}`;
+}
+// ข้อความแจ้ง LINE รายคนสำหรับ 1 งานมอบหมาย — ส่งให้สมาชิกทุกคนในทีมนั้น
+function dispatchLineText(d){
+  const g = PG(d.group_id), p = g?PJ(g.project_id):null;
+  return `📋 มอบหมายงานวันที่ ${isoToThaiDisplay(d.work_date)}\nทีม: ${g?g.name:'-'}\nโครงการ: ${p?p.name:'-'}${p?.site?' ('+p.site+')':''}${d.zone?`\nโซน/พื้นที่: ${d.zone}`:''}${d.time_from||d.time_to?`\nเวลา: ${d.time_from||'—'} – ${d.time_to||'—'}`:''}${d.task_note?`\nงาน: ${d.task_note}`:''}\n— HRMS CENTER`;
+}
+function sendDispatchLine(assignmentId){
+  const d = dailyAssignments.find(x=>String(x.id)===String(assignmentId)); if(!d) return;
+  const g = PG(d.group_id); if(!g){ toast("ไม่พบทีมของงานนี้"); return; }
+  const mem = membersOf(g.id);
+  if(mem.length===0){ toast("ทีมนี้ยังไม่มีสมาชิกให้แจ้ง"); return; }
+  const text = dispatchLineText(d);
+  mem.forEach(m=>notifyLineBestEffort(m.employee_id, text));
+  toast(`ส่ง LINE แจ้งทีม "${g.name}" แล้ว (${mem.length} คน) — จะถึงเฉพาะคนที่ผูก LINE ไว้แล้ว`);
+}
+function sendAllDispatchLine(){
+  const todays = dailyAssignments.filter(d=>d.work_date===dispatchDate);
+  if(todays.length===0){ toast("ยังไม่มีการมอบหมายงานวันนี้"); return; }
+  let n = 0;
+  todays.forEach(d=>{
+    const g = PG(d.group_id); if(!g) return;
+    const mem = membersOf(g.id);
+    const text = dispatchLineText(d);
+    mem.forEach(m=>{ notifyLineBestEffort(m.employee_id, text); n++; });
+  });
+  logAudit("project", "ส่ง LINE แจ้งมอบหมายงานรายวันทั้งหมด", isoToThaiDisplay(dispatchDate));
+  toast(`ส่ง LINE แจ้ง ${todays.length} ทีม (${n} คน) แล้ว ✓`);
+}
+function openDispatchModal(){
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">📋</div>
+      <div><h3 style="font-size:16px">มอบหมายทีมประจำวัน</h3><div class="hint">${isoToThaiDisplay(dispatchDate)}</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>เลือกทีม *</label>
+        <select id="dpGroup">${projectGroups.map(g=>`<option value="${g.id}">${g.name} — ${PJ(g.project_id)?.name||''}</option>`).join("")}</select>
+      </div>
+      <div class="field"><label>โซน / พื้นที่ทำงาน</label><input id="dpZone" placeholder="เช่น ชั้น 3 / โซน B"></div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="field"><label>เวลาเริ่ม</label><input id="dpFrom" type="time" value="08:00"></div>
+        <div class="field"><label>เวลาสิ้นสุด</label><input id="dpTo" type="time" value="17:00"></div>
+      </div>
+      <div class="field"><label>รายละเอียดงาน</label><textarea id="dpNote" rows="2" placeholder="เช่น ติดตั้งกระจกโซน B"></textarea></div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;background:#f8f9fc;border-radius:10px;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" id="dpNotifyLine" checked> 📱 ส่ง LINE แจ้งสมาชิกทีมทันทีหลังบันทึก
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="saveDispatch()">✓ มอบหมายงาน</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function saveDispatch(){
+  const groupId = document.getElementById("dpGroup").value;
+  const g = PG(groupId);
+  if(!g){ toast("กรุณาเลือกทีม"); return; }
+  const notifyLine = document.getElementById("dpNotifyLine")?.checked;
+  const payload = {
+    work_date: dispatchDate, project_id: g.project_id, group_id: groupId,
+    zone: document.getElementById("dpZone").value.trim(),
+    time_from: document.getElementById("dpFrom").value, time_to: document.getElementById("dpTo").value,
+    task_note: document.getElementById("dpNote").value.trim(), created_by: loggedInEmployeeId
+  };
+  const { data, error } = await sb.from("daily_assignments").insert(payload).select();
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  closeModal();
+  logAudit("project", "มอบหมายงานรายวัน", `${g.name} · ${isoToThaiDisplay(dispatchDate)}`);
+  await loadProjectsModule();
+  render("projects");
+  toast("มอบหมายงานแล้ว ✓");
+  updateProjectBadge();
+  if(notifyLine){
+    const saved = data && data[0];
+    const mem = membersOf(groupId);
+    const text = dispatchLineText(saved||payload);
+    mem.forEach(m=>notifyLineBestEffort(m.employee_id, text));
+  }
+}
+async function deleteDispatch(id){
+  const { error } = await sb.from("daily_assignments").delete().eq("id", id);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  await loadProjectsModule();
+  render("projects");
+  toast("ยกเลิกการมอบหมายแล้ว ✓");
+  updateProjectBadge();
+}
+
+/* ---------- Employee-scoped views (เห็นเฉพาะทีม/งาน/แผนของตัวเอง) ---------- */
+function prjMyTeam(){
+  const me = myEmp();
+  const g = me ? currentGroupOfEmployee(me.id) : null;
+  if(!g){
+    return `<div class="card"><div class="hint" style="text-align:center;padding:30px">คุณยังไม่ได้ถูกมอบหมายเข้าทีมงานโครงการใด — รอ HR หรือหัวหน้างานจัดเข้าทีม</div></div>`;
+  }
+  const p = PJ(g.project_id);
+  const leader = g.leader_employee_id ? E(g.leader_employee_id) : null;
+  const mem = membersOf(g.id);
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <h3>👷 ทีมของฉัน: ${g.name}</h3>
+    <div class="hint" style="margin-top:4px">📁 โครงการ: <b>${p?p.name:'—'}</b> ${p?.site?'· 📍'+p.site:''}</div>
+    <div class="hint" style="margin-top:2px">หัวหน้าทีม: <b>${leader?leader.name:'— ยังไม่กำหนด —'}</b>${leader?.phone?' · 📞 '+leader.phone:''}</div>
+  </div>
+  <div class="card">
+    <h3>👥 เพื่อนร่วมทีม (${mem.length} คน)</h3>
+    <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+      ${mem.map(m=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#f8f9fc;border-radius:8px">
+        <div class="emp-ava" style="width:28px;height:28px;font-size:10.5px;background:${m.e.color}">${initials(m.e.name)}</div>
+        <div style="flex:1;font-size:12.5px">${m.e.name}${String(m.e.id)===String(me?.id)?' <span class="hint">(คุณ)</span>':''}${m.member_status==='borrowed'?' <span class="pill purple" style="font-size:9.5px">ยืมตัว</span>':''}${g.leader_employee_id&&String(g.leader_employee_id)===String(m.e.id)?' <span class="pill blue" style="font-size:9.5px">หัวหน้าทีม</span>':''}</div>
+      </div>`).join("")}
+    </div>
+  </div>`;
+}
+function prjMyDispatch(){
+  const me = myEmp();
+  const g = me ? currentGroupOfEmployee(me.id) : null;
+  const tr = me ? transferCovering(me.id, dispatchDate) : null;
+  const myAssignment = g ? dailyAssignments.find(d=>d.work_date===dispatchDate && String(d.group_id)===String(g.id)) : null;
+  const p = g ? PJ(g.project_id) : null;
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h3>📋 งานของฉันวันนี้</h3>
+      <div class="field" style="margin-left:auto"><input type="date" value="${dispatchDate}" onchange="dispatchDate=this.value;render('projects')"></div>
+    </div>
+    <div class="hint">วันที่ ${isoToThaiDisplay(dispatchDate)}</div>
+  </div>
+  ${tr?`<div class="card" style="margin-bottom:16px;background:#f4f0ff;border:1px solid #cdbdf5">
+    <div style="display:flex;align-items:center;gap:10px"><div style="font-size:20px">🔁</div>
+      <div><b style="font-size:13px">คุณถูกโยกย้ายไปช่วยงานชั่วคราว</b>
+      <div class="hint" style="margin-top:2px">ตั้งแต่ ${isoToThaiDisplay(tr.start_date)}${tr.end_date?' ถึง '+isoToThaiDisplay(tr.end_date):' (ยังไม่ระบุวันกลับ)'}${tr.reason?' · เหตุผล: '+tr.reason:''}</div></div>
+    </div>
+  </div>`:''}
+  ${!g?'<div class="card"><div class="hint" style="text-align:center;padding:24px">คุณยังไม่ได้ถูกมอบหมายเข้าทีมงานโครงการใด</div></div>'
+  :!myAssignment?`<div class="card"><div class="hint" style="text-align:center;padding:24px">ยังไม่มีการมอบหมายงานสำหรับทีม "${g.name}" ในวันนี้</div></div>`
+  :`<div class="card">
+      <b style="font-size:14.5px">👷 ทีม: ${g.name}</b>
+      <div class="hint" style="margin-top:4px">📁 โครงการ: <b>${p?p.name:'—'}</b></div>
+      <div style="margin-top:10px;font-size:13px">
+        ${myAssignment.zone?`<div>📍 โซน/พื้นที่: <b>${myAssignment.zone}</b></div>`:''}
+        ${myAssignment.time_from||myAssignment.time_to?`<div>🕐 เวลา: <b>${myAssignment.time_from||'—'} – ${myAssignment.time_to||'—'}</b></div>`:''}
+        ${myAssignment.task_note?`<div style="margin-top:6px">📝 ${myAssignment.task_note}</div>`:''}
+      </div>
+    </div>`}`;
+}
+function prjMyPlan(){
+  const me = myEmp();
+  const g = me ? currentGroupOfEmployee(me.id) : null;
+  if(!g) return `<div class="card"><div class="hint" style="text-align:center;padding:30px">คุณยังไม่ได้ถูกมอบหมายเข้าทีมงานโครงการใด</div></div>`;
+  const p = PJ(g.project_id);
+  const plans = projectPlans.filter(pl=>String(pl.project_id)===String(g.project_id) && (!pl.group_id || String(pl.group_id)===String(g.id)));
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <h3>🗓️ แผนระยะยาว — ${p?p.name:''}</h3>
+    <div class="hint">ทีม: ${g.name} · แผนที่ HR/หัวหน้างานวางไว้สำหรับโครงการและทีมของคุณ</div>
+  </div>
+  <div class="card">
+    ${plans.length===0?'<div class="hint" style="text-align:center;padding:20px">ยังไม่มีแผนสำหรับโครงการนี้</div>':`
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${plans.map(pl=>`
+      <div style="padding:10px 12px;background:#f8f9fc;border-radius:8px">
+        <b style="font-size:13px">${pl.period_label}</b>${pl.group_id?' <span class="pill blue" style="font-size:9.5px">เฉพาะทีมของคุณ</span>':' <span class="pill gray" style="font-size:9.5px">ทั้งโครงการ</span>'}
+        <div style="font-size:12.5px;margin-top:4px">${pl.plan_note||''}</div>
+      </div>`).join("")}
+    </div>`}
+  </div>`;
+}
+
+/* ---------- 5) แผนระยะยาว (รายสัปดาห์/รายเดือน ต่อโครงการ) ---------- */
+function prjPlan(){
+  const canManage = canManageProjects();
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h3>🗓️ แผนระยะยาว</h3>
+      ${canManage?`<button class="btn primary sm" style="margin-left:auto" onclick="openPlanModal()">+ เพิ่มแผน</button>`:''}
+    </div>
+    <div class="hint">วางแผนล่วงหน้าเป็นรายสัปดาห์/รายเดือนต่อโครงการ — หัวหน้าทีมปรับการมอบหมายรายวันตามหน้างานจริงได้ที่แท็บ "มอบหมายงานรายวัน"</div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+    ${projects.filter(p=>p.status!=="done").map(p=>{
+      const plans = projectPlans.filter(pl=>String(pl.project_id)===String(p.id));
+      return `
+      <div class="card">
+        <b style="font-size:14.5px">📁 ${p.name}</b>
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+          ${plans.length===0?'<div class="hint" style="font-size:12px">ยังไม่มีแผน</div>':plans.map(pl=>`
+          <div style="padding:8px 10px;background:#f8f9fc;border-radius:8px">
+            <div style="display:flex;align-items:center;gap:8px"><b style="font-size:12.5px;flex:1">${pl.period_label}</b>${canManage?`<button class="btn ghost xs" onclick="deletePlan('${pl.id}')">✕</button>`:''}</div>
+            ${pl.group_id?`<div class="hint" style="font-size:11px">ทีม: ${PG(pl.group_id)?.name||'—'}</div>`:''}
+            <div style="font-size:12px;margin-top:2px">${pl.plan_note||''}</div>
+          </div>`).join("")}
+        </div>
+      </div>`;}).join("")}
+  </div>`;
+}
+function openPlanModal(){
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--purple);border-radius:10px;display:grid;place-items:center;color:#fff">🗓️</div>
+      <div><h3 style="font-size:16px">เพิ่มแผนระยะยาว</h3></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>โครงการ *</label><select id="plProject" onchange="document.getElementById('plGroup').innerHTML='<option value=\\'\\'>-- ทั้งโครงการ --</option>'+groupsOf(this.value).map(g=>'<option value=\\''+g.id+'\\'>'+g.name+'</option>').join('')">
+        ${projects.filter(p=>p.status!=="done").map(p=>`<option value="${p.id}">${p.name}</option>`).join("")}
+      </select></div>
+      <div class="field"><label>ทีม (ถ้าระบุเฉพาะทีม)</label><select id="plGroup"><option value="">-- ทั้งโครงการ --</option>${groupsOf(projects[0]?.id).map(g=>`<option value="${g.id}">${g.name}</option>`).join("")}</select></div>
+      <div class="field"><label>ชื่อช่วงเวลา *</label><input id="plLabel" placeholder="เช่น สัปดาห์ที่ 1 (1-7 ก.ค. 2569)"></div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="field"><label>เริ่ม</label><input id="plStart" type="date"></div>
+        <div class="field"><label>สิ้นสุด</label><input id="plEnd" type="date"></div>
+      </div>
+      <div class="field"><label>รายละเอียดแผน</label><textarea id="plNote" rows="2" placeholder="เช่น ทำชั้น 1 ให้เสร็จ"></textarea></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="savePlan()">💾 บันทึก</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function savePlan(){
+  const payload = {
+    project_id: document.getElementById("plProject").value,
+    group_id: document.getElementById("plGroup").value || null,
+    period_label: document.getElementById("plLabel").value.trim(),
+    start_date: document.getElementById("plStart").value || null,
+    end_date: document.getElementById("plEnd").value || null,
+    plan_note: document.getElementById("plNote").value.trim()
+  };
+  if(!payload.project_id || !payload.period_label){ toast("กรุณากรอกโครงการและชื่อช่วงเวลา"); return; }
+  const { error } = await sb.from("project_plans").insert(payload);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  closeModal();
+  logAudit("project", "เพิ่มแผนระยะยาว", `${PJ(payload.project_id)?.name||''} · ${payload.period_label}`);
+  await loadProjectsModule();
+  render("projects");
+  toast("บันทึกแผนแล้ว ✓");
+}
+async function deletePlan(id){
+  const { error } = await sb.from("project_plans").delete().eq("id", id);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  await loadProjectsModule();
+  render("projects");
+  toast("ลบแผนแล้ว ✓");
 }
 
 /* ================== PAGE: AUDIT LOG ================== */
