@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   --sidebar:#1e2432; --sidebar-deep:#161b26; --accent:#f7941d; --accent-2:#f27c0e; --accent-soft:#fff3e2;
@@ -1338,7 +1339,7 @@ let subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings
 
 /* ================== HELPERS ================== */
 const E = id => employees.find(e=>String(e.id)===String(id));
-const LT = code => LEAVE_TYPES.find(l=>l.code===code);
+const LT = code => LEAVE_TYPES.find(l=>l.code===code) || {code:code||"unknown", name:code||"ไม่ระบุประเภท", paid:"unpaid", color:"#8a92a6", desc:"ประเภทลานี้ไม่อยู่ในรายการที่ตั้งค่าไว้ (ข้อมูลเก่า/ยังไม่ได้กำหนด)"};
 const fmt = n => Math.round(n).toLocaleString("th-TH");
 const initials = n => n.replace(/\(.*\)/,"").trim().split(" ").map(w=>w[0]).slice(0,2).join("");
 const natFlag = n => n==="MM" ? "🇲🇲" : "🇹🇭";
@@ -1575,9 +1576,11 @@ function pgDashboard(){
     return {d,n,color:deptColors[i%deptColors.length],path:`M 100 100 L ${x1} ${y1} A 70 70 0 ${large} 1 ${x2} ${y2} Z`};
   });
 
-  // monthly leave bars
-  const leaveData = [{m:"ก.พ.",v:3},{m:"มี.ค.",v:5},{m:"เม.ย.",v:2},{m:"พ.ค.",v:4},{m:"มิ.ย.",v:6},{m:"ก.ค.",v:2}];
-  const maxV = Math.max(...leaveData.map(x=>x.v));
+  // monthly leave bars — คำนวณจากข้อมูลการลาจริง (ก.พ.-ก.ค.)
+  const byMonth = {};
+  leaves.forEach(l=>{const d=parseThaiDate(l.date); if(d){const key=THAI_MONTHS[d.getMonth()]; byMonth[key]=(byMonth[key]||0)+1;}});
+  const leaveData = THAI_MONTHS.slice(1,7).map(m=>({m, v:byMonth[m]||0}));
+  const maxV = Math.max(1,...leaveData.map(x=>x.v));
 
   return `
   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:18px">
@@ -1604,14 +1607,10 @@ function pgDashboard(){
     </div>
 
     <div class="card" style="background:linear-gradient(135deg,#fff8ec,#fff);border:1px solid #ffddaa">
-      <h3>🔔 แจ้งเตือนสำคัญ <span class="pill red" style="margin-left:auto">${pendingCount()+probEnd+1} New</span></h3>
+      <h3>🔔 แจ้งเตือนสำคัญ <span class="pill red" style="margin-left:auto">${pendingCount()+probEnd} New</span></h3>
       <div style="margin-top:12px">
-        <div class="notif-item"><div class="ic" style="background:#fde8f2;color:var(--pink)">🎂</div>
-          <div style="flex:1"><b style="font-size:13px">วันเกิดพนักงานวันนี้</b><div class="hint">1 รายการ · สมชาย ใจดี</div></div></div>
-        <div class="notif-item"><div class="ic" style="background:var(--amber-soft);color:#b47100)">📝</div>
-          <div style="flex:1"><b style="font-size:13px">ครบกำหนดทดลองงาน</b><div class="hint">${probEnd} ท่าน ใน 30 วัน</div></div></div>
-        <div class="notif-item"><div class="ic" style="background:var(--red-soft);color:var(--red)">📄</div>
-          <div style="flex:1"><b style="font-size:13px">สัญญาจ้างใกล้หมดอายุ</b><div class="hint">0 ท่าน · ทั้งหมดยังไม่หมดอายุ</div></div></div>
+        <div class="notif-item"><div class="ic" style="background:var(--amber-soft);color:#b47100">📝</div>
+          <div style="flex:1"><b style="font-size:13px">พนักงานอยู่ระหว่างทดลองงาน</b><div class="hint">${probEnd} ท่าน</div></div></div>
         <div class="notif-item" style="background:var(--accent-soft)"><div class="ic" style="background:var(--accent);color:#fff">✅</div>
           <div style="flex:1"><b style="font-size:13px">รออนุมัติการลา</b><div class="hint">${pendingCount()} รายการใหม่</div></div>
           <button class="btn xs primary" onclick="setSub('leave','approve');go('leave',document.querySelector('[data-page=leave]'))">ดู →</button></div>
@@ -1659,7 +1658,7 @@ function pgMyDashboard(){
   const myAtt = attendanceToday.find(a=>a.emp===me.id);
   const myLeaves = leaves.filter(l=>l.emp===me.id).sort((a,b)=>(parseThaiDate(b.date)||0)-(parseThaiDate(a.date)||0));
   const pendingMine = myLeaves.filter(l=>l.supStatus==="pending"||l.hrStatus==="pending").length;
-  const teamPending = isTeamLead() ? leaves.filter(l=>{const e=E(l.emp); return e.supervisor===me.name && l.supStatus==="pending";}).length : 0;
+  const teamPending = isTeamLead() ? leaves.filter(l=>{const e=E(l.emp); return e && e.supervisor===me.name && l.supStatus==="pending";}).length : 0;
   return `
   <div class="card" style="background:linear-gradient(135deg,#1e2432,#161b26);color:#fff;margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:14px">
@@ -2804,26 +2803,100 @@ function attToday(){
   </div>`;
 
 }
+let attSummaryFilter = {from:"", to:""};
+let attSummaryRangeData = null; // null = ใช้งวดปัจจุบัน (e.att) | "loading" | {empId: {workDays,absent,lateMin,leaveUsed}}
+async function loadAttSummaryRange(){
+  const from = attSummaryFilter.from || "2000-01-01";
+  const to = attSummaryFilter.to || todayISODate();
+  const [attRes, lvRes] = await Promise.all([
+    sb.from("attendances").select("employee_id,status,late_minutes,work_date").gte("work_date", from).lte("work_date", to),
+    sb.from("leave_requests").select("employee_id,leave_date,leave_type,supervisor_status,hr_status").gte("leave_date", from).lte("leave_date", to)
+  ]);
+  if(attRes.error||lvRes.error){ console.error("loadAttSummaryRange error", attRes.error||lvRes.error); toast("โหลดข้อมูลช่วงเวลาที่เลือกไม่สำเร็จ"); attSummaryRangeData=null; render("attendance"); return; }
+  const result = {};
+  employees.forEach(e=>{
+    const att = (attRes.data||[]).filter(a=>String(a.employee_id)===String(e.id));
+    const workDays = att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").length;
+    const lateMin = att.reduce((s,a)=>s+(a.late_minutes||0),0);
+    const absent = att.filter(a=>a.status==="absent").length;
+    const apprLeaves = (lvRes.data||[]).filter(l=>String(l.employee_id)===String(e.id)&&l.supervisor_status==="approved"&&l.hr_status==="approved");
+    const leaveUsed = apprLeaves.filter(l=>LT(l.leave_type)?.paid==="quota").length;
+    result[e.id] = {workDays, lateMin, absent, leaveUsed};
+  });
+  attSummaryRangeData = result;
+  render("attendance");
+}
+function applyAttSummaryFilter(){
+  attSummaryFilter.from = document.getElementById("asFrom").value;
+  attSummaryFilter.to = document.getElementById("asTo").value;
+  if(!attSummaryFilter.from && !attSummaryFilter.to){ attSummaryRangeData = null; render("attendance"); return; }
+  attSummaryRangeData = "loading";
+  render("attendance");
+  loadAttSummaryRange();
+}
+function clearAttSummaryFilter(){
+  attSummaryFilter = {from:"", to:""};
+  attSummaryRangeData = null;
+  render("attendance");
+}
+function exportAttSummaryExcel(){
+  if(typeof XLSX==="undefined"){ toast("ไม่สามารถโหลดไลบรารี Excel ได้ ลองใหม่อีกครั้ง"); return; }
+  const useRange = attSummaryRangeData && attSummaryRangeData!=="loading";
+  const rows = visibleEmployees().map(e=>{
+    const r = useRange ? (attSummaryRangeData[e.id]||{workDays:0,absent:0,lateMin:0,leaveUsed:0}) : e.att;
+    return {
+      "พนักงาน": e.name,
+      "รหัสพนักงาน": e.code,
+      "ประเภท": e.type==="monthly"?"รายเดือน":"รายวัน",
+      "มาทำงาน (วัน)": r.workDays||0,
+      "ขาด (วัน)": r.absent||0,
+      "ลา ใช้โควตา (วัน)": useRange ? (r.leaveUsed||0) : (e.type==="monthly"?e.leaveUsed:0),
+      "มาสาย (นาที)": r.lateMin||0,
+      "OT เหมา (บาท)": e.extra||0
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "สรุปเวลารายคน");
+  const rangeLabel = attSummaryFilter.from||attSummaryFilter.to ? `${attSummaryFilter.from||'เริ่มต้น'}_ถึง_${attSummaryFilter.to||'ปัจจุบัน'}` : "งวดปัจจุบัน";
+  XLSX.writeFile(wb, `สรุปเวลารายคน_${rangeLabel}.xlsx`);
+  toast("ดาวน์โหลด Excel สรุปเวลารายคนแล้ว ✓");
+}
 function attSummary(){
-  const sendBtn = "";
-  return sendBtn + `
+  const useRange = attSummaryRangeData && attSummaryRangeData!=="loading";
+  const loadingRange = attSummaryRangeData==="loading";
+  const rangeText = attSummaryFilter.from||attSummaryFilter.to?`${attSummaryFilter.from||'เริ่มต้น'} ถึง ${attSummaryFilter.to||'ปัจจุบัน'}`:"";
+  return `
   <div class="card">
-    <h3>📊 สรุปเวลารายคน — เดือน กรกฎาคม 2569</h3>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h3>📊 สรุปเวลารายคน ${useRange?`— ${rangeText}`:`— เดือน กรกฎาคม 2569`}</h3>
+      <button class="btn ghost sm" style="margin-left:auto" onclick="exportAttSummaryExcel()">📥 Export Excel</button>
+    </div>
     <div class="hint">ข้อมูลนี้ส่งเข้า Payroll โดยตรง — HR ไม่ต้องนั่งนับใน Excel${!canViewAll()?' · แสดงเฉพาะข้อมูลที่คุณมีสิทธิ์เห็น':''}</div>
+    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:12px">
+      <div class="field"><label>ตั้งแต่วันที่</label><input type="date" id="asFrom" value="${attSummaryFilter.from}"></div>
+      <div class="field"><label>ถึงวันที่</label><input type="date" id="asTo" value="${attSummaryFilter.to}"></div>
+      <button class="btn primary sm" onclick="applyAttSummaryFilter()">🔍 ดึงรายงาน</button>
+      ${useRange||attSummaryFilter.from||attSummaryFilter.to?'<button class="btn ghost sm" onclick="clearAttSummaryFilter()">↺ กลับงวดปัจจุบัน</button>':''}
+    </div>
+    ${loadingRange?'<div class="hint" style="margin-top:12px;text-align:center">⏳ กำลังดึงข้อมูล...</div>':`
     <table style="margin-top:12px">
-      <tr><th>พนักงาน</th><th>ประเภท</th><th class="num">มาทำงาน</th><th class="num">ขาด</th><th class="num">ลา (ใช้โควตา)</th><th class="num">มาสาย (นาที)</th><th class="num">OT เหมา</th>${canViewAll()?'<th style="text-align:center">แก้ไข</th>':''}</tr>
-      ${visibleEmployees().map(e=>`<tr>
+      <tr><th>พนักงาน</th><th>ประเภท</th><th class="num">มาทำงาน</th><th class="num">ขาด</th><th class="num">ลา (ใช้โควตา)</th><th class="num">มาสาย (นาที)</th><th class="num">OT เหมา</th>${canViewAll()&&!useRange?'<th style="text-align:center">แก้ไข</th>':''}</tr>
+      ${visibleEmployees().map(e=>{
+        const r = useRange ? (attSummaryRangeData[e.id]||{workDays:0,absent:0,lateMin:0,leaveUsed:0}) : e.att;
+        return `<tr>
         <td>${empCell(e)}</td>
         <td>${e.type==="monthly"?'<span class="pill blue">รายเดือน</span>':'<span class="pill purple">รายวัน</span>'}${e.wfh?'<div style="margin-top:3px"><span class="pill purple" style="font-size:9.5px">🏠 WFH</span></div>':''}</td>
-        <td class="num"><b>${e.att.workDays}</b> วัน</td>
-        <td class="num">${e.att.absent?'<span class="pill red">'+e.att.absent+' วัน</span>':'—'}${e.att.missing?'<div style="margin-top:3px"><span class="pill amber" style="font-size:9.5px">🧐 รอตรวจ '+e.att.missing+' วัน</span></div>':''}${e.wfh?'<div class="hint" style="font-size:10px">ไม่หัก (WFH)</div>':''}</td>
-        <td class="num">${e.type==="monthly"?e.leaveUsed+" / "+settings.paidLeaveQuota:'—'}</td>
-        <td class="num">${e.att.lateMin?'<span class="pill amber">'+e.att.lateMin+'</span>':'—'}</td>
+        <td class="num"><b>${r.workDays}</b> วัน</td>
+        <td class="num">${r.absent?'<span class="pill red">'+r.absent+' วัน</span>':'—'}${!useRange&&e.att.missing?'<div style="margin-top:3px"><span class="pill amber" style="font-size:9.5px">🧐 รอตรวจ '+e.att.missing+' วัน</span></div>':''}${e.wfh?'<div class="hint" style="font-size:10px">ไม่หัก (WFH)</div>':''}</td>
+        <td class="num">${useRange?r.leaveUsed:(e.type==="monthly"?e.leaveUsed+" / "+settings.paidLeaveQuota:'—')}</td>
+        <td class="num">${r.lateMin?'<span class="pill amber">'+r.lateMin+'</span>':'—'}</td>
         <td class="num">${e.extra?'฿'+fmt(e.extra):'—'}</td>
-        ${canViewAll()?`<td style="text-align:center"><button class="btn ghost xs" onclick="openFixAttendanceModal('${e.id}')">✏️ แก้ไข</button></td>`:''}
-      </tr>`).join("")}
+        ${canViewAll()&&!useRange?`<td style="text-align:center"><button class="btn ghost xs" onclick="openFixAttendanceModal('${e.id}')">✏️ แก้ไข</button></td>`:''}
+      </tr>`;}).join("")}
     </table>
-    ${canViewAll()?'<div class="hint" style="margin-top:12px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 วันที่ไม่มีบันทึกลงเวลา = สถานะ "รอตรวจสอบ" (ยังไม่หัก/ยังไม่จ่าย) — ไปยืนยันที่แท็บ <b>🧐 ตรวจสอบย้อนหลัง</b> · "ขาด" จะนับเฉพาะวันที่ HR ยืนยันแล้วเท่านั้น</div>':''}
+    ${canViewAll()&&!useRange?'<div class="hint" style="margin-top:12px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 วันที่ไม่มีบันทึกลงเวลา = สถานะ "รอตรวจสอบ" (ยังไม่หัก/ยังไม่จ่าย) — ไปยืนยันที่แท็บ <b>🧐 ตรวจสอบย้อนหลัง</b> · "ขาด" จะนับเฉพาะวันที่ HR ยืนยันแล้วเท่านั้น</div>':''}
+    `}
   </div>`;
 }
 function openFixAttendanceModal(id){
@@ -2918,14 +2991,14 @@ function pgLeave(){
     ${tab("quota","สิทธิ์วันลา","🎫")}
     ${canViewAll()?tab("report","รายงาน","📈"):''}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${tt==="dashboard"?leaveDash():tt==="types"?(isPlainEmp?leaveDash():leaveTypes()):tt==="submit"?leaveSubmit():tt==="approve"?(canApproveLeave()?leaveApprove():noAccessCard("เฉพาะหัวหน้างาน HR และ Super Admin เท่านั้นที่อนุมัติใบลาได้")):tt==="calendar"?(isPlainEmp?leaveDash():leaveCal()):tt==="report"?(canViewAll()?leaveReport():noAccessCard()):leaveQuota()}`;
+  ${tt==="dashboard"?(isPlainEmp?leaveMyDash():leaveDash()):tt==="types"?(isPlainEmp?leaveMyDash():leaveTypes()):tt==="submit"?leaveSubmit():tt==="approve"?(canApproveLeave()?leaveApprove():noAccessCard("เฉพาะหัวหน้างาน HR และ Super Admin เท่านั้นที่อนุมัติใบลาได้")):tt==="calendar"?(isPlainEmp?leaveMyDash():leaveCal()):tt==="report"?(canViewAll()?leaveReport():noAccessCard()):leaveQuota()}`;
 }
 function leaveReport(){
   const data = filteredLeaves();
   const totalDays = data.length;
   const totalWorkdays = employees.length * 22;
   const avgRate = totalWorkdays ? (totalDays/totalWorkdays*100).toFixed(1) : "0.0";
-  const deptStat = {}; data.forEach(l=>{const e=E(l.emp); deptStat[e.dept]=(deptStat[e.dept]||0)+1;});
+  const deptStat = {}; data.forEach(l=>{const e=E(l.emp); if(!e) return; deptStat[e.dept]=(deptStat[e.dept]||0)+1;});
   const empStat = {}; data.forEach(l=>{empStat[l.emp]=(empStat[l.emp]||0)+1;});
   const topDept = Object.entries(deptStat).sort((a,b)=>b[1]-a[1])[0];
   const topEmp = Object.entries(empStat).sort((a,b)=>b[1]-a[1]).slice(0,5);
@@ -2965,7 +3038,7 @@ function leaveReport(){
     <div class="card">
       <h3>👤 พนักงานที่ลามากสุด (Top 5)</h3>
       <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
-        ${topEmp.length===0?'<div class="hint">ไม่มีข้อมูล</div>':topEmp.map(([id,n],i)=>{const e=E(id);return `
+        ${topEmp.filter(([id])=>E(id)).length===0?'<div class="hint">ไม่มีข้อมูล</div>':topEmp.filter(([id])=>E(id)).map(([id,n],i)=>{const e=E(id);return `
         <div style="display:flex;align-items:center;gap:10px;padding:9px;background:#f8f9fc;border-radius:10px">
           <div style="width:20px;height:20px;border-radius:50%;background:${i===0?'#f7941d':'#c0c6d4'};color:#fff;display:grid;place-items:center;font-weight:700;font-size:10.5px">${i+1}</div>
           <div class="emp-ava" style="background:${e.color};width:28px;height:28px;font-size:10px">${initials(e.name)}</div>
@@ -3011,6 +3084,41 @@ function applyLeaveFilter(){
   leaveFilter.to = document.getElementById("lvTo").value;
   render("leave");
 }
+// สำหรับพนักงานทั่วไป (ไม่ใช่ HR/Super Admin/หัวหน้างาน) — เห็นสรุปการลาของตัวเองเท่านั้น
+// ไม่แสดงการ์ดวิเคราะห์ระดับบริษัท (แผนกที่ลาบ่อยสุด/พนักงานลามากสุด/ตัวกรองย้อนหลัง/Export) ซึ่งมีไว้สำหรับ HR และหัวหน้างานเท่านั้น
+function leaveMyDash(){
+  const me = myEmp();
+  const data = myVisibleLeaves().slice().sort((a,b)=>(parseThaiDate(b.date)||0)-(parseThaiDate(a.date)||0));
+  const total = data.length;
+  const approved = data.filter(l=>l.hrStatus==="approved").length;
+  const pending = data.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").length;
+  const rejected = data.filter(l=>l.supStatus==="rejected"||l.hrStatus==="rejected").length;
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <h3>📋 สรุปการลาของฉัน</h3>
+    <div class="hint">${me&&me.type==="monthly"?`สิทธิ์ลาไม่หักเงินคงเหลือ <b>${Math.max(0,settings.paidLeaveQuota-me.leaveUsed)} / ${settings.paidLeaveQuota}</b> วัน`:'พนักงานรายวัน — วันที่ลาจะไม่ได้รับค่าจ้าง'}</div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:16px">
+    ${[["ทั้งหมด",total,"#3b7bf6","📋"],["อนุมัติแล้ว",approved,"#1fae6e","✅"],["รออนุมัติ",pending,"#f5a623","⏳"],["ไม่อนุมัติ",rejected,"#e94f4f","✕"]].map(s=>`
+    <div class="card" style="text-align:center"><div style="font-size:22px">${s[3]}</div><div class="display" style="font-size:22px;font-weight:700;color:${s[2]}">${s[1]}</div><div class="hint">${s[0]}</div></div>`).join("")}
+  </div>
+  <div class="card">
+    <h3>🗓️ ประวัติการลาของฉัน</h3>
+    <table style="margin-top:10px">
+      <tr><th>วันที่ลา</th><th>ประเภท</th><th>เหตุผล</th><th>ระดับหัวหน้า</th><th>ระดับ HR</th></tr>
+      ${data.length===0?'<tr><td colspan="5" class="hint" style="text-align:center;padding:16px">ยังไม่มีประวัติการลา</td></tr>':data.map(l=>{const lt=LT(l.type);return `<tr>
+        <td>${l.date}</td>
+        <td style="color:${lt.color}">${lt.name}</td>
+        <td class="hint" style="font-size:12.5px">${l.note||"—"}</td>
+        <td>${l.supStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.supStatus==='rejected'?'<span class="pill red">✕</span>':'<span class="pill amber">รอ</span>'}</td>
+        <td>${l.hrStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.hrStatus==='rejected'?'<span class="pill red">✕</span>':l.supStatus==='approved'?'<span class="pill blue">รอ HR</span>':'<span class="pill gray">รอหัวหน้า</span>'}</td>
+      </tr>`;}).join("")}
+    </table>
+  </div>
+  <div class="card" style="margin-top:16px;background:#f8f9fc">
+    <div class="hint">🔒 คุณเห็นได้เฉพาะประวัติการลาของตัวเองเท่านั้น — สรุปภาพรวมทั้งบริษัท/แผนก เป็นข้อมูลสำหรับหัวหน้างานและ HR</div>
+  </div>`;
+}
 function leaveDash(){
   const data = filteredLeaves();
   const total = data.length;
@@ -3018,7 +3126,7 @@ function leaveDash(){
   const pending = data.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").length;
   const rejected = data.filter(l=>l.supStatus==="rejected"||l.hrStatus==="rejected").length;
   const deptStat = {};
-  data.forEach(l=>{const e=E(l.emp);deptStat[e.dept]=(deptStat[e.dept]||0)+1;});
+  data.forEach(l=>{const e=E(l.emp); if(!e) return; deptStat[e.dept]=(deptStat[e.dept]||0)+1;});
   const empStat = {};
   data.forEach(l=>{empStat[l.emp]=(empStat[l.emp]||0)+1;});
   const topEmp = Object.entries(empStat).sort((a,b)=>b[1]-a[1]).slice(0,3);
@@ -3055,7 +3163,7 @@ function leaveDash(){
     <div class="card">
       <h3>👤 พนักงานที่ลามากสุด</h3>
       <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
-        ${topEmp.map(([id,n],i)=>{const e=E(id);return `
+        ${topEmp.filter(([id])=>E(id)).map(([id,n],i)=>{const e=E(id);return `
         <div style="display:flex;align-items:center;gap:10px;padding:10px;background:#f8f9fc;border-radius:10px">
           <div style="width:22px;height:22px;border-radius:50%;background:${i===0?'#f7941d':i===1?'#c0c6d4':'#c99a6b'};color:#fff;display:grid;place-items:center;font-weight:700;font-size:11px">${i+1}</div>
           <div class="emp-ava" style="background:${e.color};width:30px;height:30px;font-size:10.5px">${initials(e.name)}</div>
@@ -3086,7 +3194,7 @@ function leaveDash(){
       <tr><th>วันที่ลา</th><th>พนักงาน</th><th>ประเภท</th><th>สถานะ</th></tr>
       ${data.length===0?'<tr><td colspan="4" class="hint" style="text-align:center;padding:16px">ไม่มีข้อมูลลาในช่วงที่เลือก</td></tr>':
       data.slice().sort((a,b)=>(parseThaiDate(b.date)||0)-(parseThaiDate(a.date)||0)).map(l=>{const e=E(l.emp);return `<tr>
-        <td>${l.date}</td><td>${empCell(e)}</td><td style="color:${LT(l.type).color}">${LT(l.type).name}</td><td>${leaveStatus(l)}</td>
+        <td>${l.date}</td><td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td style="color:${LT(l.type).color}">${LT(l.type).name}</td><td>${leaveStatus(l)}</td>
       </tr>`;}).join("")}
     </table>
   </div>`;
@@ -3196,7 +3304,7 @@ function leaveApprove(){
     <table style="margin-top:12px">
       <tr><th>พนักงาน</th><th>วันที่ลา</th><th>ประเภท</th><th>ยื่นเมื่อ</th><th>ตรงเวลา</th><th>ระดับหัวหน้า</th><th>ระดับ HR</th><th style="text-align:center">การดำเนินการ</th></tr>
       ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);return `<tr>
-        <td>${empCell(e)}</td><td>${l.date}</td>
+        <td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td>${l.date}</td>
         <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}<div style="color:var(--muted);font-size:11.5px">${l.note}</div></td>
         <td class="num">${l.submitted}</td>
         <td>${l.onTime?'<span class="pill green">✓</span>':'<span class="pill red">ช้า</span>'}</td>
@@ -4014,6 +4122,25 @@ function openConfirmPayModal(cy){
 }
 let slipPeriod = {monthly:"current", weekly:"current", daily:"current"};
 function setSlipPeriod(val){slipPeriod[payrollState.cycle]=val; render("payroll");}
+let _slipExportRows = [];
+let _slipExportPeriod = "";
+function exportSlipSummaryExcel(){
+  if(typeof XLSX==="undefined"){ toast("ไม่สามารถโหลดไลบรารี Excel ได้ ลองใหม่อีกครั้ง"); return; }
+  if(!_slipExportRows.length){ toast("ไม่มีข้อมูลสำหรับ Export"); return; }
+  const data = _slipExportRows.map(({e,net})=>({
+    "พนักงาน": e?e.name:"พ้นสภาพ/ไม่พบ",
+    "รหัสพนักงาน": e?e.code:"—",
+    "ประเภท": e?(e.type==="monthly"?"รายเดือน":"รายวัน"):"—",
+    "สุทธิ (บาท)": net
+  }));
+  const total = _slipExportRows.reduce((s,r)=>s+(r.net||0),0);
+  data.push({"พนักงาน":"", "รหัสพนักงาน":"", "ประเภท":"ยอดรวม", "สุทธิ (บาท)": total});
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "สรุปสลิปเงินเดือน");
+  XLSX.writeFile(wb, `สรุปเงินเดือน_${_slipExportPeriod||"งวดนี้"}.xlsx`);
+  toast("ดาวน์โหลด Excel สรุปงวดนี้แล้ว ✓");
+}
 function pySlip(){
   ensurePayrollHistory("payroll");
   const cy = payrollState.cycle;
@@ -4029,6 +4156,8 @@ function pySlip(){
     : employees.filter(e=>e.cycle===cy).map(e=>({e, net:calcPay(e).net}));
   const periodLabel = isHist ? histPeriodLabel(g) : CYCLES[cy].period;
   const payDate = isHist ? (g.paidAt?new Date(g.paidAt).toLocaleDateString("th-TH"):"ยังไม่จ่าย") : "—";
+  _slipExportRows = rows;
+  _slipExportPeriod = periodLabel;
   return `
   <div class="card">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -4045,7 +4174,7 @@ function pySlip(){
       <button class="btn primary sm" onclick="toast('เดโม่: ดาวน์โหลดสลิปทั้งงวดเป็น ZIP (${periodLabel})')">📦 ดาวน์โหลดทั้งงวด (ZIP)</button>
       <button class="btn ghost sm" onclick="toast('เดโม่: ส่งสลิปเข้า LINE ให้พนักงานทุกคน')">📱 ส่งเข้า LINE ทุกคน</button>
       <button class="btn ghost sm" onclick="toast('เดโม่: ส่งสลิปเข้าอีเมลทุกคน')">📧 ส่งอีเมลทุกคน</button>
-      <button class="btn ghost sm" onclick="toast('เดโม่: Export สรุปงวดนี้เป็น Excel')">📊 Export Excel</button>
+      <button class="btn ghost sm" onclick="exportSlipSummaryExcel()">📊 Export Excel</button>
     </div>
     <table style="margin-top:14px">
       <tr><th>พนักงาน</th><th>ประเภท</th><th class="num">สุทธิ</th><th>e-Signature</th><th style="text-align:center">การดำเนินการ</th></tr>
@@ -4357,7 +4486,7 @@ function openSlip(id, overrideNet, periodLabel, isHist){
             <div style="font-weight:700;font-size:14px;margin-bottom:14px;letter-spacing:.5px">&nbsp;</div>
             <div style="height:52px;display:flex;align-items:flex-end">${signatureBlock(48)}</div>
             <div style="border-top:2px solid #1a1a1a;margin-top:6px;padding-top:6px;font-size:12px;color:#333">HR / Finance Signature</div>
-            <div style="font-size:10.5px;color:#999;margin-top:2px">${E(loggedInEmployeeId).name} · ${roleOf(loggedInEmployeeId)} · ลงนามอิเล็กทรอนิกส์ ✓</div>
+            <div style="font-size:10.5px;color:#999;margin-top:2px">${settings.payrollSignerName||"ฝ่ายบุคคล"} · ${settings.payrollSignerTitle||"ฝ่ายบุคคล (HR)"} · ลงนามอิเล็กทรอนิกส์ ✓</div>
           </div>
         </div>
         <div style="background:linear-gradient(135deg,#1e2f4d,#3a5a8c);height:10px"></div>
@@ -4370,12 +4499,35 @@ function openSlip(id, overrideNet, periodLabel, isHist){
   document.getElementById("modalBg").classList.add("show");
 }
 
+let _bankExportRows = [];
+let _bankExportPeriod = "";
+function exportBankExcel(){
+  if(typeof XLSX==="undefined"){ toast("ไม่สามารถโหลดไลบรารี Excel ได้ ลองใหม่อีกครั้ง"); return; }
+  if(!_bankExportRows.length){ toast("ไม่มีข้อมูลสำหรับ Export"); return; }
+  const data = _bankExportRows.map(r=>({
+    "พนักงาน": r.name,
+    "รหัสพนักงาน": r.code,
+    "ช่องทาง": r.method,
+    "ปลายทาง": r.dest,
+    "ยอดโอน (บาท)": r.net,
+    "สถานะ": r.ok?"พร้อมโอน":"รอกรอกข้อมูล"
+  }));
+  const total = _bankExportRows.reduce((s,r)=>s+(r.net||0),0);
+  data.push({"พนักงาน":"", "รหัสพนักงาน":"", "ช่องทาง":"", "ปลายทาง":"ยอดรวม", "ยอดโอน (บาท)": total, "สถานะ":""});
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "สรุปยอดโอน");
+  XLSX.writeFile(wb, `สรุปโอนเงินเดือน_${_bankExportPeriod||"งวดนี้"}.xlsx`);
+  toast("ดาวน์โหลด Excel สรุปยอดแล้ว ✓");
+}
 function pyBank(){
   const cy = payrollState.cycle;
   const st = payrollState.status[cy];
   const list = employees.filter(e=>e.cycle===cy);
   const total = list.reduce((s,e)=>s+calcPay(e).net,0);
   const banks = ["KBANK (กสิกร)", "SCB (ไทยพาณิชย์)", "BBL (กรุงเทพ)", "KTB (กรุงไทย)"];
+  _bankExportRows = list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return {name:e.name, code:e.code, method:pi.methodLabel, dest:pi.ok?pi.dest:"ยังไม่มีข้อมูล", net:p.net, ok:pi.ok};});
+  _bankExportPeriod = CYCLES[cy].period;
   const payBar = st==="paid"
     ? `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#e4f7ee,#fff);border:1px solid #bfe8d2"><b style="font-size:14.5px">🔒 งวดนี้จ่ายและปิดงวดแล้ว (Locked)</b><div class="hint" style="margin-top:3px">สลิป PDF พร้อมแจกจ่าย — พนักงานเปิดดูของตัวเองได้ใน Self-Service ทันที</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn primary sm" onclick="setSub('payroll','slip')">🧾 ไปหน้าสลิปเงินเดือน →</button>${canViewAll()?`<button class="btn danger sm" onclick="unlockPayroll('${cy}')">🔓 เปิดงวดอีกครั้ง</button>`:''}</div></div>`
     : st==="approved"
@@ -4406,7 +4558,7 @@ function pyBank(){
 
     <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
       <button class="btn primary" onclick="toast('เดโม่: สร้างไฟล์ TXT พร้อมอัปโหลดขึ้น K-Cash Connect (${list.length} รายการ · ฿${fmt(total)})')">📥 ดาวน์โหลดไฟล์โอนธนาคาร</button>
-      <button class="btn ghost" onclick="toast('เดโม่: ส่งออก Excel สรุป')">📊 Excel สรุปยอด</button>
+      <button class="btn ghost" onclick="exportBankExcel()">📊 Excel สรุปยอด</button>
       <button class="btn ghost" onclick="toast('เดโม่: ส่งไฟล์ผ่าน API ธนาคารโดยตรง')">🔗 ส่งผ่าน API ธนาคาร</button>
     </div>
 
