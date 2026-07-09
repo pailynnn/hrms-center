@@ -1584,9 +1584,10 @@ function updateSubtabArrows(){
 /* ================== PAGE: DASHBOARD ================== */
 function pgDashboard(){
   if(!canViewAll()) return pgMyDashboard();
-  const present = attendanceToday.filter(a=>a.in!=="—").length;
-  const late = attendanceToday.filter(a=>a.status==="late").length;
-  const onLeave = attendanceToday.filter(a=>a.status==="leave").length;
+  const attKnown = attendanceToday.filter(a=>E(a.emp));
+  const present = attKnown.filter(a=>a.in!=="—").length;
+  const late = attKnown.filter(a=>a.status==="late").length;
+  const onLeave = attKnown.filter(a=>a.status==="leave").length;
   const nextPay = employees.filter(e=>e.cycle==="monthly").reduce((s,e)=>s+calcPay(e).net,0);
   const probEnd = employees.filter(e=>e.status==="probation").length;
   const stat = (bg,label,val,icon)=>`
@@ -1681,7 +1682,7 @@ function pgDashboard(){
     <div class="card">
       <h3>🕐 สถานะเข้างานวันนี้ <span class="pill gray" style="margin-left:auto">${settings.shiftIn}-${settings.shiftOut}</span></h3>
       <div style="margin-top:10px;max-height:230px;overflow-y:auto">
-        ${attendanceToday.map(a=>{const e=E(a.emp);return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f0f2f7">${empCell(e,true)}<div style="margin-left:auto">${
+        ${attKnown.map(a=>{const e=E(a.emp); if(!e) return ''; return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f0f2f7">${empCell(e,true)}<div style="margin-left:auto">${
           a.status==="normal"?'<span class="pill green">ปกติ</span>':
           a.status==="late"?`<span class="pill amber">สาย ${a.lateMin} น.</span>`:
           '<span class="pill blue">ลา</span>'}</div></div>`;}).join("")}
