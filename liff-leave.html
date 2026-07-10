@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ยื่นใบลา · HRMS CENTER</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&family=Padauk:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --amber:#f7941d; --amber-lo:#e07d0a; --amber-glow:rgba(247,148,29,.35);
+    --ink:#0d1017; --ink-2:#151a24; --panel:#1b2130; --panel-2:#212838;
+    --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.12);
+    --txt:#eef1f6; --muted:#8b94a7; --muted-2:#5f6982;
+    --ok:#34d399; --ok-bg:rgba(52,211,153,.12); --err:#f87171; --err-bg:rgba(248,113,113,.12); --info:#60a5fa; --info-bg:rgba(96,165,250,.12);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    min-height:100vh; display:flex; align-items:flex-start; justify-content:center;
+    background:
+      radial-gradient(120% 80% at 50% -10%, #23304a 0%, transparent 55%),
+      radial-gradient(90% 60% at 50% 110%, #1a1f2e 0%, transparent 60%),
+      var(--ink);
+    font-family:"Sora","Noto Sans Thai",-apple-system,BlinkMacSystemFont,sans-serif;
+    color:var(--txt); padding:22px;
+  }
+  body.lang-mm{ font-family:"Padauk","Noto Sans Thai","Sora",sans-serif; }
+  .card{
+    width:100%; max-width:420px; position:relative;
+    background:linear-gradient(180deg, var(--panel) 0%, var(--ink-2) 100%);
+    border:1px solid var(--line-2); border-radius:26px;
+    padding:26px 24px 24px;
+    box-shadow:0 1px 0 rgba(255,255,255,.05) inset, 0 30px 70px -20px rgba(0,0,0,.75);
+  }
+  .card::before{content:"";position:absolute;top:0;left:22px;right:22px;height:1px;
+    background:linear-gradient(90deg,transparent,var(--amber-glow),transparent)}
+  .langbar{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}
+  .langbar button{
+    all:unset; cursor:pointer; font-family:inherit;
+    padding:5px 13px; border-radius:999px; font-size:12px; font-weight:600; letter-spacing:.2px;
+    color:var(--muted); border:1px solid var(--line-2); transition:.18s;
+  }
+  .langbar button.on{ color:var(--ink); background:var(--amber); border-color:transparent; box-shadow:0 4px 14px -4px var(--amber-glow) }
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+  .logo{
+    width:44px;height:44px;border-radius:13px;flex:none;
+    background:linear-gradient(145deg,#ffb04a,#e07d0a);
+    display:grid;place-items:center;font-size:20px;font-weight:700;color:#1a1206;
+    box-shadow:0 6px 18px -6px var(--amber-glow), 0 1px 0 rgba(255,255,255,.4) inset;
+  }
+  h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:11.5px;margin-top:2px;line-height:1.5}
+  .profile{display:none;align-items:center;gap:10px;margin-bottom:16px;
+    padding:10px 12px;background:var(--panel-2);border:1px solid var(--line);border-radius:14px}
+  .avatar{width:36px;height:36px;border-radius:50%;object-fit:cover;background:#2a3346;flex:none}
+  .name{font-weight:600;font-size:13px}
+  .name-sub{font-size:10.5px;color:var(--muted)}
+
+  .section{margin-bottom:16px}
+  .label{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted-2);font-weight:600;margin-bottom:9px}
+  .chips{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .chip{
+    all:unset;cursor:pointer;box-sizing:border-box;text-align:center;
+    padding:12px 6px;border-radius:14px;border:1.5px solid var(--line-2);background:var(--ink);
+    transition:.15s;
+  }
+  .chip .ic{font-size:19px;display:block;margin-bottom:4px}
+  .chip .tt{font-size:12px;font-weight:600;color:var(--txt);display:block}
+  .chip .st{font-size:9.5px;color:var(--muted);display:block;margin-top:1px}
+  .chip.on{border-color:var(--amber);background:linear-gradient(160deg,rgba(247,148,29,.16),rgba(247,148,29,.04));
+    box-shadow:0 6px 18px -8px var(--amber-glow)}
+  .chip.on .tt{color:#ffc169}
+
+  .daterow{display:flex;gap:10px}
+  .field{flex:1}
+  .field input, .field textarea{
+    width:100%;background:var(--ink);border:1.5px solid var(--line-2);border-radius:13px;
+    padding:11px 12px;color:var(--txt);font-family:inherit;font-size:13.5px;
+  }
+  .field input:focus, .field textarea:focus{outline:none;border-color:var(--amber)}
+  .field textarea{resize:vertical;min-height:64px}
+  .field-label{font-size:11px;color:var(--muted);margin-bottom:6px;display:block}
+
+  .rulebox{
+    margin-top:4px;margin-bottom:18px;padding:12px 13px;border-radius:13px;
+    background:var(--info-bg);border:1px solid rgba(96,165,250,.25);font-size:11.5px;line-height:1.7;color:#bcd6fb
+  }
+  .status{font-size:13px;padding:12px 14px;border-radius:13px;margin-bottom:14px;line-height:1.55;display:none;border:1px solid transparent}
+  .status.show{display:block}
+  .status.ok{background:var(--ok-bg);color:var(--ok);border-color:rgba(52,211,153,.25)}
+  .status.err{background:var(--err-bg);color:var(--err);border-color:rgba(248,113,113,.25)}
+  .status.info{background:var(--info-bg);color:var(--info);border-color:rgba(96,165,250,.25)}
+
+  button.submit{
+    width:100%;border:none;border-radius:16px;padding:16px 10px;font-size:15px;font-weight:600;font-family:inherit;
+    cursor:pointer;transition:transform .12s ease, opacity .2s;
+    background:linear-gradient(145deg,#ffb04a,var(--amber-lo));color:#1a1206;
+    box-shadow:0 10px 26px -10px var(--amber-glow), 0 1px 0 rgba(255,255,255,.35) inset;
+  }
+  button.submit:active{transform:translateY(1px) scale(.99)}
+  button.submit:disabled{opacity:.4;cursor:not-allowed}
+  .footer{margin-top:14px;font-size:10.5px;color:var(--muted-2);line-height:1.5;text-align:center}
+  .spinner{width:16px;height:16px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;
+    display:inline-block;vertical-align:-3px;margin-right:6px;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion: reduce){ .spinner{animation:none} button.submit{transition:none} }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="langbar">
+      <button id="langTh" onclick="setLang('th')">ไทย</button>
+      <button id="langMm" onclick="setLang('mm')">မြန်မာ</button>
+    </div>
+
+    <div class="brand">
+      <div class="logo">H</div>
+      <div>
+        <h1 id="companyName">HRMS CENTER</h1>
+        <div class="sub" id="txtSubtitle">ยื่นใบลาผ่าน LINE · เลือกประเภทไม่ต้องพิมพ์</div>
+      </div>
+    </div>
+
+    <div id="profile" class="profile">
+      <img id="avatar" class="avatar" src="">
+      <div>
+        <div class="name" id="displayName"></div>
+        <div class="name-sub" id="txtProfileSub">พนักงาน</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label" id="txtTypeLabel">ประเภทการลา</div>
+      <div class="chips" id="typeChips">
+        <button class="chip" data-type="personal" onclick="selectType('personal')">
+          <span class="ic">🗂️</span><span class="tt" id="typePersonalTh">ลากิจ</span><span class="st" id="typePersonalMm">ကိုယ်ရေးခွင့်</span>
+        </button>
+        <button class="chip" data-type="sick" onclick="selectType('sick')">
+          <span class="ic">🤒</span><span class="tt" id="typeSickTh">ลาป่วย</span><span class="st" id="typeSickMm">နာမကျန်းခွင့်</span>
+        </button>
+        <button class="chip" data-type="unpaid" onclick="selectType('unpaid')">
+          <span class="ic">📄</span><span class="tt" id="typeUnpaidTh">ลาไม่รับค่าจ้าง</span><span class="st" id="typeUnpaidMm">လစာမဲ့ခွင့်</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="label" id="txtDateLabel">วันที่ลา</div>
+      <div class="daterow">
+        <div class="field"><span class="field-label" id="txtFrom">เริ่ม</span><input id="dateFrom" type="date"></div>
+        <div class="field"><span class="field-label" id="txtTo">ถึง (ถ้าลาหลายวัน)</span><input id="dateTo" type="date"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <span class="field-label" id="txtReasonLabel">เหตุผลเพิ่มเติม (ไม่บังคับ)</span>
+      <textarea id="reason" placeholder=""></textarea>
+    </div>
+
+    <div class="rulebox" id="rulebox"></div>
+
+    <div id="statusBox" class="status"></div>
+
+    <button class="submit" id="btnSubmit" onclick="doSubmit()">📤 <span id="txtSubmit">ยื่นใบลา</span></button>
+
+    <div class="footer" id="txtFooter">ใบลาจะส่งไปที่หัวหน้างานอนุมัติก่อน แล้วส่งต่อ HR</div>
+  </div>
+
+<script>
+const CONFIG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-leave-config";
+const SUBMIT_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-leave-submit";
+const SET_LANG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-set-lang";
+function syncLangToServer(x){
+  try{
+    if(typeof liff==="undefined" || !liff.isLoggedIn) return;
+    const idToken = liff.getIDToken && liff.getIDToken();
+    if(!idToken) return;
+    fetch(SET_LANG_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ idToken, lang:x }) }).catch(()=>{});
+  }catch(e){}
+}
+
+// ==== i18n ====
+const L = {
+  th: {
+    subtitle: "ยื่นใบลาผ่าน LINE · เลือกประเภทไม่ต้องพิมพ์",
+    profileSub: "พนักงาน",
+    typeLabel: "ประเภทการลา", dateLabel: "วันที่ลา", from: "เริ่ม", to: "ถึง (ถ้าลาหลายวัน)",
+    reasonLabel: "เหตุผลเพิ่มเติม (ไม่บังคับ)", reasonPh: "ระบุรายละเอียดเพิ่มเติม ถ้ามี...",
+    submit: "ยื่นใบลา", footer: "ใบลาจะส่งไปที่หัวหน้างานอนุมัติก่อน แล้วส่งต่อ HR",
+    rule: "📌 เลือกประเภทลาที่ตรงที่สุด HR จะเห็นเป็นภาษาไทยเสมอไม่ว่าคุณเลือกภาษาไหน · ยื่นก่อนเวลาตัดรอบของบริษัทเพื่อไม่ให้ติดธง \"แจ้งช้า\"",
+    needType: "กรุณาเลือกประเภทการลา", needDate: "กรุณาเลือกวันที่เริ่มลา", badRange: "วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม",
+    submitting: "กำลังส่งใบลา...", idErr: "ยืนยันตัวตนกับ LINE ไม่สำเร็จ — เปิดหน้านี้ผ่านแอป LINE อีกครั้ง",
+    srvErr: "เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr: "เกิดข้อผิดพลาด", noCfg: "ยังไม่ได้ตั้งค่า LIFF ID สำหรับยื่นลา",
+    loginLine: "กำลังเข้าสู่ระบบผ่าน LINE...",
+    okMsg: (n)=>`ยื่นใบลาสำเร็จ ✓ (${n} วัน) ส่งไปที่หัวหน้างานแล้ว`
+  },
+  mm: {
+    subtitle: "LINE မှ ခွင့်လျှောက်ရန် · ရွေးရုံသာ ရိုက်ရန်မလို",
+    profileSub: "ဝန်ထမ်း",
+    typeLabel: "ခွင့်အမျိုးအစား", dateLabel: "ခွင့်ရက်စွဲ", from: "စတင်", to: "အထိ (ရက်များစွာဆိုလျှင်)",
+    reasonLabel: "အသေးစိတ် (မဖြစ်မနေမလို)", reasonPh: "ရှိလျှင် အသေးစိတ်ဖော်ပြပါ...",
+    submit: "ခွင့်တင်ရန်", footer: "ခွင့်လျှောက်လွှာကို အကြီးအကဲ အတည်ပြုပြီးမှ HR ထံ ပို့ပါမည်",
+    rule: "📌 သင့်အခြေအနေနှင့်အနီးဆုံး အမျိုးအစားကို ရွေးပါ — ဘာသာစကားမည်သို့ရွေးထားစေ HR က ထိုင်းလိုသာမြင်ရမည် · နောက်ကျမှုအမှတ်အသားမရှိစေရန် ကုမ္ပဏီသတ်မှတ်အချိန်မတိုင်မီ တင်ပါ",
+    needType: "ခွင့်အမျိုးအစားကို ရွေးပါ", needDate: "ခွင့်စတင်မည့်ရက်ကို ရွေးပါ", badRange: "အဆုံးရက်သည် အစရက်ထက် စောနေသည်",
+    submitting: "ခွင့်လျှောက်လွှာ ပို့နေသည်...", idErr: "LINE ဖြင့် အတည်မပြုနိုင်ပါ — LINE app မှ ပြန်ဖွင့်ပါ",
+    srvErr: "ဆာဗာ တုံ့ပြန်မှု မှားယွင်းနေသည်", genErr: "အမှားဖြစ်ပွားခဲ့သည်", noCfg: "ခွင့်တင်ရန် LIFF ID သတ်မှတ်မရသေးပါ",
+    loginLine: "LINE မှတစ်ဆင့် ဝင်ရောက်နေသည်...",
+    okMsg: (n)=>`ခွင့်လျှောက်လွှာ ပို့ပြီးပါပြီ ✓ (${n} ရက်) အကြီးအကဲထံ ပို့ပြီးပါပြီ`
+  }
+};
+let lang = localStorage.getItem("hrmsLiffLang") || "th";
+let selectedType = null;
+function t(k){ return (L[lang] && L[lang][k]) || L.th[k]; }
+function setText(id,k){ const el=document.getElementById(id); if(el) el.textContent = t(k); }
+function setLang(x){
+  lang = x;
+  try { localStorage.setItem("hrmsLiffLang", x); } catch(e){}
+  document.body.classList.toggle("lang-mm", x==="mm");
+  setText("txtSubtitle","subtitle"); setText("txtProfileSub","profileSub");
+  setText("txtTypeLabel","typeLabel"); setText("txtDateLabel","dateLabel");
+  setText("txtFrom","from"); setText("txtTo","to");
+  setText("txtReasonLabel","reasonLabel");
+  document.getElementById("reason").placeholder = t("reasonPh");
+  setText("txtSubmit","submit"); setText("txtFooter","footer");
+  document.getElementById("rulebox").textContent = t("rule");
+  document.getElementById("langTh").classList.toggle("on", x==="th");
+  document.getElementById("langMm").classList.toggle("on", x==="mm");
+  // ป้ายชื่อบนชิป: ไทยเด่นเสมอ (HR เห็นไทย) + คำแปลเป็นตัวรอง สลับตำแหน่งเด่น/รองตามภาษาที่เลือก
+  const pairs = [["typePersonalTh","ลากิจ","typePersonalMm","ကိုယ်ရေးခွင့်"],["typeSickTh","ลาป่วย","typeSickMm","နာမကျန်းခွင့်"],["typeUnpaidTh","ลาไม่รับค่าจ้าง","typeUnpaidMm","လစာမဲ့ခွင့်"]];
+  pairs.forEach(([idTh,th,idMm,mm])=>{
+    document.getElementById(idTh).textContent = x==="mm" ? mm : th;
+    document.getElementById(idMm).textContent = x==="mm" ? th : mm;
+  });
+  syncLangToServer(x);
+}
+function selectType(code){
+  selectedType = code;
+  document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("on", c.dataset.type===code));
+}
+
+const statusBox = document.getElementById("statusBox");
+const btnSubmit = document.getElementById("btnSubmit");
+function showStatus(msg, type){ statusBox.textContent = msg; statusBox.className = "status show " + type; }
+function setBusy(busy, label){ btnSubmit.disabled = busy; if(busy) showStatus("⏳ " + (label||t("submitting")), "info"); }
+
+async function doSubmit(){
+  if(!selectedType){ showStatus("⚠️ " + t("needType"), "err"); return; }
+  const from = document.getElementById("dateFrom").value;
+  const to = document.getElementById("dateTo").value || from;
+  if(!from){ showStatus("⚠️ " + t("needDate"), "err"); return; }
+  if(to < from){ showStatus("⚠️ " + t("badRange"), "err"); return; }
+  const reason = document.getElementById("reason").value.trim();
+
+  setBusy(true);
+  try{
+    if(!liff.isLoggedIn()){ liff.login(); return; }
+    const idToken = liff.getIDToken();
+    if(!idToken) throw new Error(t("idErr"));
+
+    const res = await fetch(SUBMIT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken, leaveType: selectedType, dateFrom: from, dateTo: to, reason, lang })
+    });
+    const json = await res.json().catch(()=>({error:t("srvErr")}));
+    if(!res.ok || json.error) throw new Error(json.error || t("genErr"));
+
+    showStatus("✅ " + (json.message || t("okMsg")(json.days||1)), "ok");
+    btnSubmit.disabled = true;
+  }catch(err){
+    showStatus("⚠️ " + err.message, "err");
+    btnSubmit.disabled = false;
+  }
+}
+
+async function init(){
+  try{
+    const cfgRes = await fetch(CONFIG_URL);
+    const cfg = await cfgRes.json();
+    if(cfg.companyName) document.getElementById("companyName").textContent = cfg.companyName;
+    if(!cfg.liffId) throw new Error(t("noCfg"));
+
+    await liff.init({ liffId: cfg.liffId });
+    if(!liff.isLoggedIn()){
+      showStatus("⏳ " + t("loginLine"), "info");
+      liff.login();
+      return;
+    }
+    const profile = await liff.getProfile();
+    document.getElementById("profile").style.display = "flex";
+    document.getElementById("avatar").src = profile.pictureUrl || "";
+    document.getElementById("displayName").textContent = profile.displayName || "";
+  }catch(err){
+    showStatus("⚠️ " + err.message, "err");
+    btnSubmit.disabled = true;
+  }
+}
+document.getElementById("dateFrom").value = new Date().toISOString().slice(0,10);
+document.getElementById("dateTo").value = new Date().toISOString().slice(0,10);
+setLang(lang);
+init();
+</script>
+</body>
+</html>
