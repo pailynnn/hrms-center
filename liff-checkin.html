@@ -5,115 +5,219 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>ลงเวลา · HRMS CENTER</title>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&family=Padauk:wght@400;700&display=swap" rel="stylesheet">
 <style>
-  :root{ --accent:#f7941d; --navy:#161b26; }
+  :root{
+    --amber:#f7941d; --amber-lo:#e07d0a; --amber-glow:rgba(247,148,29,.35);
+    --ink:#0d1017; --ink-2:#151a24; --panel:#1b2130; --panel-2:#212838;
+    --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.12);
+    --txt:#eef1f6; --muted:#8b94a7; --muted-2:#5f6982;
+    --ok:#34d399; --ok-bg:rgba(52,211,153,.12); --err:#f87171; --err-bg:rgba(248,113,113,.12); --info:#60a5fa; --info-bg:rgba(96,165,250,.12);
+  }
   *{box-sizing:border-box}
+  html,body{margin:0}
   body{
-    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-    background:linear-gradient(135deg,#161b26,#1e2f4d 60%,#3a5a8c);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans Thai",sans-serif;
-    color:#fff; padding:20px;
+    min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:
+      radial-gradient(120% 80% at 50% -10%, #23304a 0%, transparent 55%),
+      radial-gradient(90% 60% at 50% 110%, #1a1f2e 0%, transparent 60%),
+      var(--ink);
+    font-family:"Sora","Noto Sans Thai",-apple-system,BlinkMacSystemFont,sans-serif;
+    color:var(--txt); padding:22px;
   }
+  body.lang-mm{ font-family:"Padauk","Noto Sans Thai","Sora",sans-serif; }
   .card{
-    width:100%; max-width:380px; background:#fff; color:#1a1a1a; border-radius:20px;
-    padding:28px 24px; box-shadow:0 20px 60px rgba(0,0,0,.35); text-align:center;
+    width:100%; max-width:400px; position:relative;
+    background:linear-gradient(180deg, var(--panel) 0%, var(--ink-2) 100%);
+    border:1px solid var(--line-2); border-radius:26px;
+    padding:26px 24px 22px;
+    box-shadow:0 1px 0 rgba(255,255,255,.05) inset, 0 30px 70px -20px rgba(0,0,0,.75);
   }
-  .logo{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#ff9f2e,#f27c0e);
-    display:grid;place-items:center;margin:0 auto 14px;font-size:26px;color:#fff;font-weight:700}
-  h1{font-size:18px;margin:0 0 4px}
-  .hint{color:#888;font-size:13px;margin-bottom:22px}
-  .status{
-    font-size:14px; padding:12px 14px; border-radius:12px; margin-bottom:18px; line-height:1.6; display:none;
+  /* top hairline glow */
+  .card::before{content:"";position:absolute;top:0;left:22px;right:22px;height:1px;
+    background:linear-gradient(90deg,transparent,var(--amber-glow),transparent)}
+  .langbar{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}
+  .langbar button{
+    all:unset; cursor:pointer; font-family:inherit;
+    padding:5px 13px; border-radius:999px; font-size:12px; font-weight:600; letter-spacing:.2px;
+    color:var(--muted); border:1px solid var(--line-2); transition:.18s;
   }
+  .langbar button.on{ color:var(--ink); background:var(--amber); border-color:transparent; box-shadow:0 4px 14px -4px var(--amber-glow) }
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+  .logo{
+    width:46px;height:46px;border-radius:13px;flex:none;
+    background:linear-gradient(145deg,#ffb04a,#e07d0a);
+    display:grid;place-items:center;font-size:22px;font-weight:700;color:#1a1206;
+    box-shadow:0 6px 18px -6px var(--amber-glow), 0 1px 0 rgba(255,255,255,.4) inset;
+  }
+  h1{font-size:16.5px;font-weight:600;margin:0;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:11.5px;margin-top:2px;line-height:1.5}
+  /* identity chip */
+  .profile{display:none;align-items:center;gap:10px;margin-bottom:16px;
+    padding:10px 12px;background:var(--panel-2);border:1px solid var(--line);border-radius:14px}
+  .avatar{width:38px;height:38px;border-radius:50%;object-fit:cover;background:#2a3346;flex:none}
+  .name{font-weight:600;font-size:13.5px}
+  .name-sub{font-size:11px;color:var(--muted)}
+  /* the clock face — signature element */
+  .clockface{
+    position:relative; text-align:center; padding:26px 16px 22px; margin-bottom:16px;
+    background:
+      radial-gradient(80% 120% at 50% 0%, rgba(247,148,29,.10), transparent 70%),
+      var(--ink);
+    border:1px solid var(--line); border-radius:20px; overflow:hidden;
+  }
+  .clock-label{font-size:10.5px;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted-2);font-weight:600}
+  .clock{font-family:"Sora",sans-serif;font-variant-numeric:tabular-nums;font-weight:700;
+    font-size:52px;line-height:1;letter-spacing:1px;margin:8px 0 2px;
+    background:linear-gradient(180deg,#fff,#c9d2e3);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .clock-date{font-size:12px;color:var(--muted)}
+  /* geo status line */
+  .geo{display:flex;align-items:center;gap:8px;justify-content:center;margin-top:14px;
+    font-size:12px;color:var(--muted);padding-top:12px;border-top:1px solid var(--line)}
+  .geo b{color:var(--ok)}
+  .status{font-size:13px;padding:12px 14px;border-radius:13px;margin-bottom:16px;line-height:1.55;display:none;border:1px solid transparent}
   .status.show{display:block}
-  .status.ok{background:#f0fdf4;color:#15803d;border:1px solid #86efac}
-  .status.err{background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5}
-  .status.info{background:#f0f7ff;color:#1d4ed8;border:1px solid #93c5fd}
-  .btnrow{display:flex; gap:10px}
-  button{
-    flex:1; border:none; border-radius:14px; padding:16px 10px; font-size:15px; font-weight:700;
-    cursor:pointer; transition:transform .1s, opacity .2s;
+  .status.ok{background:var(--ok-bg);color:var(--ok);border-color:rgba(52,211,153,.25)}
+  .status.err{background:var(--err-bg);color:var(--err);border-color:rgba(248,113,113,.25)}
+  .status.info{background:var(--info-bg);color:var(--info);border-color:rgba(96,165,250,.25)}
+  .btnrow{display:flex;gap:11px;margin-bottom:11px}
+  button.act{
+    flex:1;border:none;border-radius:16px;padding:17px 10px;font-size:15px;font-weight:600;font-family:inherit;
+    cursor:pointer;transition:transform .12s ease, box-shadow .2s, opacity .2s;display:flex;align-items:center;justify-content:center;gap:8px;
   }
-  button:active{transform:scale(.97)}
-  button:disabled{opacity:.5; cursor:not-allowed}
-  .btn-in{background:linear-gradient(135deg,#ff9f2e,#f27c0e); color:#fff}
-  .btn-out{background:#eef0f4; color:#333}
-  .profile{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:18px}
-  .avatar{width:40px;height:40px;border-radius:50%;object-fit:cover;background:#eee}
-  .name{font-weight:700;font-size:14.5px}
-  .footer{margin-top:20px;font-size:11.5px;color:#aaa}
-  .spinner{
-    width:18px;height:18px;border:2.5px solid #fff;border-top-color:transparent;border-radius:50%;
-    display:inline-block;vertical-align:middle;margin-right:6px;animation:spin .7s linear infinite;
+  button.act:active{transform:translateY(1px) scale(.985)}
+  button.act:disabled{opacity:.4;cursor:not-allowed}
+  .btn-in{background:linear-gradient(145deg,#ffb04a,var(--amber-lo));color:#1a1206;
+    box-shadow:0 10px 26px -10px var(--amber-glow), 0 1px 0 rgba(255,255,255,.35) inset}
+  .btn-out{background:var(--panel-2);color:var(--txt);border:1px solid var(--line-2)!important}
+  .btn-leave{
+    width:100%;border:1px dashed var(--line-2);background:transparent;color:var(--amber);
+    border-radius:14px;padding:13px;font-size:13.5px;font-weight:600;font-family:inherit;cursor:pointer;transition:.18s;
   }
+  .btn-leave:active{background:rgba(247,148,29,.06)}
+  .footer{margin-top:16px;font-size:11px;color:var(--muted-2);line-height:1.55;text-align:center}
+  .spinner{width:16px;height:16px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;
+    display:inline-block;vertical-align:-3px;margin-right:6px;animation:spin .7s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion: reduce){ .spinner{animation:none} button.act{transition:none} }
 </style>
 </head>
 <body>
   <div class="card">
-    <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:6px">
-      <button id="langTh" onclick="setLang('th')" style="flex:0;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #ddd;background:#fff;color:#333;cursor:pointer">ไทย</button>
-      <button id="langMm" onclick="setLang('mm')" style="flex:0;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #ddd;background:#fff;color:#333;cursor:pointer">မြန်မာ</button>
+    <div class="langbar">
+      <button id="langTh" onclick="setLang('th')">ไทย</button>
+      <button id="langMm" onclick="setLang('mm')">မြန်မာ</button>
     </div>
-    <div class="logo">H</div>
-    <h1 id="companyName">HRMS CENTER</h1>
-    <div class="hint" id="txtSubtitle">ลงเวลาเข้า-ออกงานผ่าน LINE · ใช้พิกัด GPS ยืนยันตำแหน่ง</div>
 
-    <div id="profile" class="profile" style="display:none">
+    <div class="brand">
+      <div class="logo">H</div>
+      <div>
+        <h1 id="companyName">HRMS CENTER</h1>
+        <div class="sub" id="txtSubtitle">ลงเวลาเข้า-ออกงานผ่าน LINE · ยืนยันตำแหน่งด้วย GPS</div>
+      </div>
+    </div>
+
+    <div id="profile" class="profile">
       <img id="avatar" class="avatar" src="">
-      <div class="name" id="displayName"></div>
+      <div>
+        <div class="name" id="displayName"></div>
+        <div class="name-sub" id="txtProfileSub">พนักงาน</div>
+      </div>
+    </div>
+
+    <div class="clockface">
+      <div class="clock-label" id="txtClockLabel">เวลาปัจจุบัน</div>
+      <div class="clock" id="liveClock">--:--</div>
+      <div class="clock-date" id="liveDate">—</div>
+      <div class="geo" id="geoLine"><span id="txtGeoIdle">📍 แตะปุ่มด้านล่างเพื่อเริ่มลงเวลา</span></div>
     </div>
 
     <div id="statusBox" class="status"></div>
 
     <div class="btnrow">
-      <button id="btnIn" class="btn-in" onclick="doAction('in')">📍 <span id="txtBtnIn">ลงเวลาเข้า</span></button>
-      <button id="btnOut" class="btn-out" onclick="doAction('out')">🚪 <span id="txtBtnOut">ลงเวลาออก</span></button>
+      <button id="btnIn" class="act btn-in" onclick="doAction('in')">📍 <span id="txtBtnIn">ลงเวลาเข้า</span></button>
+      <button id="btnOut" class="act btn-out" onclick="doAction('out')">🚪 <span id="txtBtnOut">ลงเวลาออก</span></button>
     </div>
 
-    <div class="footer" id="txtFooter">ต้องอนุญาตให้เข้าถึงตำแหน่งที่ตั้ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท</div>
+    <button class="btn-leave" id="btnLeave" onclick="openLeave()">📝 <span id="txtBtnLeave">ยื่นใบลา</span></button>
+
+    <div class="footer" id="txtFooter">อนุญาตให้เข้าถึงตำแหน่ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท</div>
   </div>
 
 <script>
 const CONFIG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-config";
 const CHECKIN_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-checkin";
 
-// ==== i18n (ไทย / พม่า) ====
+// ==== i18n (ไทย / พม่า) — ID-based ปลอดภัย ไม่มีปัญหาผสมภาษา ====
 const L = {
   th: {
-    subtitle: "ลงเวลาเข้า-ออกงานผ่าน LINE · ใช้พิกัด GPS ยืนยันตำแหน่ง",
-    btnIn: "ลงเวลาเข้า", btnOut: "ลงเวลาออก",
-    footer: "ต้องอนุญาตให้เข้าถึงตำแหน่งที่ตั้ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท",
-    busyIn: "📍 กำลังตรวจสอบตำแหน่งของคุณ...", busyOut: "กำลังบันทึกเวลาออกงาน...", busy: "กำลังดำเนินการ...",
-    idErr: "ไม่สามารถยืนยันตัวตนกับ LINE ได้ กรุณาเปิดหน้านี้ผ่านแอป LINE อีกครั้ง",
+    subtitle: "ลงเวลาเข้า-ออกงานผ่าน LINE · ยืนยันตำแหน่งด้วย GPS",
+    profileSub: "พนักงาน", clockLabel: "เวลาปัจจุบัน",
+    geoIdle: "📍 แตะปุ่มด้านล่างเพื่อเริ่มลงเวลา",
+    btnIn: "ลงเวลาเข้า", btnOut: "ลงเวลาออก", btnLeave: "ยื่นใบลา",
+    footer: "อนุญาตให้เข้าถึงตำแหน่ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท",
+    busyIn: "กำลังตรวจสอบตำแหน่งของคุณ...", busyOut: "กำลังบันทึกเวลาออกงาน...", busy: "กำลังดำเนินการ...",
+    idErr: "ยืนยันตัวตนกับ LINE ไม่สำเร็จ — เปิดหน้านี้ผ่านแอป LINE อีกครั้ง",
     srvErr: "เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr: "เกิดข้อผิดพลาด",
-    noCfg: "ระบบยังไม่ได้ตั้งค่า LIFF ID — ให้ผู้ดูแลระบบตั้งค่าในเมนู ตั้งค่าระบบ → ช่องทางแจ้งเตือน",
-    initErr: "เปิดหน้านี้ผ่านแอป LINE เท่านั้น"
+    noCfg: "ยังไม่ได้ตั้งค่า LIFF ID — แจ้งผู้ดูแลระบบตั้งค่าที่ ตั้งค่าระบบ → ช่องทางแจ้งเตือน",
+    loginLine: "กำลังเข้าสู่ระบบผ่าน LINE...",
+    leaveSoon: "ยื่นใบลาผ่าน LINE จะเปิดใช้เร็วๆ นี้ — ระหว่างนี้ยื่นผ่านแอป HRMS ได้"
   },
   mm: {
-    subtitle: "LINE မှတစ်ဆင့် အလုပ်ဝင်/ထွက် ချိန်မှတ်ခြင်း · GPS တည်နေရာဖြင့် အတည်ပြု",
-    btnIn: "ဝင်ချိန်မှတ်", btnOut: "ထွက်ချိန်မှတ်",
-    footer: "ကုမ္ပဏီနယ်မြေအတွင်း ရှိကြောင်းအတည်ပြုရန် တည်နေရာ (GPS) ခွင့်ပြုပါ",
-    busyIn: "📍 သင်၏တည်နေရာကို စစ်ဆေးနေသည်...", busyOut: "ထွက်ချိန်ကို မှတ်တမ်းတင်နေသည်...", busy: "လုပ်ဆောင်နေသည်...",
-    idErr: "LINE ဖြင့် အတည်မပြုနိုင်ပါ — LINE app မှတစ်ဆင့် ဤစာမျက်နှာကို ပြန်ဖွင့်ပါ",
-    srvErr: "ဆာဗာမှ တုံ့ပြန်မှု မှားယွင်းနေသည်", genErr: "အမှားဖြစ်ပွားခဲ့သည်",
-    noCfg: "LIFF ID မသတ်မှတ်ရသေးပါ — စီမံခန့်ခွဲသူ ဆက်တင်တွင် သတ်မှတ်ပေးပါ",
-    initErr: "LINE app မှတစ်ဆင့်သာ ဤစာမျက်နှာကို ဖွင့်ပါ"
+    subtitle: "LINE မှ အလုပ်ဝင်/ထွက် ချိန်မှတ်ခြင်း · GPS ဖြင့် တည်နေရာအတည်ပြု",
+    profileSub: "ဝန်ထမ်း", clockLabel: "လက်ရှိအချိန်",
+    geoIdle: "📍 ချိန်မှတ်ရန် အောက်ကခလုတ်ကို နှိပ်ပါ",
+    btnIn: "ဝင်ချိန်မှတ်", btnOut: "ထွက်ချိန်မှတ်", btnLeave: "ခွင့်တင်ရန်",
+    footer: "ကုမ္ပဏီနယ်မြေအတွင်းရှိကြောင်း အတည်ပြုရန် တည်နေရာ (GPS) ကို ခွင့်ပြုပါ",
+    busyIn: "သင်၏တည်နေရာကို စစ်ဆေးနေသည်...", busyOut: "ထွက်ချိန်ကို မှတ်တမ်းတင်နေသည်...", busy: "လုပ်ဆောင်နေသည်...",
+    idErr: "LINE ဖြင့် အတည်မပြုနိုင်ပါ — LINE app မှ ဤစာမျက်နှာကို ပြန်ဖွင့်ပါ",
+    srvErr: "ဆာဗာ တုံ့ပြန်မှု မှားယွင်းနေသည်", genErr: "အမှားဖြစ်ပွားခဲ့သည်",
+    noCfg: "LIFF ID မသတ်မှတ်ရသေးပါ — စီမံခန့်ခွဲသူကို အသိပေးပါ",
+    loginLine: "LINE မှတစ်ဆင့် ဝင်ရောက်နေသည်...",
+    leaveSoon: "LINE မှ ခွင့်တင်ခြင်းကို မကြာမီ ဖွင့်ပါမည် — ယခုအတွက် HRMS app မှ တင်ပါ"
   }
 };
 let lang = localStorage.getItem("hrmsLiffLang") || "th";
 function t(k){ return (L[lang] && L[lang][k]) || L.th[k]; }
+function setText(id, k){ const el=document.getElementById(id); if(el) el.textContent = t(k); }
 function setLang(x){
   lang = x;
   try { localStorage.setItem("hrmsLiffLang", x); } catch(e){}
-  document.getElementById("txtSubtitle").textContent = t("subtitle");
-  document.getElementById("txtBtnIn").textContent = t("btnIn");
-  document.getElementById("txtBtnOut").textContent = t("btnOut");
-  document.getElementById("txtFooter").textContent = t("footer");
-  document.getElementById("langTh").style.background = x==="th" ? "#f7941d" : "#fff";
-  document.getElementById("langTh").style.color = x==="th" ? "#fff" : "#333";
-  document.getElementById("langMm").style.background = x==="mm" ? "#f7941d" : "#fff";
-  document.getElementById("langMm").style.color = x==="mm" ? "#fff" : "#333";
+  document.body.classList.toggle("lang-mm", x==="mm");
+  setText("txtSubtitle","subtitle");
+  setText("txtProfileSub","profileSub");
+  setText("txtClockLabel","clockLabel");
+  setText("txtGeoIdle","geoIdle");
+  setText("txtBtnIn","btnIn");
+  setText("txtBtnOut","btnOut");
+  setText("txtBtnLeave","btnLeave");
+  setText("txtFooter","footer");
+  document.getElementById("langTh").classList.toggle("on", x==="th");
+  document.getElementById("langMm").classList.toggle("on", x==="mm");
+  updateClock();
+}
+// นาฬิกาสด + วันที่ (ไทย พ.ศ. / พม่า ค.ศ.)
+function updateClock(){
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2,"0");
+  const mm = String(now.getMinutes()).padStart(2,"0");
+  const cl = document.getElementById("liveClock"); if(cl) cl.textContent = hh+":"+mm;
+  const dEl = document.getElementById("liveDate");
+  if(dEl){
+    if(lang==="mm"){
+      dEl.textContent = now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"});
+    } else {
+      const days=["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"];
+      const months=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+      dEl.textContent = `${days[now.getDay()]} ${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()+543}`;
+    }
+  }
+}
+function openLeave(){
+  // TODO: เมื่อทำ LIFF ยื่นลาเสร็จ ให้เปลี่ยนเป็น liff.openWindow({url: LEAVE_LIFF_URL})
+  showStatus(t("leaveSoon"), "info");
 }
 
 const statusBox = document.getElementById("statusBox");
@@ -141,7 +245,7 @@ function getPosition(){
 }
 
 async function doAction(action){
-  setBusy(true, action==="in" ? t("busyIn") : t("busyOut"));
+  setBusy(true, "⏳ " + (action==="in" ? t("busyIn") : t("busyOut")));
   try{
     if(!liff.isLoggedIn()){ liff.login(); return; }
     const idToken = liff.getIDToken();
@@ -179,7 +283,7 @@ async function init(){
 
     await liff.init({ liffId: cfg.liffId });
     if(!liff.isLoggedIn()){
-      showStatus("กำลังเข้าสู่ระบบผ่าน LINE...", "info");
+      showStatus("⏳ " + t("loginLine"), "info");
       liff.login();
       return;
     }
@@ -193,6 +297,8 @@ async function init(){
   }
 }
 setLang(lang);
+updateClock();
+setInterval(updateClock, 1000 * 20); // อัปเดตนาฬิกาทุก 20 วิ
 init();
 </script>
 </body>

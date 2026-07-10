@@ -1535,16 +1535,17 @@ function switchLanguage(lang){
   currentLang = lang;
   try { localStorage.setItem("hrmsLang", lang); } catch(e){}
   const names = {th:"ไทย", en:"English", mm:"မြန်မာ"};
-  // re-render หน้าปัจจุบันเพื่อให้ข้อความกลับเป็นไทยก่อน แล้ว applyTranslation จะแปลใหม่ตามภาษาที่เลือก
-  if(currentPage) render(currentPage);
-  else applyTranslation();
-  const msg = {th:`เลือกภาษาไทยแล้ว`, en:`Language set to English`, mm:`ဘာသာစကားကို မြန်မာသို့ ပြောင်းပြီး`};
+  startI18nObserver();
+  applyTranslation();  // แปลจากต้นฉบับไทยที่ cache ไว้ — สลับกี่รอบก็ไม่เพี้ยน ไม่ต้องรีเฟรช
+  const msg = {th:`เปลี่ยนเป็นภาษาไทยแล้ว`, en:`Language set to English`, mm:`ဘာသာစကားကို မြန်မာသို့ ပြောင်းပြီး`};
   toast(`🌐 ${msg[lang]||names[lang]}`);
 }
 // ตั้งค่า dropdown ให้ตรงกับภาษาที่บันทึกไว้ตอนโหลดหน้า
 function initLangSwitch(){
   const sel = document.getElementById("langSwitch");
   if(sel) sel.value = currentLang;
+  startI18nObserver();
+  if(currentLang!=="th") applyTranslation();
 }
 function toggleSidebar(){
   document.querySelector(".sidebar").classList.toggle("mobile-open");
@@ -1659,7 +1660,46 @@ const I18N = {
   "ปิด": { en:"Close", mm:"ပိတ်" },
   "ยืนยัน": { en:"Confirm", mm:"အတည်ပြု" },
   "ดูทั้งหมด": { en:"View all", mm:"အားလုံးကြည့်ရန်" },
-  "ไม่มีข้อมูล": { en:"No data", mm:"ဒေတာမရှိပါ" }
+  "ไม่มีข้อมูล": { en:"No data", mm:"ဒေတာမရှိပါ" },
+  "เงินเดือนและค่าจ้าง": { en:"Payroll & Wages", mm:"လစာနှင့်လုပ်ခ" },
+  "สลิปเงินเดือนของฉัน": { en:"My payslip", mm:"ကျွန်ုပ်၏လစာစလစ်" },
+  "Employee Self-Service (ESS) — มุมมองของฉัน": { en:"Employee Self-Service (ESS) — My view", mm:"ဝန်ထမ်းကိုယ်တိုင်ဝန်ဆောင်မှု (ESS) — ကျွန်ုပ်၏မြင်ကွင်း" },
+  "พนักงานเข้าถึงข้อมูลตัวเองผ่านแอป ลดภาระ HR ในการตอบคำถามซ้ำๆ": { en:"Employees access their own data via the app, reducing repetitive HR queries", mm:"ဝန်ထမ်းများ app မှ မိမိဒေတာကိုကြည့်နိုင်ပြီး HR ၏ဝန်ကိုလျှော့ချသည်" },
+  "เงินเดือนงวดปัจจุบัน": { en:"Current period salary", mm:"လက်ရှိကာလလစာ" },
+  "ความสามารถ ESS": { en:"ESS features", mm:"ESS စွမ်းဆောင်ရည်" },
+  "ดาวน์โหลดสลิปเงินเดือน": { en:"Download payslip", mm:"လစာစလစ် ဒေါင်းလုဒ်" },
+  "ดูย้อนหลังได้ทุกงวด": { en:"View all past periods", mm:"ကာလအားလုံး ပြန်ကြည့်နိုင်" },
+  "ยื่นใบลาเองผ่านมือถือ": { en:"Submit leave via mobile", mm:"မိုဘိုင်းမှ ခွင့်တင်ရန်" },
+  "ระบบเช็คเวลายื่นให้อัตโนมัติ": { en:"System checks submission time automatically", mm:"တင်သွင်းချိန်ကို စနစ်က အလိုအလျောက်စစ်" },
+  "ตรวจสอบสิทธิ์วันลาคงเหลือ": { en:"Check remaining leave", mm:"ကျန်ခွင့်ကိုစစ်ရန်" },
+  "อัปเดตเรียลไทม์": { en:"Real-time updates", mm:"အချိန်နှင့်တပြေးညီ" },
+  "ดูประวัติการเข้างานย้อนหลัง": { en:"View attendance history", mm:"အလုပ်ဝင်မှတ်တမ်းကြည့်ရန်" },
+  "รู้ทันทีถ้าเช็คอินขาด": { en:"Instantly see missed check-ins", mm:"ဝင်ချိန်လွတ်ရင် ချက်ချင်းသိ" },
+  "รับแจ้งเตือนสำคัญ": { en:"Get important alerts", mm:"အရေးကြီးအကြောင်းကြားချက်ရယူ" },
+  "แก้ไขข้อมูลส่วนตัว": { en:"Edit personal info", mm:"ကိုယ်ရေးအချက်အလက်ပြင်ရန်" },
+  "เบอร์ อีเมล ที่อยู่": { en:"Phone, email, address", mm:"ဖုန်း၊ အီးမေးလ်၊ လိပ်စာ" },
+  "สลิปย้อนหลัง": { en:"Past payslips", mm:"အရင်လစာစလစ်များ" },
+  "ประวัติเวลา": { en:"Time history", mm:"အချိန်မှတ်တမ်း" },
+  "สิทธิ์วันลา": { en:"Leave entitlement", mm:"ခွင့်ရက်အခွင့်အရေး" },
+  "เปลี่ยนรหัสผ่าน": { en:"Change password", mm:"စကားဝှက်ပြောင်းရန်" },
+  "จ่ายเมื่อ": { en:"Paid on", mm:"ပေးချေသည့်ရက်" },
+  "สุทธิ": { en:"Net", mm:"သားတင်" },
+  "ลงเวลาแบบผูกพิกัด — ป้องกันเข้างานจากนอกออฟฟิศ": { en:"Geo-locked attendance — prevents outside clock-in", mm:"တည်နေရာချိတ်ချိန်မှတ် — ရုံးပြင်ပမှဝင်ခြင်းကာကွယ်" },
+  "วันนี้": { en:"Today", mm:"ယနေ့" },
+  "ขอ OT": { en:"Request OT", mm:"OT တောင်းရန်" },
+  "แก้เวลา": { en:"Fix time", mm:"အချိန်ပြင်ရန်" },
+  "สำนักงานใหญ่": { en:"Head office", mm:"ရုံးချုပ်" },
+  "เข้างาน": { en:"Clock in", mm:"အလုပ်ဝင်" },
+  "ออกงาน": { en:"Clock out", mm:"အလုပ်ထွက်" },
+  "พนักงานรายวัน: บังคับตรวจตำแหน่งทุกครั้ง": { en:"Daily worker: location check required each time", mm:"နေ့စားဝန်ထမ်း - အကြိမ်တိုင်းတည်နေရာစစ်ရန်လို" },
+  "จัดการทรัพย์สิน": { en:"Assets", mm:"ပိုင်ဆိုင်မှုများ" },
+  "ตั้งค่าระบบ": { en:"Settings", mm:"စနစ်ဆက်တင်" },
+  "เพิ่มพนักงาน": { en:"Add employee", mm:"ဝန်ထမ်းထည့်ရန်" },
+  "แจ้งข่าว": { en:"Announce", mm:"ကြေညာရန်" },
+  "ตั้งค่า": { en:"Settings", mm:"ဆက်တင်" },
+  "รออนุมัติการลา": { en:"Leave pending approval", mm:"ခွင့်အတည်ပြုစောင့်ဆိုင်း" },
+  "แจ้งเตือนสำคัญ": { en:"Important alerts", mm:"အရေးကြီးအကြောင်းကြားချက်" },
+  "พนักงานอยู่ระหว่างทดลองงาน": { en:"Employees on probation", mm:"အစမ်းခန့်ဝန်ထမ်းများ" }
 };
 function tr(thai){
   if(currentLang==="th") return thai;
@@ -1668,49 +1708,72 @@ function tr(thai){
   if(hit && hit[currentLang]) return thai.replace(key, hit[currentLang]);
   return thai;
 }
-// เดินอ่าน text node ทั้งหน้า แล้วแปล (ข้ามพวก script/style)
-// รองรับกรณีที่ข้อความไทยอยู่ปนกับ emoji/ข้อความอื่นใน node เดียวกัน เช่น "📋 สรุปการลาของฉัน"
-// โดยแทนที่ทุก key ที่พบเป็น substring (เรียงจากยาวไปสั้น กันการทับซ้อนบางส่วน)
+// ---- ตัวแปลแบบ cache ต้นฉบับ: กันปัญหา "ผสมภาษา / ต้องรีเฟรช" ----
+// หลักการ: เก็บข้อความไทยต้นฉบับของแต่ละ text node ไว้ใน WeakMap
+// ทุกครั้งที่แปล จะเริ่มจากไทยต้นฉบับเสมอ (ไม่แปลทับข้อความที่แปลไปแล้ว) → สลับภาษากี่รอบก็ไม่เพี้ยน
+const _origText = new WeakMap();
 const I18N_KEYS_SORTED = Object.keys(I18N).sort((a,b)=>b.length-a.length);
-// key สั้น (<=4 อักษร เช่น "ลา","งาน","เข้า","ออก") เสี่ยงไปตรงกับบางส่วนของคำที่ยาวกว่า (เช่น "พนักงาน")
-// จึงอนุญาตให้ key สั้นแทนที่ได้เฉพาะเมื่อ "ตรงทั้ง node" เท่านั้น ส่วน key ยาวจับแบบ substring ได้ปลอดภัย
+// key สั้น (<=4 อักษร เช่น "ลา","งาน") จับแบบ substring ไม่ได้ (จะไปทำลายคำยาวเช่น "พนักงาน") → ใช้เฉพาะ match ทั้ง node
 const I18N_SAFE_SUBSTR = I18N_KEYS_SORTED.filter(k=>k.length>=5);
+function _translateText(original){
+  const trimmed = original.trim();
+  const exact = I18N[trimmed];
+  if(exact && exact[currentLang]) return original.replace(trimmed, exact[currentLang]);
+  let val = original, changed = false;
+  for(const key of I18N_SAFE_SUBSTR){
+    const t = I18N[key][currentLang];
+    if(!t) continue;
+    if(val.indexOf(key) !== -1){ val = val.split(key).join(t); changed = true; }
+  }
+  return changed ? val : original;
+}
 function translateNode(root){
-  if(currentLang==="th") return;
+  if(typeof document==="undefined" || !document.createTreeWalker || typeof NodeFilter==="undefined") return;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node){
       const p = node.parentNode;
       if(!p) return NodeFilter.FILTER_REJECT;
       const tag = p.nodeName;
-      if(tag==="SCRIPT"||tag==="STYLE"||tag==="OPTION") return NodeFilter.FILTER_REJECT;
-      if(!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      if(tag==="SCRIPT"||tag==="STYLE"||tag==="OPTION"||tag==="TEXTAREA") return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }
   });
   const nodes = [];
   let n; while(n = walker.nextNode()) nodes.push(n);
   nodes.forEach(node=>{
-    let val = node.nodeValue;
-    const trimmed = val.trim();
-    // 1) ตรงเป๊ะทั้ง node (รองรับทุก key รวมทั้ง key สั้น) — เร็วและปลอดภัยสุด
-    const exact = I18N[trimmed];
-    if(exact && exact[currentLang]){ node.nodeValue = val.replace(trimmed, exact[currentLang]); return; }
-    // 2) substring — เฉพาะ key ยาว (>=5 อักษร) เพื่อไม่ให้ไปทำลายคำไทยที่ยาวกว่า
-    let changed = false;
-    for(const key of I18N_SAFE_SUBSTR){
-      const t = I18N[key][currentLang];
-      if(!t) continue;
-      if(val.indexOf(key) !== -1){ val = val.split(key).join(t); changed = true; }
+    // ต้นฉบับไทย: ถ้าเคยเก็บแล้วใช้อันเดิม (กันแปลทับ) ถ้ายังไม่เคยและ node มีข้อความ → เก็บตอนนี้
+    let orig = _origText.get(node);
+    if(orig === undefined){
+      orig = node.nodeValue;
+      if(!orig || !orig.trim()) return; // ข้าม node ว่าง
+      _origText.set(node, orig);
     }
-    if(changed) node.nodeValue = val;
+    const out = currentLang==="th" ? orig : _translateText(orig);
+    if(node.nodeValue !== out) node.nodeValue = out;
   });
 }
+// แปลทั้งหน้า (content + sidebar + header + modal ที่เปิดอยู่)
 function applyTranslation(){
-  const content = document.getElementById("content");
-  if(content) translateNode(content);
-  // แปล sidebar + header ด้วย (เผื่อพนักงานเห็นเมนูฝั่งข้าง)
+  ["content", "modalBox"].forEach(id=>{ const el=document.getElementById(id); if(el) translateNode(el); });
   const sidebar = document.querySelector(".sidebar");
   if(sidebar) translateNode(sidebar);
+  const head = document.querySelector(".topbar") || document.querySelector("header");
+  if(head) translateNode(head);
+}
+// สังเกตการเปลี่ยนแปลง DOM แบบอัตโนมัติ — เมื่อมีเนื้อหาใหม่ถูกใส่ (modal เปิด, นาฬิกาอัปเดต, รายการ ESS โหลด)
+// จะแปลให้ทันทีโดยไม่ต้องรีเฟรช แก้ปัญหา "ต้องคอยรีเฟรชตลอด"
+let _i18nObserver = null;
+let _i18nPending = false;
+function startI18nObserver(){
+  if(_i18nObserver || typeof MutationObserver==="undefined") return;
+  _i18nObserver = new MutationObserver(()=>{
+    if(currentLang==="th") return;      // ภาษาไทยไม่ต้องแปล
+    if(_i18nPending) return;
+    _i18nPending = true;
+    // รวบหลาย mutation ในเฟรมเดียว กันแปลถี่เกินไป
+    (window.requestAnimationFrame||setTimeout)(()=>{ _i18nPending=false; applyTranslation(); }, 0);
+  });
+  _i18nObserver.observe(document.body, { childList:true, subtree:true, characterData:true });
 }
 function setSub(key,val){subTab[key]=val;render(key);}
 function scrollSubtabs(btn, delta){
