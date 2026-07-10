@@ -149,6 +149,16 @@
 <script>
 const CONFIG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-config";
 const CHECKIN_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-checkin";
+const SET_LANG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-set-lang";
+// ส่งภาษาที่เลือกไปบันทึกไว้กับพนักงาน + ผูก Rich Menu ให้ตรงภาษาทันที — best effort เงียบๆ ถ้ายังไม่ได้ login
+function syncLangToServer(x){
+  try{
+    if(typeof liff==="undefined" || !liff.isLoggedIn) return;
+    const idToken = liff.getIDToken && liff.getIDToken();
+    if(!idToken) return;
+    fetch(SET_LANG_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ idToken, lang:x }) }).catch(()=>{});
+  }catch(e){}
+}
 
 // ==== i18n (ไทย / พม่า) — ID-based ปลอดภัย ไม่มีปัญหาผสมภาษา ====
 const L = {
@@ -197,6 +207,7 @@ function setLang(x){
   document.getElementById("langTh").classList.toggle("on", x==="th");
   document.getElementById("langMm").classList.toggle("on", x==="mm");
   updateClock();
+  syncLangToServer(x);
 }
 // นาฬิกาสด + วันที่ (ไทย พ.ศ. / พม่า ค.ศ.)
 function updateClock(){
@@ -216,8 +227,8 @@ function updateClock(){
   }
 }
 function openLeave(){
-  // TODO: เมื่อทำ LIFF ยื่นลาเสร็จ ให้เปลี่ยนเป็น liff.openWindow({url: LEAVE_LIFF_URL})
-  showStatus(t("leaveSoon"), "info");
+  // หน้ายื่นลาอยู่ไฟล์เดียวกัน (deploy คู่กับหน้านี้บน GitHub Pages) — เปิดในหน้าต่างเดียวกันได้เลย ไม่ต้องรู้ LIFF ID ของกันและกัน
+  window.location.href = "liff-leave.html";
 }
 
 const statusBox = document.getElementById("statusBox");
