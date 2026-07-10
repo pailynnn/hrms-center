@@ -1532,8 +1532,19 @@ document.addEventListener("click",function(e){
   if(panel && panel.style.display!=="none" && !panel.contains(e.target) && e.target.id!=="bellBtn"){ panel.style.display="none"; }
 });
 function switchLanguage(lang){
-  const names = {th:"ไทย", en:"English", mm:"မြန်မာ (Burmese)"};
-  toast(`🌐 เลือกภาษา "${names[lang]}" แล้ว — วางโครงไว้ก่อน ยังไม่เปิดใช้การแปลจริงในเดโม่นี้`);
+  currentLang = lang;
+  try { localStorage.setItem("hrmsLang", lang); } catch(e){}
+  const names = {th:"ไทย", en:"English", mm:"မြန်မာ"};
+  // re-render หน้าปัจจุบันเพื่อให้ข้อความกลับเป็นไทยก่อน แล้ว applyTranslation จะแปลใหม่ตามภาษาที่เลือก
+  if(currentPage) render(currentPage);
+  else applyTranslation();
+  const msg = {th:`เลือกภาษาไทยแล้ว`, en:`Language set to English`, mm:`ဘာသာစကားကို မြန်မာသို့ ပြောင်းပြီး`};
+  toast(`🌐 ${msg[lang]||names[lang]}`);
+}
+// ตั้งค่า dropdown ให้ตรงกับภาษาที่บันทึกไว้ตอนโหลดหน้า
+function initLangSwitch(){
+  const sel = document.getElementById("langSwitch");
+  if(sel) sel.value = currentLang;
 }
 function toggleSidebar(){
   document.querySelector(".sidebar").classList.toggle("mobile-open");
@@ -1546,7 +1557,7 @@ function go(page,btn){
   }
   document.querySelectorAll(".nav-item").forEach(b=>b.classList.remove("active"));
   if(btn) btn.classList.add("active");
-  document.getElementById("pageTitle").textContent = PAGES[page];
+  document.getElementById("pageTitle").textContent = tr(PAGES[page]);
   document.getElementById("pageSub").textContent = SUBS[page];
   render(page);
   document.querySelector(".sidebar").classList.remove("mobile-open");
@@ -1560,6 +1571,146 @@ function render(page){
   c.innerHTML = `<div class="page">${F[page]()}</div>`;
   window.scrollTo({top:0});
   updateSubtabArrows();
+  applyTranslation();
+}
+
+/* ================== i18n — ชั้นแปลภาษาแบบ runtime ==================
+   แปลเฉพาะส่วนที่พนักงานทั่วไปใช้จริง (พม่า/อังกฤษ) โดยไม่แตะโค้ด render เดิม
+   หลักการ: หลัง render เสร็จ เดินอ่าน text node ในหน้า แล้วสลับข้อความไทย → ภาษาที่เลือกจาก DICT
+   ถ้าไม่มีคำแปล จะปล่อยข้อความไทยไว้ตามเดิม (ปลอดภัย ไม่ทำให้ตกหล่นจนใช้ไม่ได้) */
+let currentLang = (typeof localStorage!=="undefined" && localStorage.getItem("hrmsLang")) || "th";
+// พจนานุกรม: key = ข้อความไทย (ตรงเป๊ะ), value = { mm, en }
+const I18N = {
+  // เมนู sidebar
+  "Dashboard": { en:"Dashboard", mm:"ဒက်ရှ်ဘုတ်" },
+  "จัดการพนักงาน": { en:"Employees", mm:"ဝန်ထမ်းများ" },
+  "โครงสร้างองค์กร": { en:"Org Chart", mm:"အဖွဲ့အစည်းဖွဲ့စည်းပုံ" },
+  "ลงเวลาทำงาน": { en:"Attendance", mm:"အလုပ်ချိန်မှတ်တမ်း" },
+  "จัดการการลา": { en:"Leave", mm:"ခွင့်စီမံခန့်ခွဲမှု" },
+  "เงินเดือน": { en:"Payroll", mm:"လစာ" },
+  "งานโครงการ": { en:"Projects", mm:"ပရောဂျက်လုပ်ငန်း" },
+  // dashboard พนักงาน
+  "สวัสดี": { en:"Hello", mm:"မင်္ဂလာပါ" },
+  "เข้างานวันนี้": { en:"Clock-in today", mm:"ယနေ့ဝင်ချိန်" },
+  "โควตาลาคงเหลือ (วัน)": { en:"Leave quota left (days)", mm:"ကျန်ခွင့် (ရက်)" },
+  "ใบลารอการอนุมัติ": { en:"Leave requests pending", mm:"ခွင့်တောင်းခံ စောင့်ဆိုင်းဆဲ" },
+  "ใบลาทีมรออนุมัติ": { en:"Team leave pending", mm:"အဖွဲ့ခွင့် စောင့်ဆိုင်းဆဲ" },
+  "Quick Actions": { en:"Quick Actions", mm:"အမြန်လုပ်ဆောင်ချက်" },
+  "ยื่นลา": { en:"Request leave", mm:"ခွင့်တောင်းရန်" },
+  "สลิปของฉัน": { en:"My payslip", mm:"ကျွန်ုပ်၏လစာစလစ်" },
+  "ลงเวลา": { en:"Clock in/out", mm:"ချိန်မှတ်ရန်" },
+  "อนุมัติลาทีม": { en:"Approve team leave", mm:"အဖွဲ့ခွင့် အတည်ပြုရန်" },
+  "ข่าวประกาศ": { en:"Announcements", mm:"ကြေညာချက်များ" },
+  "ประวัติการลาของฉัน": { en:"My leave history", mm:"ကျွန်ုပ်၏ခွင့်မှတ်တမ်း" },
+  "ยังไม่มีประวัติการลา": { en:"No leave history yet", mm:"ခွင့်မှတ်တမ်းမရှိသေးပါ" },
+  // สรุปการลาของฉัน (leaveMyDash)
+  "สรุปการลาของฉัน": { en:"My leave summary", mm:"ကျွန်ုပ်၏ခွင့်အနှစ်ချုပ်" },
+  "ทั้งหมด": { en:"Total", mm:"စုစုပေါင်း" },
+  "อนุมัติแล้ว": { en:"Approved", mm:"အတည်ပြုပြီး" },
+  "รออนุมัติ": { en:"Pending", mm:"စောင့်ဆိုင်းဆဲ" },
+  "ไม่อนุมัติ": { en:"Rejected", mm:"ငြင်းပယ်" },
+  "วันที่ลา": { en:"Leave date", mm:"ခွင့်ရက်" },
+  "ประเภท": { en:"Type", mm:"အမျိုးအစား" },
+  "เหตุผล": { en:"Reason", mm:"အကြောင်းရင်း" },
+  "ระดับหัวหน้า": { en:"Supervisor level", mm:"အကြီးအကဲအဆင့်" },
+  "ระดับ HR": { en:"HR level", mm:"HR အဆင့်" },
+  // ประเภทลา
+  "ลากิจ": { en:"Personal leave", mm:"ကိုယ်ရေးခွင့်" },
+  "ลาป่วย": { en:"Sick leave", mm:"နာမကျန်းခွင့်" },
+  "พักร้อน": { en:"Annual leave", mm:"နှစ်ပတ်လည်ခွင့်" },
+  "ลาไม่รับค่าจ้าง": { en:"Unpaid leave", mm:"လစာမဲ့ခွင့်" },
+  // ยื่นใบลา (leaveSubmit)
+  "ยื่นใบลา": { en:"Submit leave", mm:"ခွင့်တင်ရန်" },
+  "ประเภทการลา": { en:"Leave type", mm:"ခွင့်အမျိုးအစား" },
+  "ช่วงเวลา": { en:"Period", mm:"အချိန်ပိုင်း" },
+  "เต็มวัน": { en:"Full day", mm:"တစ်နေ့လုံး" },
+  "ครึ่งวันเช้า": { en:"Morning half", mm:"မနက်ပိုင်း" },
+  "ครึ่งวันบ่าย": { en:"Afternoon half", mm:"နေ့လယ်ပိုင်း" },
+  "แนบเอกสาร": { en:"Attach document", mm:"စာရွက်စာတမ်းတွဲရန်" },
+  "ส่งใบลา": { en:"Submit", mm:"တင်ပြရန်" },
+  "วันที่": { en:"Date", mm:"ရက်စွဲ" },
+  // ลงเวลา (pgAttendance - พนักงาน)
+  "สถานะของฉันวันนี้": { en:"My status today", mm:"ယနေ့ကျွန်ုပ်၏အခြေအနေ" },
+  "เข้า": { en:"In", mm:"ဝင်" },
+  "ออก": { en:"Out", mm:"ထွက်" },
+  "พิกัด": { en:"Location", mm:"တည်နေရာ" },
+  "สถานะ": { en:"Status", mm:"အခြေအနေ" },
+  "ปกติ": { en:"Normal", mm:"ပုံမှန်" },
+  "ลา": { en:"On leave", mm:"ခွင့်ယူ" },
+  "เช็คอิน": { en:"Check in", mm:"ဝင်ချိန်မှတ်" },
+  "เช็คเอาท์": { en:"Check out", mm:"ထွက်ချိန်မှတ်" },
+  // งานโครงการ (employee views)
+  "ทีมงาน": { en:"Team", mm:"အဖွဲ့" },
+  "มอบหมายงานรายวัน": { en:"Daily assignment", mm:"နေ့စဉ်တာဝန်" },
+  "แผนระยะยาว": { en:"Long-term plan", mm:"ရေရှည်အစီအစဉ်" },
+  "ทีมของฉัน": { en:"My team", mm:"ကျွန်ုပ်၏အဖွဲ့" },
+  "เพื่อนร่วมทีม": { en:"Teammates", mm:"အဖွဲ့သားများ" },
+  "หัวหน้าทีม": { en:"Team leader", mm:"အဖွဲ့ခေါင်းဆောင်" },
+  "งานของฉันวันนี้": { en:"My work today", mm:"ယနေ့ကျွန်ုပ်၏အလုပ်" },
+  "โครงการ": { en:"Project", mm:"ပရောဂျက်" },
+  "โซน/พื้นที่": { en:"Zone/Area", mm:"ဇုန်/နေရာ" },
+  "เวลา": { en:"Time", mm:"အချိန်" },
+  "งาน": { en:"Task", mm:"အလုပ်" },
+  "คุณถูกย้ายไปช่วยงานชั่วคราว": { en:"You are temporarily transferred", mm:"သင်ယာယီပြောင်းရွှေ့ခံရသည်" },
+  "ยืมตัว": { en:"Borrowed", mm:"ငှားရမ်း" },
+  // สถานะ/ปุ่มทั่วไป
+  "บันทึก": { en:"Save", mm:"သိမ်းရန်" },
+  "ยกเลิก": { en:"Cancel", mm:"ပယ်ဖျက်" },
+  "ปิด": { en:"Close", mm:"ပိတ်" },
+  "ยืนยัน": { en:"Confirm", mm:"အတည်ပြု" },
+  "ดูทั้งหมด": { en:"View all", mm:"အားလုံးကြည့်ရန်" },
+  "ไม่มีข้อมูล": { en:"No data", mm:"ဒေတာမရှိပါ" }
+};
+function tr(thai){
+  if(currentLang==="th") return thai;
+  const key = thai.trim();
+  const hit = I18N[key];
+  if(hit && hit[currentLang]) return thai.replace(key, hit[currentLang]);
+  return thai;
+}
+// เดินอ่าน text node ทั้งหน้า แล้วแปล (ข้ามพวก script/style)
+// รองรับกรณีที่ข้อความไทยอยู่ปนกับ emoji/ข้อความอื่นใน node เดียวกัน เช่น "📋 สรุปการลาของฉัน"
+// โดยแทนที่ทุก key ที่พบเป็น substring (เรียงจากยาวไปสั้น กันการทับซ้อนบางส่วน)
+const I18N_KEYS_SORTED = Object.keys(I18N).sort((a,b)=>b.length-a.length);
+// key สั้น (<=4 อักษร เช่น "ลา","งาน","เข้า","ออก") เสี่ยงไปตรงกับบางส่วนของคำที่ยาวกว่า (เช่น "พนักงาน")
+// จึงอนุญาตให้ key สั้นแทนที่ได้เฉพาะเมื่อ "ตรงทั้ง node" เท่านั้น ส่วน key ยาวจับแบบ substring ได้ปลอดภัย
+const I18N_SAFE_SUBSTR = I18N_KEYS_SORTED.filter(k=>k.length>=5);
+function translateNode(root){
+  if(currentLang==="th") return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node){
+      const p = node.parentNode;
+      if(!p) return NodeFilter.FILTER_REJECT;
+      const tag = p.nodeName;
+      if(tag==="SCRIPT"||tag==="STYLE"||tag==="OPTION") return NodeFilter.FILTER_REJECT;
+      if(!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  const nodes = [];
+  let n; while(n = walker.nextNode()) nodes.push(n);
+  nodes.forEach(node=>{
+    let val = node.nodeValue;
+    const trimmed = val.trim();
+    // 1) ตรงเป๊ะทั้ง node (รองรับทุก key รวมทั้ง key สั้น) — เร็วและปลอดภัยสุด
+    const exact = I18N[trimmed];
+    if(exact && exact[currentLang]){ node.nodeValue = val.replace(trimmed, exact[currentLang]); return; }
+    // 2) substring — เฉพาะ key ยาว (>=5 อักษร) เพื่อไม่ให้ไปทำลายคำไทยที่ยาวกว่า
+    let changed = false;
+    for(const key of I18N_SAFE_SUBSTR){
+      const t = I18N[key][currentLang];
+      if(!t) continue;
+      if(val.indexOf(key) !== -1){ val = val.split(key).join(t); changed = true; }
+    }
+    if(changed) node.nodeValue = val;
+  });
+}
+function applyTranslation(){
+  const content = document.getElementById("content");
+  if(content) translateNode(content);
+  // แปล sidebar + header ด้วย (เผื่อพนักงานเห็นเมนูฝั่งข้าง)
+  const sidebar = document.querySelector(".sidebar");
+  if(sidebar) translateNode(sidebar);
 }
 function setSub(key,val){subTab[key]=val;render(key);}
 function scrollSubtabs(btn, delta){
@@ -4337,6 +4488,7 @@ function showApp(){
   document.getElementById("loginScreen").style.display="none";
   document.getElementById("appRoot").style.display="flex";
   applyRoleUI();
+  initLangSwitch();
   const landing = (!canViewAll() && !isTeamLead()) ? "attendance" : "dashboard";
   go(landing, document.querySelector(`[data-page=${landing}]`));
 }

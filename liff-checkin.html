@@ -51,9 +51,13 @@
 </head>
 <body>
   <div class="card">
+    <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:6px">
+      <button id="langTh" onclick="setLang('th')" style="flex:0;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #ddd;background:#fff;color:#333;cursor:pointer">ไทย</button>
+      <button id="langMm" onclick="setLang('mm')" style="flex:0;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #ddd;background:#fff;color:#333;cursor:pointer">မြန်မာ</button>
+    </div>
     <div class="logo">H</div>
     <h1 id="companyName">HRMS CENTER</h1>
-    <div class="hint">ลงเวลาเข้า-ออกงานผ่าน LINE · ใช้พิกัด GPS ยืนยันตำแหน่ง</div>
+    <div class="hint" id="txtSubtitle">ลงเวลาเข้า-ออกงานผ่าน LINE · ใช้พิกัด GPS ยืนยันตำแหน่ง</div>
 
     <div id="profile" class="profile" style="display:none">
       <img id="avatar" class="avatar" src="">
@@ -63,16 +67,54 @@
     <div id="statusBox" class="status"></div>
 
     <div class="btnrow">
-      <button id="btnIn" class="btn-in" onclick="doAction('in')">📍 ลงเวลาเข้า</button>
-      <button id="btnOut" class="btn-out" onclick="doAction('out')">🚪 ลงเวลาออก</button>
+      <button id="btnIn" class="btn-in" onclick="doAction('in')">📍 <span id="txtBtnIn">ลงเวลาเข้า</span></button>
+      <button id="btnOut" class="btn-out" onclick="doAction('out')">🚪 <span id="txtBtnOut">ลงเวลาออก</span></button>
     </div>
 
-    <div class="footer">ต้องอนุญาตให้เข้าถึงตำแหน่งที่ตั้ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท</div>
+    <div class="footer" id="txtFooter">ต้องอนุญาตให้เข้าถึงตำแหน่งที่ตั้ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท</div>
   </div>
 
 <script>
 const CONFIG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-config";
 const CHECKIN_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-checkin";
+
+// ==== i18n (ไทย / พม่า) ====
+const L = {
+  th: {
+    subtitle: "ลงเวลาเข้า-ออกงานผ่าน LINE · ใช้พิกัด GPS ยืนยันตำแหน่ง",
+    btnIn: "ลงเวลาเข้า", btnOut: "ลงเวลาออก",
+    footer: "ต้องอนุญาตให้เข้าถึงตำแหน่งที่ตั้ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท",
+    busyIn: "📍 กำลังตรวจสอบตำแหน่งของคุณ...", busyOut: "กำลังบันทึกเวลาออกงาน...", busy: "กำลังดำเนินการ...",
+    idErr: "ไม่สามารถยืนยันตัวตนกับ LINE ได้ กรุณาเปิดหน้านี้ผ่านแอป LINE อีกครั้ง",
+    srvErr: "เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr: "เกิดข้อผิดพลาด",
+    noCfg: "ระบบยังไม่ได้ตั้งค่า LIFF ID — ให้ผู้ดูแลระบบตั้งค่าในเมนู ตั้งค่าระบบ → ช่องทางแจ้งเตือน",
+    initErr: "เปิดหน้านี้ผ่านแอป LINE เท่านั้น"
+  },
+  mm: {
+    subtitle: "LINE မှတစ်ဆင့် အလုပ်ဝင်/ထွက် ချိန်မှတ်ခြင်း · GPS တည်နေရာဖြင့် အတည်ပြု",
+    btnIn: "ဝင်ချိန်မှတ်", btnOut: "ထွက်ချိန်မှတ်",
+    footer: "ကုမ္ပဏီနယ်မြေအတွင်း ရှိကြောင်းအတည်ပြုရန် တည်နေရာ (GPS) ခွင့်ပြုပါ",
+    busyIn: "📍 သင်၏တည်နေရာကို စစ်ဆေးနေသည်...", busyOut: "ထွက်ချိန်ကို မှတ်တမ်းတင်နေသည်...", busy: "လုပ်ဆောင်နေသည်...",
+    idErr: "LINE ဖြင့် အတည်မပြုနိုင်ပါ — LINE app မှတစ်ဆင့် ဤစာမျက်နှာကို ပြန်ဖွင့်ပါ",
+    srvErr: "ဆာဗာမှ တုံ့ပြန်မှု မှားယွင်းနေသည်", genErr: "အမှားဖြစ်ပွားခဲ့သည်",
+    noCfg: "LIFF ID မသတ်မှတ်ရသေးပါ — စီမံခန့်ခွဲသူ ဆက်တင်တွင် သတ်မှတ်ပေးပါ",
+    initErr: "LINE app မှတစ်ဆင့်သာ ဤစာမျက်နှာကို ဖွင့်ပါ"
+  }
+};
+let lang = localStorage.getItem("hrmsLiffLang") || "th";
+function t(k){ return (L[lang] && L[lang][k]) || L.th[k]; }
+function setLang(x){
+  lang = x;
+  try { localStorage.setItem("hrmsLiffLang", x); } catch(e){}
+  document.getElementById("txtSubtitle").textContent = t("subtitle");
+  document.getElementById("txtBtnIn").textContent = t("btnIn");
+  document.getElementById("txtBtnOut").textContent = t("btnOut");
+  document.getElementById("txtFooter").textContent = t("footer");
+  document.getElementById("langTh").style.background = x==="th" ? "#f7941d" : "#fff";
+  document.getElementById("langTh").style.color = x==="th" ? "#fff" : "#333";
+  document.getElementById("langMm").style.background = x==="mm" ? "#f7941d" : "#fff";
+  document.getElementById("langMm").style.color = x==="mm" ? "#fff" : "#333";
+}
 
 const statusBox = document.getElementById("statusBox");
 const btnIn = document.getElementById("btnIn");
@@ -84,7 +126,7 @@ function showStatus(msg, type){
 }
 function setBusy(busy, label){
   btnIn.disabled = busy; btnOut.disabled = busy;
-  if(busy) showStatus((label||"กำลังดำเนินการ...") , "info");
+  if(busy) showStatus((label||t("busy")) , "info");
 }
 
 function getPosition(){
@@ -99,11 +141,11 @@ function getPosition(){
 }
 
 async function doAction(action){
-  setBusy(true, action==="in" ? "📍 กำลังตรวจสอบตำแหน่งของคุณ..." : "กำลังบันทึกเวลาออกงาน...");
+  setBusy(true, action==="in" ? t("busyIn") : t("busyOut"));
   try{
     if(!liff.isLoggedIn()){ liff.login(); return; }
     const idToken = liff.getIDToken();
-    if(!idToken) throw new Error("ไม่สามารถยืนยันตัวตนกับ LINE ได้ กรุณาเปิดหน้านี้ผ่านแอป LINE อีกครั้ง");
+    if(!idToken) throw new Error(t("idErr"));
 
     let coords = null;
     if(action === "in"){
@@ -115,8 +157,8 @@ async function doAction(action){
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ idToken, lat: coords?.lat, lng: coords?.lng, action })
     });
-    const json = await res.json().catch(()=>({error:"เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง"}));
-    if(!res.ok || json.error) throw new Error(json.error || "เกิดข้อผิดพลาด");
+    const json = await res.json().catch(()=>({error:t("srvErr")}));
+    if(!res.ok || json.error) throw new Error(json.error || t("genErr"));
 
     showStatus("✅ " + json.message, "ok");
     if(action === "in") btnIn.disabled = true; else { btnIn.disabled = true; btnOut.disabled = true; }
@@ -133,7 +175,7 @@ async function init(){
     const cfgRes = await fetch(CONFIG_URL);
     const cfg = await cfgRes.json();
     if(cfg.companyName) document.getElementById("companyName").textContent = cfg.companyName;
-    if(!cfg.liffId) throw new Error("ระบบยังไม่ได้ตั้งค่า LIFF ID — ให้ผู้ดูแลระบบตั้งค่าในเมนู ตั้งค่าระบบ → ช่องทางแจ้งเตือน");
+    if(!cfg.liffId) throw new Error(t("noCfg"));
 
     await liff.init({ liffId: cfg.liffId });
     if(!liff.isLoggedIn()){
@@ -150,6 +192,7 @@ async function init(){
     btnIn.disabled = true; btnOut.disabled = true;
   }
 }
+setLang(lang);
 init();
 </script>
 </body>
