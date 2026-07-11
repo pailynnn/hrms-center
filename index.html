@@ -577,6 +577,12 @@ function mapAttendanceRow(row){
   };
 }
 function todayISODate(){ return new Date().toISOString().slice(0,10); }
+// วันที่วันนี้พร้อมชื่อวัน แบบไทย เช่น "ศุกร์ 11 ก.ค. 2569" — ใช้เวลาเครื่องผู้ใช้จริง (อัปเดตทุกวันเอง)
+function todayThaiFull(){
+  const now = new Date();
+  const dow = ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"][now.getDay()];
+  return `${dow} ${now.getDate()} ${THAI_MONTHS[now.getMonth()]} ${now.getFullYear()+543}`;
+}
 async function loadAttendanceToday(){
   const { data, error } = await sb.from("attendances").select("*").eq("work_date", todayISODate());
   if(error){ console.error("loadAttendanceToday error", error); return; }
@@ -3029,7 +3035,7 @@ function attToday(){
   return `
   <div class="grid" style="grid-template-columns:2fr 1fr">
     <div class="card">
-      <h3>🕐 บันทึกเวลาวันนี้ — ศุกร์ 4 ก.ค. 2569</h3>
+      <h3>🕐 บันทึกเวลาวันนี้ — ${todayThaiFull()}</h3>
       <div class="hint">กะทำงาน ${settings.shiftIn} – ${settings.shiftOut} · หยุดทุกวัน${settings.weeklyHoliday} · พนักงานรายวันเช็คอิน/เช็คเอาท์ตามพิกัดเสมอ ส่วนรายเดือนบางคนได้รับสิทธิ์ WFH (ไม่บังคับพิกัด)${!canViewAll()?' · แสดงเฉพาะข้อมูลที่คุณมีสิทธิ์เห็น':''}</div>
       <table style="margin-top:10px">
         <tr><th>พนักงาน</th><th>เข้า</th><th>ออก</th><th>พิกัด</th><th>สถานะ</th></tr>
