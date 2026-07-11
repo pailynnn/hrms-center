@@ -625,8 +625,8 @@ async function loadSettings(){
   settings.weeklyCutoffDow = data.weekly_cutoff_dow!=null?Number(data.weekly_cutoff_dow):5;
   settings.weeklyPayDow = data.weekly_pay_dow!=null?Number(data.weekly_pay_dow):1;
   settings.biweeklyEnabled = !!data.biweekly_enabled;
-  settings.biweeklyAnchorDate = data.biweekly_anchor_date || "2026-01-02";
-  settings.biweeklyPayOffsetDays = data.biweekly_pay_offset_days!=null?Number(data.biweekly_pay_offset_days):3;
+  settings.biweeklyAnchorDate = data.biweekly_anchor_date || "2026-07-13";
+  settings.biweeklyPayOffsetDays = data.biweekly_pay_offset_days!=null?Number(data.biweekly_pay_offset_days):0;
   if(settings.biweeklyEnabled){ payrollState.status.biweekly = payrollState.status.biweekly || "draft"; }
   // ลายเซ็น HR กลาง — ใช้บนสลิปทุกใบทุกจุด (ไม่ผูกกับผู้ที่ล็อกอิน)
   settings.payrollSignerSignature = data.payroll_signer_signature || null;
@@ -856,6 +856,31 @@ async function loadBonuses(){
 /* ============ PAYROLL: งวดจ่ายจริง + รวมสถิติทั้งงวด ============ */
 const THAI_DAYS = {"อาทิตย์":0,"จันทร์":1,"อังคาร":2,"พุธ":3,"พฤหัสบดี":4,"ศุกร์":5,"เสาร์":6};
 function isoDate(d){const p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;}
+// แสดงตัวอย่างรอบ Biweekly 3 รอบถัดไปแบบสด ๆ ให้ HR เห็นชัดว่าตั้งค่าแล้วรอบจะออกมายังไง (กันสับสน)
+function previewBiweekly(){
+  const box = document.getElementById("biweekPreview"); if(!box) return;
+  const anchorVal = document.getElementById("cyBiAnchor")?.value || settings.biweeklyAnchorDate || "2026-07-13";
+  const off = Number(document.getElementById("cyBiOffset")?.value)||0;
+  const anchor = new Date(anchorVal+"T00:00:00");
+  if(isNaN(anchor)){ box.innerHTML = "⚠️ วันเริ่มนับรอบไม่ถูกต้อง"; return; }
+  const dowName = DOW_TH[anchor.getDay()];
+  const notMon = anchor.getDay()!==1;
+  // หา cycle ปัจจุบันจากวันนี้
+  const today = new Date();
+  const diffDays = Math.floor((today - anchor)/86400000);
+  const curIdx = Math.max(0, Math.floor(diffDays/14));
+  let html = notMon ? `<div style="color:#c0392b;font-weight:600">⚠️ วันเริ่มนับรอบที่เลือกเป็น "วัน${dowName}" ไม่ใช่วันจันทร์ — รอบอาจไม่เริ่มวันจันทร์ตามต้องการ</div>` : `<b>ตัวอย่างรอบที่จะได้ (เริ่มวัน${dowName} ✓):</b>`;
+  for(let i=0;i<3;i++){
+    const idx = curIdx+i;
+    const s = new Date(anchor); s.setDate(s.getDate()+idx*14);
+    const e = new Date(s); e.setDate(e.getDate()+12); // เสาร์
+    const pay = new Date(e); pay.setDate(pay.getDate()+off);
+    const days = Math.round((e-s)/86400000)+1;
+    html += `<div>${i===0?'▶ ':'• '}${isoToThaiDisplay(isoDate(s))} – ${isoToThaiDisplay(isoDate(e))} <span style="color:#8a92a6">(${days} วัน)</span> → จ่าย ${isoToThaiDisplay(isoDate(pay))}</div>`;
+  }
+  box.innerHTML = html;
+  box.style.display = "block";
+}
 // คำนวณช่วงวันที่ของ "งวดปัจจุบัน" ตามประเภทรอบจ่าย (อิงกติกาใน payroll_cycle_settings)
 function currentPeriod(cy){
   const today = new Date();
@@ -881,12 +906,14 @@ function currentPeriod(cy){
     return {start: isoDate(start), end: isoDate(end)};
   }
   if(cy==="biweekly"){
-    // นับรอบ 14 วันเรียงจากวันตั้งต้น (anchor) โดยไม่ให้ทับซ้อนกัน
-    const anchor = new Date((settings.biweeklyAnchorDate||"2026-01-02")+"T00:00:00");
+    // รอบ 2 อาทิตย์แบบ จันทร์→เสาร์ (ทำงาน 6 วัน/สัปดาห์ หยุดอาทิตย์)
+    // แต่ละรอบกินจริง 13 วัน (จ.–ส. สองสัปดาห์) แล้วข้ามอาทิตย์ 1 วัน ก่อนเริ่มรอบใหม่วันจันทร์ถัดไป
+    // step ยังเป็น 14 วัน (จันทร์→จันทร์) เพื่อให้รอบเริ่มวันจันทร์เสมอ · anchor ต้องเป็น "วันจันทร์" ที่เริ่มรอบ
+    const anchor = new Date((settings.biweeklyAnchorDate||"2026-07-13")+"T00:00:00");
     const diffDays = Math.floor((today - anchor) / 86400000);
     const cycleIdx = Math.floor(diffDays / 14);
-    const start = new Date(anchor); start.setDate(start.getDate()+cycleIdx*14);
-    const end = new Date(start); end.setDate(end.getDate()+13);
+    const start = new Date(anchor); start.setDate(start.getDate()+cycleIdx*14); // วันจันทร์
+    const end = new Date(start); end.setDate(end.getDate()+12);                  // วันเสาร์ (จ.+12 = ส.)
     return {start: isoDate(start), end: isoDate(end)};
   }
   return {start: todayISODate(), end: todayISODate()}; // daily
@@ -908,7 +935,9 @@ function refreshCycleLabels(){
   CYCLES.biweekly.disabled = !settings.biweeklyEnabled;
   if(settings.biweeklyEnabled){
     CYCLES.biweekly.period = periodLabel(currentPeriod("biweekly"));
-    CYCLES.biweekly.pay = `จ่าย: ${settings.biweeklyPayOffsetDays||3} วันหลังตัดรอบ`;
+    const off = settings.biweeklyPayOffsetDays!=null?settings.biweeklyPayOffsetDays:0;
+    CYCLES.biweekly.cut = "ตัดรอบ: ทุกวันเสาร์ที่จบรอบ (จ.–ส. 13 วัน)";
+    CYCLES.biweekly.pay = off===0 ? "จ่าย: วันเสาร์ที่ตัดรอบ" : `จ่าย: ${off} วันหลังตัดรอบ`;
   }
   if(settings.cycleLabels?.biweekly) CYCLES.biweekly.name = settings.cycleLabels.biweekly;
 }
@@ -994,12 +1023,25 @@ async function approvePayroll(cy){
     const dedNotes = activeDeductions(e).map(d=>`${d.label} (งวดที่ ${d.monthsPaid+1}/${d.monthsTotal})`).join(", ");
     const bonusNotes = bonusRecords.filter(b=>String(b.emp)===String(e.id)&&b.status==="รวมงวดนี้").map(b=>`${b.type}: ${b.reason||"-"}`).join(", ");
     const otNote = pay.otHours ? `OT ${pay.otHours} ชม. (฿${fmt(pay.otPay)})` : "";
+    // รายการหักแบบแยกบรรทัด (ชื่อ + จำนวนเงิน + งวดผ่อน) — เก็บเป็น JSON เพื่อโชว์รายละเอียดในสลิปให้พนักงานเข้าใจว่าถูกหักอะไรบ้าง
+    const dedItems = [];
+    if(pay.absentDeduct) dedItems.push({label:"หักขาดงาน/ลาเกินโควตา", amount: pay.absentDeduct});
+    if(pay.lateDeduct)   dedItems.push({label:"หักมาสาย", amount: pay.lateDeduct});
+    if(pay.advanceDeduct) dedItems.push({label:"หักเบิกเงินล่วงหน้า (หักครั้งเดียวงวดนี้)", amount: pay.advanceDeduct});
+    activeDeductions(e).forEach(d=>{
+      dedItems.push({
+        label: d.label,
+        amount: d.amount,
+        note: d.monthsTotal>1 ? `ผ่อนงวดที่ ${d.monthsPaid+1}/${d.monthsTotal}` : ""
+      });
+    });
     return {
       employee_id: e.id, cycle: cy, cycle_start_date: p.start, cycle_end_date: p.end,
       total_work_days: e.att.workDays, base_total: pay.base,
       leave_deduction: pay.absentDeduct,
       other_deductions: pay.lateDeduct + pay.otherDeduct,
       deduction_remarks: [pay.lateDeduct?`หักมาสาย ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
+      deduction_items: dedItems.length ? JSON.stringify(dedItems) : null,
       addition_amount: pay.extra, addition_remarks: [otNote, bonusNotes].filter(Boolean).join(" · ") || null,
       net_pay: pay.net, status: "approved"
     };
@@ -1253,8 +1295,14 @@ function buildSlipCardHTML(d){
           ${irow("Working Days", d.workDays+" days")}
           ${d.extra?irow("OT / Additional"+(d.extraNote?" — "+d.extraNote:""),"+฿"+fmt(d.extra)):""}
           ${d.deduct?`<tr><td colspan="2" style="padding:8px 12px;border:1px solid #1a1a1a;font-weight:700;font-size:12.5px;background:#f4f5f7">Deductions</td></tr>
-          ${irow("Total Deductions","-฿"+fmt(d.deduct))}
-          ${d.deductNote?`<tr><td colspan="2" style="padding:8px 12px;border:1px solid #1a1a1a;font-size:11px;color:#555;font-style:italic;background:#fafbfd">Note: ${d.deductNote}</td></tr>`:''}`:''}
+          ${(d.deductItems&&d.deductItems.length)
+            ? d.deductItems.map(it=>irow(
+                `${it.label}${it.note?` <span style="color:#777;font-size:11px">(${it.note})</span>`:""}`,
+                "-฿"+fmt(it.amount)
+              )).join("")
+            : ""}
+          <tr><td style="padding:8px 12px;border:1px solid #1a1a1a;font-size:12.5px;font-weight:700;background:#fafbfd">Total Deductions</td><td style="padding:8px 12px;border:1px solid #1a1a1a;font-size:12.5px;text-align:right;font-weight:700;background:#fafbfd">-฿${fmt(d.deduct)}</td></tr>
+          ${(!d.deductItems||!d.deductItems.length)&&d.deductNote?`<tr><td colspan="2" style="padding:8px 12px;border:1px solid #1a1a1a;font-size:11px;color:#555;font-style:italic;background:#fafbfd">Note: ${d.deductNote}</td></tr>`:''}`:''}
         </table>
       </div>
     </div>
@@ -1281,8 +1329,16 @@ function buildSlipCardHTML(d){
 // รวมข้อมูลจาก snapshot (payroll_records) ให้เป็นชุดเดียวกับที่ buildSlipCardHTML ต้องการ
 function slipDataFromRecord(r){
   const e = E(r.employee_id);
-  const deductNotes = [];
-  if(r.deduction_remarks) deductNotes.push(r.deduction_remarks);
+  // รายการหักแยกบรรทัด — งวดใหม่จะมี deduction_items (JSON) · งวดเก่าที่บันทึกก่อนมีฟีเจอร์นี้จะไม่มี → สร้างย้อนหลังจากตัวเลขที่มี
+  let dedItems = [];
+  if(r.deduction_items){
+    try { dedItems = JSON.parse(r.deduction_items) || []; } catch(err){ dedItems = []; }
+  }
+  if(!dedItems.length){
+    // fallback: งวดเก่า — แยกได้เท่าที่ข้อมูลมี (หักลา กับ หักอื่นๆ รวม)
+    if(Number(r.leave_deduction)) dedItems.push({label:"หักขาดงาน/ลาเกินโควตา", amount:Number(r.leave_deduction)});
+    if(Number(r.other_deductions)) dedItems.push({label:"รายการหักอื่นๆ", amount:Number(r.other_deductions), note: r.deduction_remarks||""});
+  }
   return {
     empName: e?(e.name+" "+natFlag(e.nat)):("พนักงาน #"+r.employee_id),
     empCode: e?e.code:"—", dept: e?e.dept:"—", pos: e?e.pos:"—", joinDate: e?e.start:"—",
@@ -1292,6 +1348,7 @@ function slipDataFromRecord(r){
     base: Number(r.base_total)||0,
     extra: Number(r.addition_amount)||0, extraNote: r.addition_remarks||"",
     deduct: (Number(r.leave_deduction)||0)+(Number(r.other_deductions)||0),
+    deductItems: dedItems,
     deductNote: [r.leave_deduction?`หักขาด/ลาเกินโควตา ฿${fmt(r.leave_deduction)}`:"", r.deduction_remarks||""].filter(Boolean).join(" · "),
     net: Number(r.net_pay)||0,
     printDate: new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}),
@@ -3909,12 +3966,14 @@ function openCycleSettingsModal(){
       <div style="border-top:1px solid var(--line);margin:14px 0;padding-top:14px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px"><input type="checkbox" id="cyBiweekOn" ${settings.biweeklyEnabled?'checked':''} onchange="document.getElementById('cyBiweekOpts').style.display=this.checked?'grid':'none'">
         <b>➕ เปิดใช้รอบเพิ่ม: Biweekly (จ่ายทุก 2 สัปดาห์)</b></label>
-        <div class="hint" style="font-size:10.5px;margin:4px 0 0">เช่น ทำงาน จ–ส สองสัปดาห์ จ่ายวันเสาร์ → ตั้ง "วันเริ่มนับรอบ" เป็นวันจันทร์ต้นรอบ และจ่าย 5 วันหลังตัดรอบ (จันทร์+12 วัน = เสาร์สัปดาห์ที่ 2)</div>
+        <div class="hint" style="font-size:10.5px;margin:4px 0 0">รอบ จ–ส สองสัปดาห์ หยุดอาทิตย์ → ตั้ง "วันเริ่มนับรอบ" เป็น<b>วันจันทร์</b>ที่เริ่มรอบแรก · ระบบจะตัดรอบวันเสาร์ (จันทร์+12 วัน) และจ่ายวันเสาร์นั้นเลย · เว้นช่อง "จ่ายกี่วันหลังตัดรอบ" เป็น 0 = จ่ายวันเดียวกับที่ตัดรอบ</div>
         <div id="cyBiweekOpts" style="display:${settings.biweeklyEnabled?'grid':'none'};grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
           <div class="field"><label>ชื่อที่แสดง</label><input id="cyNameBiweekly" value="${(settings.cycleLabels?.biweekly||'Biweekly Payroll').replace(/"/g,'&quot;')}"></div>
-          <div class="field"><label>วันเริ่มนับรอบ (Anchor)</label><input type="date" id="cyBiAnchor" value="${settings.biweeklyAnchorDate||'2026-01-02'}"></div>
-          <div class="field"><label>จ่ายกี่วันหลังตัดรอบ</label><input type="number" id="cyBiOffset" min="0" value="${settings.biweeklyPayOffsetDays||3}"></div>
+          <div class="field"><label>วันเริ่มนับรอบ (ต้องเป็นวันจันทร์)</label><input type="date" id="cyBiAnchor" value="${settings.biweeklyAnchorDate||'2026-07-13'}" onchange="previewBiweekly()"></div>
+          <div class="field"><label>จ่ายกี่วันหลังตัดรอบ (0 = วันเดียวกัน)</label><input type="number" id="cyBiOffset" min="0" value="${settings.biweeklyPayOffsetDays!=null?settings.biweeklyPayOffsetDays:0}" onchange="previewBiweekly()"></div>
         </div>
+        <div id="biweekPreview" class="hint" style="display:${settings.biweeklyEnabled?'block':'none'};margin-top:8px;padding:10px 12px;background:#f4f7fb;border-radius:9px;font-size:11.5px;line-height:1.9"></div>
+        <img src="x" style="display:none" onerror="setTimeout(previewBiweekly,0)">
         <div class="hint" style="margin-top:6px;font-size:10.5px">ปิดสวิตช์นี้ = ซ่อนการ์ดรอบ Biweekly ออกจากหน้าเลือกรอบทันที (เทียบเท่าการลบออกจากมุมมองการใช้งาน)</div>
       </div>
       <b style="font-size:13.5px">Monthly (รายเดือน)</b>
@@ -3946,6 +4005,14 @@ async function saveCycleSettings(){
     biweekly: document.getElementById("cyNameBiweekly").value.trim() || "Biweekly Payroll"
   };
   const biweekly_enabled = document.getElementById("cyBiweekOn").checked;
+  const biAnchor = document.getElementById("cyBiAnchor").value || "2026-01-05";
+  if(biweekly_enabled){
+    const anchorDow = new Date(biAnchor+"T00:00:00").getDay(); // 0=อาทิตย์ 1=จันทร์
+    if(anchorDow !== 1){
+      const dowName = ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"][anchorDow];
+      if(!confirm(`⚠️ "วันเริ่มนับรอบ" ที่เลือกตรงกับวัน${dowName} ไม่ใช่วันจันทร์\n\nรอบ 2 อาทิตย์แบบ จ.–ส. ควรตั้งวันเริ่มเป็นวันจันทร์ ไม่งั้นรอบจะเริ่ม/จบผิดวัน\n\nต้องการบันทึกต่อไปหรือไม่?`)) return;
+    }
+  }
   const payload = {
     cycle_labels,
     monthly_cutoff_day: Math.min(31, Math.max(1, Number(document.getElementById("cyCut").value)||25)),
@@ -3953,8 +4020,8 @@ async function saveCycleSettings(){
     weekly_cutoff_dow: Number(document.getElementById("cyWCut").value),
     weekly_pay_dow: Number(document.getElementById("cyWPay").value),
     biweekly_enabled,
-    biweekly_anchor_date: document.getElementById("cyBiAnchor").value || "2026-01-02",
-    biweekly_pay_offset_days: Number(document.getElementById("cyBiOffset").value)||3
+    biweekly_anchor_date: biAnchor,
+    biweekly_pay_offset_days: Number(document.getElementById("cyBiOffset").value)||0
   };
   const { error } = await sb.from("settings").update(payload).eq("id",1);
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
