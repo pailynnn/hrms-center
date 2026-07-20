@@ -971,7 +971,12 @@ async function loadCycleStats(cy){
     if(!isWeeklyOff(d)) workdates.push(isoDate(d));
   }
   employees.filter(e=>e.cycle===cy).forEach(e=>{
-    const expected = workdates.filter(dISO=>!isHolidayFor(dISO, e)).length;
+    // ตัดวันก่อนวันเริ่มงานออกด้วย (เหมือนที่ loadMissingPunch ทำ) ไม่งั้นพนักงานที่เพิ่งเข้าใหม่กลางงวดจะโดนนับ "รอตรวจ" ของวันก่อนเข้างานจริงด้วย
+    const expected = workdates.filter(dISO=>{
+      if(isHolidayFor(dISO, e)) return false;
+      if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
+      return true;
+    }).length;
     e.override = overrides.find(o=>String(o.employee_id)===String(e.id)) || null;
     e.advances = advances.filter(a=>String(a.employee_id)===String(e.id));
     const att = (attRes.data||[]).filter(a=>String(a.employee_id)===String(e.id));
@@ -2864,9 +2869,14 @@ async function resolveMissingOut(attId, dateISO, empId){
 }
 async function resolveMissingCore(empId, dateISO, present){
   const payload = present
-    ? { employee_id:empId, work_date:dateISO, status:"manual", remark:"HR ยืนยันย้อนหลัง: มาทำงาน (ลืมลงเวลา)", confirmed_by: loggedInEmployeeId }
-    : { employee_id:empId, work_date:dateISO, status:"absent", remark:"HR ยืนยันย้อนหลัง: ขาดงาน", confirmed_by: loggedInEmployeeId };
-  const { error } = await sb.from("attendances").insert(payload);
+    ? { status:"manual", remark:"HR ยืนยันย้อนหลัง: มาทำงาน (ลืมลงเวลา)", confirmed_by: loggedInEmployeeId }
+    : { status:"absent", remark:"HR ยืนยันย้อนหลัง: ขาดงาน", confirmed_by: loggedInEmployeeId };
+  // เช็คก่อนว่ามีแถวของวัน+พนักงานนี้อยู่แล้วหรือยัง (เช่น กดซ้ำ/มีคนอื่นเพิ่งกดพร้อมกัน) แล้ว update แทนที่จะ insert ซ้ำ
+  // ตาราง attendances ไม่มี unique constraint กันแถวซ้ำ (employee_id, work_date) — ถ้า insert ซ้ำ workDays/ขาดงานในสรุปเงินเดือนจะนับเกินจริงทันที
+  const { data: exist } = await sb.from("attendances").select("id").eq("employee_id", empId).eq("work_date", dateISO).maybeSingle();
+  const { error } = exist
+    ? await sb.from("attendances").update(payload).eq("id", exist.id)
+    : await sb.from("attendances").insert({ employee_id:empId, work_date:dateISO, ...payload });
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return false; }
   const e = E(empId);
   logAudit("attendance", present?"ยืนยันย้อนหลัง: มาทำงาน":"ยืนยันย้อนหลัง: ขาดงาน", `${e?e.name:("#"+empId)} · ${isoToThaiDisplay(dateISO)}`);
@@ -2877,32 +2887,49 @@ async function refreshAfterMissing(){
   await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy)));
   render("attendance");
 }
+// กันกดซ้ำ/สองแท็บพร้อมกันในช่วงเสี้ยววินาทีก่อนหน้าจอรีเฟรช (ปุ่มยังไม่ทันหายไปจนกว่า refreshAfterMissing() จะ render เสร็จ)
+let missingInFlight = new Set();
 async function resolveMissing(empId, dateISO, present){
-  const e = E(empId);
-  const ok = await resolveMissingCore(empId, dateISO, present);
-  if(!ok) return;
-  await refreshAfterMissing();
-  toast(present
-    ? `✅ ยืนยันว่า ${e?.name} มาทำงาน ${isoToThaiDisplay(dateISO)} แล้ว — นับเป็นวันทำงาน/จ่ายเงินในงวด`
-    : `บันทึกขาดงาน ${e?.name} วันที่ ${isoToThaiDisplay(dateISO)} — ${e?.type==="monthly"?"ระบบจะหักในงวดนี้":"วันดังกล่าวจะไม่ถูกจ่าย"}`);
+  const key = `${empId}_${dateISO}`;
+  if(missingInFlight.has(key)) return;
+  missingInFlight.add(key);
+  try{
+    const e = E(empId);
+    const ok = await resolveMissingCore(empId, dateISO, present);
+    if(!ok) return;
+    await refreshAfterMissing();
+    toast(present
+      ? `✅ ยืนยันว่า ${e?.name} มาทำงาน ${isoToThaiDisplay(dateISO)} แล้ว — นับเป็นวันทำงาน/จ่ายเงินในงวด`
+      : `บันทึกขาดงาน ${e?.name} วันที่ ${isoToThaiDisplay(dateISO)} — ${e?.type==="monthly"?"ระบบจะหักในงวดนี้":"วันดังกล่าวจะไม่ถูกจ่าย"}`);
+  } finally { missingInFlight.delete(key); }
 }
 async function resolveMissOutOne(attId, dateISO, empId){
-  await resolveMissingOut(attId, dateISO, empId);
-  await refreshAfterMissing();
-  toast(`ปิดเวลาออกให้ ${E(empId)?.name} วันที่ ${isoToThaiDisplay(dateISO)} แล้ว ✓`);
+  const key = `out_${attId}`;
+  if(missingInFlight.has(key)) return;
+  missingInFlight.add(key);
+  try{
+    await resolveMissingOut(attId, dateISO, empId);
+    await refreshAfterMissing();
+    toast(`ปิดเวลาออกให้ ${E(empId)?.name} วันที่ ${isoToThaiDisplay(dateISO)} แล้ว ✓`);
+  } finally { missingInFlight.delete(key); }
 }
+let missingBulkRunning = false;
 async function bulkResolveMissing(){
+  if(missingBulkRunning) return;
   const boxes = [...document.querySelectorAll(".mpChk:checked")];
   if(!boxes.length){ toast("ยังไม่ได้เลือกรายการ"); return; }
   if(!confirm(`ยืนยันว่า "มาทำงาน" ทั้ง ${boxes.length} รายการที่เลือก?\n(ลืมเข้า → บันทึกวันทำงานให้ · ลืมออก → ปิดเวลาออกตามกะ)`)) return;
+  missingBulkRunning = true;
   toast("⏳ กำลังบันทึก "+boxes.length+" รายการ...");
-  for(const b of boxes){
-    const {kind, emp, date, att} = b.dataset;
-    if(kind==="in") await resolveMissingCore(Number(emp), date, true);
-    else await resolveMissingOut(Number(att), date, Number(emp));
-  }
-  await refreshAfterMissing();
-  toast(`ยืนยัน ${boxes.length} รายการเรียบร้อย ✓`);
+  try{
+    for(const b of boxes){
+      const {kind, emp, date, att} = b.dataset;
+      if(kind==="in") await resolveMissingCore(Number(emp), date, true);
+      else await resolveMissingOut(Number(att), date, Number(emp));
+    }
+    await refreshAfterMissing();
+    toast(`ยืนยัน ${boxes.length} รายการเรียบร้อย ✓`);
+  } finally { missingBulkRunning = false; }
 }
 function toggleAllMissing(master){ document.querySelectorAll(".mpChk").forEach(c=>c.checked=master.checked); }
 function setMissingRange(v){ missingRange = Number(v)||14; missingRows = null; render("attendance"); }
