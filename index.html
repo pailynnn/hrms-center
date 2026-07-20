@@ -54,7 +54,7 @@ input,select,textarea{font-family:inherit;font-size:13.5px}
 .date-box b{font-size:13.5px}
 .date-box div{font-size:12px;color:var(--muted)}
 .bell{width:38px;height:38px;border-radius:50%;background:#f3f5f9;border:none;display:grid;place-items:center;position:relative}
-.bell::after{content:"";position:absolute;top:8px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--red);border:2px solid #f3f5f9}
+.bell.has-unread::after{content:"";position:absolute;top:8px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--red);border:2px solid #f3f5f9}
 .user-chip{display:flex;align-items:center;gap:10px}
 .user-chip .avatar{width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#ffd9a8,#f7941d);display:grid;place-items:center;font-weight:700;color:#7a4a00}
 .user-chip .who b{display:block;font-size:13.5px}
@@ -162,8 +162,11 @@ th.num{text-align:right}
 .cal-tag.g{background:var(--amber);color:#5a3800}
 
 /* notif card */
-.notif-item{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;background:#f8f9fc;margin-bottom:8px}
+.notif-item{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;background:#f8f9fc;margin-bottom:8px;cursor:pointer;transition:.15s}
+.notif-item:hover{background:#f0f2f7}
+.notif-item.unread{background:#fff7ec;border:1px solid #ffd9a8}
 .notif-item .ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:18px;flex-shrink:0}
+.notif-item .unread-dot{width:7px;height:7px;border-radius:50%;background:var(--red);flex-shrink:0}
 
 .hamburger{display:none;width:38px;height:38px;border-radius:10px;background:#f3f5f9;border:none;align-items:center;justify-content:center;flex-direction:column;gap:4px;flex-shrink:0}
 .hamburger span{width:18px;height:2px;background:var(--text);border-radius:2px}
@@ -1544,54 +1547,140 @@ const SUBS = {
   settings:"ตั้งค่าเวลา นโยบาย พิกัดออฟฟิศ และเฟสถัดไป",
   audit:"ตรวจสอบประวัติการใช้งานระบบ และกิจกรรมความปลอดภัย"
 };
+// ===================== ระบบแจ้งเตือน (bell) =====================
+// เดินตามรายการจริงทีละอัน (ไม่ใช่แค่ยอดรวม) ตามบทบาทผู้ล็อกอิน + จำสถานะ "อ่านแล้ว" ต่อคนจริงในตาราง notification_reads
+// key ของแต่ละแจ้งเตือนฝัง "สถานะปัจจุบัน" ไว้ด้วย (เช่น leave_<id>_<supStatus>_<hrStatus>) — พอสถานะเปลี่ยน key เปลี่ยน
+// จุดแดงจะขึ้นใหม่โดยอัตโนมัติ แม้ก่อนหน้านี้จะเคยกดอ่านแจ้งเตือนอันเดิม (ตอนสถานะเก่า) ไปแล้วก็ตาม
+let notifReadKeys = new Set();
+let notifPanelItems = [];
+async function loadNotifReads(){
+  if(!loggedInEmployeeId){ notifReadKeys = new Set(); return; }
+  const { data, error } = await sb.from("notification_reads").select("notif_key").eq("employee_id", loggedInEmployeeId);
+  notifReadKeys = error ? new Set() : new Set((data||[]).map(r=>r.notif_key));
+}
+// สร้างรายการแจ้งเตือนทีละอัน — คืน [{key, icon, title, sub, nav()}]  ใช้ทั้งตอนเปิดพาเนลและตอนคำนวณจุดแดง
+function computeNotifications(){
+  const items = [];
+  const navBtn = page => document.querySelector(`[data-page=${page}]`);
+  if(canViewAll()){
+    leaves.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").forEach(l=>{
+      const emp = E(l.emp);
+      items.push({
+        key:`leave_${l.id}_${l.supStatus}_${l.hrStatus}`, icon:"✅",
+        title:`ใบลารออนุมัติ: ${emp?emp.name:'พนักงาน #'+l.emp}`,
+        sub:`${LT(l.type).name} · ${l.date} · ${(l.hrStatus==="pending"&&l.supStatus==="approved")?'รอ HR':'รอหัวหน้างาน'}`,
+        nav:()=>{ setSub('leave','approve'); go('leave', navBtn('leave')); }
+      });
+    });
+    employees.filter(emp=>emp.status==='probation').forEach(emp=>{
+      items.push({
+        key:`probation_${emp.id}`, icon:"📝",
+        title:`พนักงานทดลองงาน: ${emp.name}`, sub:`${emp.pos||"—"} · ${emp.dept||"—"}`,
+        nav:()=>{ go('employees', navBtn('employees')); setTimeout(()=>openEmpModal(emp.id),50); }
+      });
+    });
+    if(projectsLoaded){
+      const todayISO = todayISODate();
+      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISO).map(d=>String(d.group_id)));
+      projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));}).forEach(g=>{
+        const p = PJ(g.project_id);
+        items.push({
+          key:`dispatch_${g.id}_${todayISO}`, icon:"📋",
+          title:`ทีมยังไม่ถูกมอบหมายงานวันนี้: ${g.name||'ทีม #'+g.id}`, sub:p?p.name:'',
+          nav:()=>{ setSub('projects','dispatch'); go('projects', navBtn('projects')); }
+        });
+      });
+    }
+  } else if(isTeamLead()){
+    const me = myEmp();
+    leaves.filter(l=>{const emp=E(l.emp);return emp && me && emp.supervisor===me.name && l.supStatus==="pending";}).forEach(l=>{
+      const emp = E(l.emp);
+      items.push({
+        key:`leave_${l.id}_${l.supStatus}_${l.hrStatus}`, icon:"✅",
+        title:`ใบลาทีมรออนุมัติ: ${emp?emp.name:'พนักงาน #'+l.emp}`,
+        sub:`${LT(l.type).name} · ${l.date}`,
+        nav:()=>{ setSub('leave','approve'); go('leave', navBtn('leave')); }
+      });
+    });
+    if(projectsLoaded){
+      const todayISO = todayISODate();
+      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISO).map(d=>String(d.group_id)));
+      projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));}).forEach(g=>{
+        const p = PJ(g.project_id);
+        items.push({
+          key:`dispatch_${g.id}_${todayISO}`, icon:"📋",
+          title:`ทีมยังไม่ถูกมอบหมายงานวันนี้: ${g.name||'ทีม #'+g.id}`, sub:p?p.name:'',
+          nav:()=>{ setSub('projects','dispatch'); go('projects', navBtn('projects')); }
+        });
+      });
+    }
+  } else {
+    leaves.filter(l=>String(l.emp)===String(loggedInEmployeeId)).forEach(l=>{
+      const isPending = (l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected";
+      const isApproved = l.hrStatus==="approved";
+      const isRejected = l.supStatus==="rejected"||l.hrStatus==="rejected";
+      if(!isPending && !isApproved && !isRejected) return;
+      items.push({
+        key:`leave_mine_${l.id}_${l.supStatus}_${l.hrStatus}`,
+        icon: isRejected?"❌":isApproved?"✅":"⏳",
+        title: isRejected?`ใบลาไม่ได้รับการอนุมัติ: ${l.date}`:isApproved?`ใบลาอนุมัติแล้ว: ${l.date}`:`ใบลารออนุมัติ: ${l.date}`,
+        sub:`${LT(l.type).name}${l.note?' · '+l.note:''}`,
+        nav:()=>{ setSub('leave','dashboard'); go('leave', navBtn('leave')); }
+      });
+    });
+    if(projectsLoaded){
+      const tr = transferCovering(loggedInEmployeeId, todayISODate());
+      if(tr){
+        const toG = PG(tr.to_group_id), toP = toG?PJ(toG.project_id):null;
+        items.push({
+          key:`transfer_${tr.employee_id}_${tr.start_date}_${tr.to_group_id}`, icon:"🔁",
+          title:"คุณถูกย้ายไปช่วยงานชั่วคราว",
+          sub:`${toP?toP.name:'-'}${tr.end_date?' ถึง '+isoToThaiDisplay(tr.end_date):''}`,
+          nav:()=>{ setSub('projects','teams'); go('projects', navBtn('projects')); }
+        });
+      }
+    }
+  }
+  return items;
+}
 function toggleNotifPanel(e){
   if(e) e.stopPropagation();
   const panel = document.getElementById("notifPanel");
   const opening = panel.style.display==="none";
   panel.style.display = opening ? "block" : "none";
   if(!opening) return;
-  const items = [];
-  if(canViewAll()){
-    const pend = pendingCount();
-    if(pend>0) items.push(["✅","การลารออนุมัติ",`${pend} รายการ`]);
-    const probCount = employees.filter(e=>e.status==='probation').length;
-    if(probCount>0) items.push(["📝","พนักงานทดลองงาน",`${probCount} ท่าน`]);
-    if(projectsLoaded){
-      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISODate()).map(d=>String(d.group_id)));
-      const unassigned = projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));});
-      if(unassigned.length>0) items.push(["📋","ทีมที่ยังไม่ถูกมอบหมายงานวันนี้",`${unassigned.length} ทีม`]);
-    }
-  } else if(isTeamLead()){
-    const me = myEmp();
-    const teamPending = leaves.filter(l=>{const emp=E(l.emp);return emp && me && emp.supervisor===me.name && l.supStatus==="pending";}).length;
-    if(teamPending>0) items.push(["✅","ใบลาทีมรออนุมัติ",`${teamPending} รายการ`]);
-    if(projectsLoaded){
-      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISODate()).map(d=>String(d.group_id)));
-      const unassigned = projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));});
-      if(unassigned.length>0) items.push(["📋","ทีมที่ยังไม่ถูกมอบหมายงานวันนี้",`${unassigned.length} ทีม`]);
-    }
-  } else {
-    const mine = leaves.filter(l=>String(l.emp)===String(loggedInEmployeeId));
-    const pending = mine.filter(l=>l.supStatus==="pending"||l.hrStatus==="pending").length;
-    const approved = mine.filter(l=>l.hrStatus==="approved").length;
-    const rejected = mine.filter(l=>l.supStatus==="rejected"||l.hrStatus==="rejected").length;
-    if(pending) items.push(["⏳","ใบลาของคุณรออนุมัติ",`${pending} รายการ`]);
-    if(approved) items.push(["✅","ใบลาที่อนุมัติแล้ว",`${approved} รายการ`]);
-    if(rejected) items.push(["❌","ใบลาที่ไม่อนุมัติ",`${rejected} รายการ`]);
-    if(projectsLoaded){
-      const tr = transferCovering(loggedInEmployeeId, todayISODate());
-      if(tr){
-        const toG = PG(tr.to_group_id), toP = toG?PJ(toG.project_id):null;
-        items.push(["🔁","คุณถูกย้ายไปช่วยงานชั่วคราว",`${toP?toP.name:'-'}${tr.end_date?' ถึง '+isoToThaiDisplay(tr.end_date):''}`]);
-      }
+  notifPanelItems = computeNotifications();
+  panel.innerHTML = notifPanelItems.length===0 ? `<div class="hint" style="padding:16px;text-align:center">ไม่มีการแจ้งเตือนใหม่ 🎉</div>` :
+    notifPanelItems.map((it,idx)=>{
+      const unread = !notifReadKeys.has(it.key);
+      return `
+    <div class="notif-item${unread?' unread':''}" onclick="clickNotif(${idx})">
+      <div class="ic" style="background:#f3f5f9">${it.icon}</div>
+      <div style="flex:1"><b style="font-size:13px">${it.title}</b><div class="hint">${it.sub}</div></div>
+      ${unread?'<span class="unread-dot"></span>':''}
+    </div>`;}).join("");
+}
+// กดแจ้งเตือน → จำว่าอ่านแล้ว (บันทึกลง notification_reads จริง) + พาไปหน้า/แท็บที่เกี่ยวข้องทันที
+function clickNotif(idx){
+  const it = notifPanelItems[idx]; if(!it) return;
+  document.getElementById("notifPanel").style.display = "none";
+  if(!notifReadKeys.has(it.key)){
+    notifReadKeys.add(it.key);
+    updateNotifBell();
+    if(loggedInEmployeeId){
+      sb.from("notification_reads").upsert({employee_id:loggedInEmployeeId, notif_key:it.key, read_at:new Date().toISOString()}, {onConflict:"employee_id,notif_key"})
+        .then(({error})=>{ if(error) console.error("mark notif read error", error); });
     }
   }
-  panel.innerHTML = items.length===0 ? `<div class="hint" style="padding:16px;text-align:center">ไม่มีการแจ้งเตือนใหม่ 🎉</div>` :
-    items.map(([icon,title,sub])=>`
-    <div class="notif-item" style="margin-bottom:6px">
-      <div class="ic" style="background:#f3f5f9">${icon}</div>
-      <div style="flex:1"><b style="font-size:13px">${title}</b><div class="hint">${sub}</div></div>
-    </div>`).join("");
+  it.nav();
+}
+// อัปเดตจุดแดงบนกระดิ่งให้ตรงกับความจริง — เรียกทุกครั้งที่ render() หน้าไหนก็ตาม
+function updateNotifBell(){
+  const bell = document.getElementById("bellBtn");
+  if(!bell) return;
+  if(!loggedInEmployeeId){ bell.classList.remove("has-unread"); return; }
+  const unread = computeNotifications().some(it=>!notifReadKeys.has(it.key));
+  bell.classList.toggle("has-unread", unread);
 }
 document.addEventListener("click",function(e){
   const panel = document.getElementById("notifPanel");
@@ -1639,6 +1728,7 @@ function render(page){
   window.scrollTo({top:0});
   updateSubtabArrows();
   applyTranslation();
+  updateNotifBell();
 }
 
 /* ================== i18n — ชั้นแปลภาษาแบบ runtime ==================
@@ -4614,7 +4704,7 @@ async function afterLogin(){
     showLogin("บัญชีนี้ถูกระงับการใช้งาน (พ้นสภาพพนักงาน) — กรุณาติดต่อ HR");
     return false;
   }
-  await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits()]);
+  await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits(), loadNotifReads()]);
   await loadProjectsModule(); projectsLoaded = true;
   updateProjectBadge();
   await loadPayrollStatus();
@@ -4655,6 +4745,7 @@ function resetAppState(){
   orgChartRows = null;
   assetRecords = []; assetsLoaded = false; assetsLoading = false;
   signatures = {};
+  notifReadKeys = new Set(); notifPanelItems = [];
   // รีเซ็ตการนำทาง — กันหน้า/แท็บเดิมของบัญชีก่อนค้าง
   currentPage = "dashboard";
   subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work", projects:"board" };
