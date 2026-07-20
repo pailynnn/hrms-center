@@ -434,7 +434,7 @@ async function loadAuditLog(){
   const term = (auditFilter.q||"").replace(/[,()]/g," ").trim();
   if(term) q = q.or(`action.ilike.%${term}%,target.ilike.%${term}%,user_name.ilike.%${term}%`);
   const { data, error } = await q;
-  if(error){ console.error("loadAuditLog", error); auditRows = []; return; }
+  if(error){ console.error("loadAuditLog", error); toastLoadError("Audit Log"); auditRows = []; return; }
   auditRows = data||[];
 }
 function applyAuditFilter(){
@@ -518,7 +518,7 @@ function mapEmployeeRow(row){
 }
 async function loadEmployees(){
   const { data, error } = await sb.from("employees").select("*").order("id");
-  if(error){ console.error("loadEmployees error", error); return; }
+  if(error){ console.error("loadEmployees error", error); toastLoadError("รายชื่อพนักงาน"); return; }
   employees = (data||[]).map(mapEmployeeRow)
     // ซ่อนบัญชีทดสอบระบบ (is_system_test) ออกจากทุกรายชื่อ/รายงาน — ยกเว้นตอนที่บัญชีนั้นล็อกอินอยู่เอง (ใช้ทดสอบได้ปกติ)
     .filter(e=>!e.isSystemTest || String(e.id)===String(loggedInEmployeeId));
@@ -561,7 +561,7 @@ function mapLeaveRow(row){
 }
 async function loadLeaves(){
   const { data, error } = await sb.from("leave_requests").select("*").order("leave_date", {ascending:false});
-  if(error){ console.error("loadLeaves error", error); return; }
+  if(error){ console.error("loadLeaves error", error); toastLoadError("ข้อมูลการลา"); return; }
   leaves = (data||[]).map(mapLeaveRow);
 }
 
@@ -588,7 +588,7 @@ function todayThaiFull(){
 }
 async function loadAttendanceToday(){
   const { data, error } = await sb.from("attendances").select("*").eq("work_date", todayISODate());
-  if(error){ console.error("loadAttendanceToday error", error); return; }
+  if(error){ console.error("loadAttendanceToday error", error); toastLoadError("ข้อมูลลงเวลาวันนี้"); return; }
   attendanceToday = (data||[]).map(mapAttendanceRow);
 }
 function myTodayAttendance(){
@@ -598,7 +598,7 @@ function myTodayAttendance(){
 // โหลดตั้งค่า OT จริงจากตาราง settings (แถวเดียว id=1) มาทับค่า default ใน settings object ฝั่ง client
 async function loadSettings(){
   const { data, error } = await sb.from("settings").select("*").eq("id",1).maybeSingle();
-  if(error || !data) { console.error("loadSettings error", error); return; }
+  if(error || !data) { console.error("loadSettings error", error); toastLoadError("ค่าตั้งค่าระบบ"); return; }
   // เวลาทำงาน / การลา
   settings.shiftIn = (data.shift_in||"08:30").slice(0,5);
   settings.shiftOut = (data.shift_out||"17:30").slice(0,5);
@@ -707,7 +707,7 @@ function calcOTHourlyFor(e){
 }
 async function loadOtRequests(){
   const { data, error } = await sb.from("ot_requests").select("*").order("work_date", {ascending:false});
-  if(error){ console.error("loadOtRequests error", error); return; }
+  if(error){ console.error("loadOtRequests error", error); toastLoadError("ข้อมูล OT"); return; }
   otRequests = (data||[]).map(row=>({
     id: row.id, emp: row.employee_id, dateISO: row.work_date,
     date: isoToThaiDisplay(row.work_date),
@@ -758,7 +758,7 @@ async function delOt(id){
 async function loadAnnouncements(){
   // embed ชื่อผู้ประกาศจาก FK created_by → employees (ถ้า RLS ของผู้ใช้มองไม่เห็นพนักงานคนนั้น จะ fallback เป็น "ฝ่ายบุคคล")
   const { data, error } = await sb.from("announcements").select("*, author:created_by(full_name)").order("created_at", {ascending:false});
-  if(error){ console.error("loadAnnouncements error", error); return; }
+  if(error){ console.error("loadAnnouncements error", error); toastLoadError("ข่าวประกาศ"); return; }
   announcements = (data||[]).map(row=>({
     id: row.id, title: row.title, body: row.body || "",
     date: row.created_at ? new Date(row.created_at).toLocaleDateString("th-TH") : "—",
@@ -832,7 +832,7 @@ async function viewAnnouncement(id){
 // โหลดรายการหักประจำ (employee_deductions) แล้วผูกเข้ากับ employees[].deductions ในรูปแบบที่ UI เดิมใช้
 async function loadDeductions(){
   const { data, error } = await sb.from("employee_deductions").select("*").order("id");
-  if(error){ console.error("loadDeductions error", error); return; }
+  if(error){ console.error("loadDeductions error", error); toastLoadError("ข้อมูลรายการหัก"); return; }
   employees.forEach(e=>{ e.deductions = []; });
   (data||[]).forEach(row=>{
     const e = E(row.employee_id);
@@ -846,7 +846,7 @@ async function loadDeductions(){
 }
 async function loadBonuses(){
   const { data, error } = await sb.from("bonuses").select("*").order("bonus_date", {ascending:false});
-  if(error){ console.error("loadBonuses error", error); return; }
+  if(error){ console.error("loadBonuses error", error); toastLoadError("ข้อมูลโบนัส"); return; }
   bonusRecords = (data||[]).map(row=>({
     id: row.id, dateISO: row.bonus_date,
     date: row.bonus_date ? new Date(row.bonus_date+"T00:00:00").toLocaleDateString("th-TH") : "—",
@@ -955,7 +955,7 @@ async function loadCycleStats(cy){
     sb.from("leave_requests").select("employee_id,leave_date,leave_type,supervisor_status,hr_status").gte("leave_date", period.start).lte("leave_date", effEnd),
     sb.from("ot_requests").select("employee_id,work_date,hours,status").gte("work_date", period.start).lte("work_date", period.end)
   ]);
-  if(attRes.error||lvRes.error||otRes.error){ console.error("loadCycleStats error", attRes.error||lvRes.error||otRes.error); return; }
+  if(attRes.error||lvRes.error||otRes.error){ console.error("loadCycleStats error", attRes.error||lvRes.error||otRes.error); toastLoadError("สถิติรอบเงินเดือน"); return; }
   await ensureHolidaysLoaded();
   // Override จาก Payroll Preview (HR แก้ตัวเลขก่อนอนุมัติ)
   const ovRes = await sb.from("payroll_overrides").select("*").eq("cycle_start_date", period.start).eq("cycle_end_date", period.end);
@@ -1001,7 +1001,7 @@ async function loadPayrollStatus(){
     const p = currentPeriod(cy);
     CYCLES[cy].period = periodLabel(p); // อัปเดตป้ายช่วงงวดใน UI ให้เป็นวันที่จริง
     const { data, error } = await sb.from("payroll_records").select("status").eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
-    if(error){ console.error("loadPayrollStatus", cy, error); return; }
+    if(error){ console.error("loadPayrollStatus", cy, error); toastLoadError("สถานะรอบจ่ายเงินเดือน"); return; }
     payrollState.status[cy] = (data||[]).some(r=>r.status==="paid") ? "paid" : (data||[]).length ? "approved" : "draft";
   }));
 }
@@ -1200,7 +1200,7 @@ let payrollHistLoaded = false, payrollHistLoading = false;
 async function loadPayrollHistory(){
   const { data, error } = await sb.from("payroll_records").select("*")
     .order("cycle_end_date",{ascending:false}).order("id",{ascending:true}).limit(3000);
-  if(error){ console.error("loadPayrollHistory", error); payrollHistRows = []; return; }
+  if(error){ console.error("loadPayrollHistory", error); toastLoadError("ประวัติการจ่ายเงินเดือน"); payrollHistRows = []; return; }
   payrollHistRows = data||[];
 }
 function ensurePayrollHistory(rerenderPage){
@@ -1418,6 +1418,9 @@ const fmt = n => Math.round(n).toLocaleString("th-TH");
 const initials = n => n.replace(/\(.*\)/,"").trim().split(" ").map(w=>w[0]).slice(0,2).join("");
 const natFlag = n => n==="MM" ? "🇲🇲" : "🇹🇭";
 function toast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._x);t._x=setTimeout(()=>t.classList.remove("show"),2600);}
+// แจ้งผู้ใช้แบบเห็นจริงเมื่อโหลดข้อมูลจาก Supabase ไม่สำเร็จ — เดิมหลายจุด error เงียบอยู่แค่ใน console เท่านั้น
+// ผู้ใช้เห็นแค่หน้าว่าง/เลข 0 โดยไม่รู้ว่าเป็นเพราะ "ไม่มีข้อมูลจริง" หรือ "โหลดพัง" ทำให้สับสน/เข้าใจผิดว่าข้อมูลหาย
+function toastLoadError(label){ toast(`⚠️ โหลด${label}ไม่สำเร็จ — ลองรีเฟรชหน้าใหม่ ถ้ายังไม่หายแจ้งผู้ดูแลระบบ`); }
 function empCell(e,sm){if(!e){return `<div class="emp-cell"><div class="emp-ava" ${sm?'style="width:30px;height:30px;font-size:11px;background:#94a3b8"':'style="background:#94a3b8"'}>—</div><div class="nm"><b>พนักงานที่ถูกลบ</b><span>ไม่พบข้อมูล</span></div></div>`;}return `<div class="emp-cell"><div class="emp-ava" ${sm?'style="width:30px;height:30px;font-size:11px;background:'+e.color+'"':'style="background:'+e.color+'"'}>${initials(e.name)}</div><div class="nm"><b>${e.name}<span class="flag">${natFlag(e.nat)}</span></b><span>${e.code} · ${e.dept}</span></div></div>`;}
 function statusPill(s){return s==="active"?'<span class="pill green">ปฏิบัติงาน</span>':s==="probation"?'<span class="pill amber">ทดลองงาน</span>':'<span class="pill gray">พ้นสภาพ</span>';}
 function leaveStatus(l){
@@ -1447,7 +1450,7 @@ async function ensureHolidaysLoaded(){
   if(Array.isArray(holidayRows)) return;
   const { data, error } = await sb.from("holidays").select("*").order("holiday_date");
   holidayRows = error?[]:(data||[]);
-  if(error) console.error("loadHolidays", error);
+  if(error){ console.error("loadHolidays", error); toastLoadError("วันหยุด"); }
 }
 // วันหยุดมีผลกับพนักงานคนนี้ไหม (ทั้งบริษัท หรือเฉพาะแผนก/สาขา)
 function isHolidayFor(dISO, e){
@@ -2392,7 +2395,7 @@ function reRenderEmpModal(){ if(empModalCtx) renderEmpModal(empModalCtx.e, empMo
 async function loadEmpFiles(empId){
   const { data, error } = await sb.from("employee_files").select("*").eq("employee_id", empId).order("uploaded_at",{ascending:false});
   empFilesCache[empId] = error ? [] : (data||[]);
-  if(error) console.error("loadEmpFiles", error);
+  if(error){ console.error("loadEmpFiles", error); toastLoadError("เอกสารพนักงาน"); }
   return empFilesCache[empId];
 }
 async function uploadEmpFile(input, empId){
@@ -2712,7 +2715,7 @@ async function loadOrgChart(){
     id:r.id, name:r.full_name||"(ไม่ระบุ)", pos:r.pos||"—", dept:r.dept||"—",
     supervisorId:r.supervisor_id||null, color:r.color||"#3b7bf6", status:r.status||"active"
   }));
-  if(error) console.error("loadOrgChart", error);
+  if(error){ console.error("loadOrgChart", error); toastLoadError("ผังองค์กร"); }
 }
 function buildOrgTreeFrom(list){
   const actives = list.filter(e=>e.status!=="terminated");
@@ -2825,7 +2828,7 @@ async function loadMissingPunch(){
     sb.from("attendances").select("id,employee_id,work_date,check_in_time,check_out_time,status").gte("work_date",startISO).lte("work_date",endISO),
     sb.from("leave_requests").select("employee_id,leave_date,supervisor_status,hr_status").gte("leave_date",startISO).lte("leave_date",endISO)
   ]);
-  if(attRes.error||lvRes.error){ console.error("loadMissingPunch", attRes.error||lvRes.error); missingRows=[]; return; }
+  if(attRes.error||lvRes.error){ console.error("loadMissingPunch", attRes.error||lvRes.error); toastLoadError("รายการลงเวลาที่ขาดหาย"); missingRows=[]; return; }
   const isWeeklyOff = d => settings.weeklyHoliday==="เสาร์-อาทิตย์" ? (d.getDay()===0||d.getDay()===6) : d.getDay()===(THAI_DAYS[settings.weeklyHoliday]??0);
   const rows = [];
   const actives = employees.filter(e=>e.status!=="terminated");
@@ -2909,7 +2912,7 @@ let adjustRows = null;
 async function loadAdjustments(){
   const { data, error } = await sb.from("attendance_adjustments").select("*").order("created_at",{ascending:false}).limit(300);
   adjustRows = error?[]:(data||[]);
-  if(error) console.error("loadAdjustments", error);
+  if(error){ console.error("loadAdjustments", error); toastLoadError("รายการปรับเวลา"); }
 }
 function fmtHM(ts){ return ts ? new Date(ts).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",hour12:false}) : "—"; }
 function attAdjust(){
@@ -4214,7 +4217,7 @@ let payCategories = null; // null=ยังไม่โหลด | array
 async function loadPayCategories(){
   const { data, error } = await sb.from("pay_item_categories").select("*").order("kind").order("id");
   payCategories = error?[]:(data||[]);
-  if(error) console.error("loadPayCategories", error);
+  if(error){ console.error("loadPayCategories", error); toastLoadError("หมวดหมู่รายรับ-รายหัก"); }
 }
 function earningCats(){ return (payCategories||[]).filter(c=>c.kind==="earning" && c.active); }
 function deductionCats(){ return (payCategories||[]).filter(c=>c.kind==="deduction" && c.active); }
@@ -4994,7 +4997,7 @@ let advanceRows = null; // null=ยังไม่โหลด | "loading" | arr
 async function loadAdvances(){
   const { data, error } = await sb.from("salary_advances").select("*").order("requested_at",{ascending:false});
   advanceRows = error?[]:(data||[]);
-  if(error) console.error("loadAdvances", error);
+  if(error){ console.error("loadAdvances", error); toastLoadError("เบิกเงินล่วงหน้า"); }
 }
 function pyAdvance(){
   if(advanceRows===null){ advanceRows="loading"; loadAdvances().then(()=>{ if(currentPage==="payroll") render("payroll"); }); }
@@ -5318,7 +5321,7 @@ async function loadYtd(){
   const y = new Date().getFullYear();
   const { data, error } = await sb.from("ytd_openings").select("*").eq("year", y);
   ytdRows = error?[]:(data||[]);
-  if(error) console.error("loadYtd", error);
+  if(error){ console.error("loadYtd", error); toastLoadError("ยอดสะสมรายปี"); }
 }
 function ytdOpeningFor(empId){
   return Number((Array.isArray(ytdRows)?ytdRows:[]).find(r=>String(r.employee_id)===String(empId))?.amount)||0;
@@ -5677,7 +5680,7 @@ const ORG_KINDS = {
 async function loadOrgUnits(){
   const { data, error } = await sb.from("org_units").select("*").order("kind").order("id");
   orgUnits = error?[]:(data||[]);
-  if(error) console.error("loadOrgUnits", error);
+  if(error){ console.error("loadOrgUnits", error); toastLoadError("โครงสร้างองค์กร"); }
 }
 function orgUnitsOf(kind){ return (orgUnits||[]).filter(u=>u.kind===kind); }
 function setOrgUnitTab(k){ orgUnitTab = k; render("settings"); }
@@ -6280,7 +6283,7 @@ let userRolesRows = null; // null=ยังไม่โหลด | array [{emplo
 async function loadUserRoles(){
   const { data, error } = await sb.from("user_roles").select("employee_id, role");
   userRolesRows = error?[]:(data||[]);
-  if(error) console.error("loadUserRoles", error);
+  if(error){ console.error("loadUserRoles", error); toastLoadError("สิทธิ์ผู้ใช้งาน"); }
 }
 function roleOfEmp(empId){
   const r = (userRolesRows||[]).find(x=>String(x.employee_id)===String(empId));
@@ -7253,7 +7256,7 @@ async function loadAssets(){
     sb.from("assets").select("*").order("id",{ascending:false}),
     sb.from("asset_transfers").select("*").order("transferred_at",{ascending:false})
   ]);
-  if(aRes.error){ console.error("loadAssets", aRes.error); assetRecords=[]; }
+  if(aRes.error){ console.error("loadAssets", aRes.error); toastLoadError("ทรัพย์สิน"); assetRecords=[]; }
   else assetRecords = aRes.data||[];
   assetTransfers = tRes.error?[]:(tRes.data||[]);
 }
