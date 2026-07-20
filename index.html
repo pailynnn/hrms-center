@@ -1415,7 +1415,7 @@ const fmt = n => Math.round(n).toLocaleString("th-TH");
 const initials = n => n.replace(/\(.*\)/,"").trim().split(" ").map(w=>w[0]).slice(0,2).join("");
 const natFlag = n => n==="MM" ? "🇲🇲" : "🇹🇭";
 function toast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._x);t._x=setTimeout(()=>t.classList.remove("show"),2600);}
-function empCell(e,sm){return `<div class="emp-cell"><div class="emp-ava" ${sm?'style="width:30px;height:30px;font-size:11px;background:'+e.color+'"':'style="background:'+e.color+'"'}>${initials(e.name)}</div><div class="nm"><b>${e.name}<span class="flag">${natFlag(e.nat)}</span></b><span>${e.code} · ${e.dept}</span></div></div>`;}
+function empCell(e,sm){if(!e){return `<div class="emp-cell"><div class="emp-ava" ${sm?'style="width:30px;height:30px;font-size:11px;background:#94a3b8"':'style="background:#94a3b8"'}>—</div><div class="nm"><b>พนักงานที่ถูกลบ</b><span>ไม่พบข้อมูล</span></div></div>`;}return `<div class="emp-cell"><div class="emp-ava" ${sm?'style="width:30px;height:30px;font-size:11px;background:'+e.color+'"':'style="background:'+e.color+'"'}>${initials(e.name)}</div><div class="nm"><b>${e.name}<span class="flag">${natFlag(e.nat)}</span></b><span>${e.code} · ${e.dept}</span></div></div>`;}
 function statusPill(s){return s==="active"?'<span class="pill green">ปฏิบัติงาน</span>':s==="probation"?'<span class="pill amber">ทดลองงาน</span>':'<span class="pill gray">พ้นสภาพ</span>';}
 function leaveStatus(l){
   if(l.supStatus==="rejected"||l.hrStatus==="rejected") return '<span class="pill red">ไม่อนุมัติ</span>';
@@ -5002,8 +5002,8 @@ function pyBonus(){
 
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn primary sm" onclick="openBonusModal(null)">+ เพิ่มรายการ</button>
-      <button class="btn ghost sm" onclick="toast('เดโม่: ให้โบนัสหลายคนพร้อมกัน')">👥 โบนัสหลายคน</button>
-      <button class="btn ghost sm" onclick="toast('เดโม่: คำนวณค่าคอมฯ')">💼 คอมมิชชั่น</button>
+      <button class="btn ghost sm" onclick="openBulkBonusModal()">👥 โบนัสหลายคน</button>
+      <button class="btn ghost sm" onclick="openCommissionModal()">💼 คอมมิชชั่น</button>
     </div>
 
     <table style="margin-top:16px">
@@ -5073,6 +5073,124 @@ async function delBonus(id){
   await loadBonuses();
   logAudit("payroll","ลบโบนัส/ปรับเงิน", `${E(b.emp)?.name||""} · ${b.type} ฿${fmt(b.amount)}`);
   render("payroll"); toast("ลบรายการแล้ว");
+}
+
+/* ========== โบนัสหลายคนพร้อมกัน ========== */
+function openBulkBonusModal(){
+  const activeEmps = employees.filter(e=>e.status!=="terminated");
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">👥</div>
+      <div><h3 style="font-size:16px">ให้โบนัสหลายคนพร้อมกัน</h3><div class="hint">เลือกพนักงาน แล้วกำหนดประเภท/จำนวน/เหตุผล ร่วมกันครั้งเดียว</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="field"><label>ประเภท</label><select id="blkType"><option>โบนัส</option><option>เบี้ยเลี้ยง</option><option>คอมมิชชั่น</option></select></div>
+        <div class="field"><label>จำนวนต่อคน (บาท)</label><input id="blkAmount" type="number" min="0" value="0"></div>
+        <div class="field"><label>วันที่</label><input id="blkDate" type="date" value="${todayISODate()}"></div>
+        <div class="field"><label>สถานะ</label><select id="blkStatus"><option>รวมงวดนี้</option><option>มีผลแล้ว</option></select></div>
+        <div class="field" style="grid-column:span 2"><label>เหตุผล</label><input id="blkReason" placeholder="เช่น โบนัสประจำไตรมาส"></div>
+      </div>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="font-size:12.5px;font-weight:600">เลือกพนักงาน (${activeEmps.length} คน)</label>
+        <button class="btn ghost xs" type="button" onclick="toggleAllBulk(true)">เลือกทั้งหมด</button>
+        <button class="btn ghost xs" type="button" onclick="toggleAllBulk(false)">ล้างทั้งหมด</button>
+        <span id="blkCount" class="hint" style="margin-left:auto"></span>
+      </div>
+      <div style="margin-top:8px;max-height:260px;overflow-y:auto;border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:6px">
+        ${activeEmps.map(e=>`
+        <label style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:8px;cursor:pointer" onmouseover="this.style.background='#f7f8fa'" onmouseout="this.style.background=''">
+          <input type="checkbox" class="blkEmp" value="${e.id}" onchange="updateBulkCount()">
+          <div class="emp-ava" style="width:26px;height:26px;font-size:10px;background:${e.color}">${initials(e.name)}</div>
+          <div style="flex:1;font-size:12.5px"><b>${e.name}</b> <span class="hint">${e.code} · ${e.dept}</span></div>
+        </label>`).join("")}
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="saveBulkBonus()">💾 บันทึกให้ทุกคนที่เลือก</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+  updateBulkCount();
+}
+function toggleAllBulk(on){ document.querySelectorAll(".blkEmp").forEach(c=>c.checked=on); updateBulkCount(); }
+function updateBulkCount(){
+  const n = document.querySelectorAll(".blkEmp:checked").length;
+  const el = document.getElementById("blkCount"); if(el) el.textContent = `เลือกแล้ว ${n} คน`;
+}
+async function saveBulkBonus(){
+  const ids = [...document.querySelectorAll(".blkEmp:checked")].map(c=>Number(c.value));
+  if(ids.length===0){ toast("กรุณาเลือกพนักงานอย่างน้อย 1 คน"); return; }
+  const amount = Number(document.getElementById("blkAmount").value)||0;
+  if(amount<=0){ toast("กรุณาระบุจำนวนเงินให้ถูกต้อง"); return; }
+  const type = document.getElementById("blkType").value;
+  const reason = document.getElementById("blkReason").value;
+  const bonus_date = document.getElementById("blkDate").value || todayISODate();
+  const status = document.getElementById("blkStatus").value;
+  const rows = ids.map(empId=>({ employee_id: empId, type, reason, amount, bonus_date, status, created_by: loggedInEmployeeId }));
+  const { error } = await sb.from("bonuses").insert(rows);
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  await loadBonuses();
+  logAudit("payroll","ให้โบนัสหลายคน", `${type} ฿${fmt(amount)} × ${ids.length} คน`);
+  closeModal(); render("payroll");
+  toast(`บันทึก${type} ให้ ${ids.length} คนแล้ว ✓ (คนละ ฿${fmt(amount)})`);
+}
+
+/* ========== คำนวณค่าคอมมิชชั่น ========== */
+function openCommissionModal(){
+  const activeEmps = employees.filter(e=>e.status!=="terminated");
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">💼</div>
+      <div><h3 style="font-size:16px">คำนวณค่าคอมมิชชั่น</h3><div class="hint">ใส่ยอดขาย × เปอร์เซ็นต์ ระบบคำนวณค่าคอมฯ ให้ แล้วบันทึกเข้าโบนัสงวดนี้</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="field" style="grid-column:span 2"><label>พนักงาน</label><select id="cmEmp">${activeEmps.map(e=>`<option value="${e.id}">${e.code} — ${e.name}</option>`).join("")}</select></div>
+        <div class="field"><label>ยอดขาย (บาท)</label><input id="cmSales" type="number" min="0" value="0" oninput="calcCommission()"></div>
+        <div class="field"><label>เปอร์เซ็นต์คอมฯ (%)</label><input id="cmPct" type="number" min="0" step="0.1" value="3" oninput="calcCommission()"></div>
+        <div class="field"><label>วันที่</label><input id="cmDate" type="date" value="${todayISODate()}"></div>
+        <div class="field"><label>สถานะ</label><select id="cmStatus"><option>รวมงวดนี้</option><option>มีผลแล้ว</option></select></div>
+        <div class="field" style="grid-column:span 2"><label>หมายเหตุ (ไม่บังคับ)</label><input id="cmReason" placeholder="เช่น ยอดขายเดือน ก.ค."></div>
+      </div>
+      <div style="margin-top:14px;padding:14px 16px;background:linear-gradient(135deg,#f0fdf4,#fff);border:1px solid #86efac;border-radius:12px;text-align:center">
+        <div class="hint" style="margin-bottom:4px">ค่าคอมมิชชั่นที่จะได้รับ</div>
+        <div id="cmResult" style="font-size:26px;font-weight:800;color:#15803d">฿0</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="saveCommission()">💾 บันทึกเป็นค่าคอมฯ</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+  calcCommission();
+}
+function calcCommission(){
+  const sales = Number(document.getElementById("cmSales").value)||0;
+  const pct = Number(document.getElementById("cmPct").value)||0;
+  const val = Math.round(sales * pct / 100);
+  const el = document.getElementById("cmResult"); if(el) el.textContent = "฿"+fmt(val);
+  return val;
+}
+async function saveCommission(){
+  const empId = Number(document.getElementById("cmEmp").value);
+  const sales = Number(document.getElementById("cmSales").value)||0;
+  const pct = Number(document.getElementById("cmPct").value)||0;
+  const amount = calcCommission();
+  if(amount<=0){ toast("ยอดขาย/เปอร์เซ็นต์ไม่ถูกต้อง — ค่าคอมฯ ต้องมากกว่า 0"); return; }
+  const extraNote = document.getElementById("cmReason").value;
+  const reason = `ยอดขาย ฿${fmt(sales)} × ${pct}%${extraNote?` · ${extraNote}`:""}`;
+  const payload = {
+    employee_id: empId, type: "คอมมิชชั่น", reason, amount,
+    bonus_date: document.getElementById("cmDate").value || todayISODate(),
+    status: document.getElementById("cmStatus").value, created_by: loggedInEmployeeId
+  };
+  const { error } = await sb.from("bonuses").insert(payload);
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  await loadBonuses();
+  logAudit("payroll","บันทึกค่าคอมมิชชั่น", `${E(empId)?.name||""} · ฿${fmt(amount)} (ยอดขาย ฿${fmt(sales)} × ${pct}%)`);
+  closeModal(); render("payroll");
+  toast(`บันทึกค่าคอมมิชชั่น ฿${fmt(amount)} แล้ว ✓`);
 }
 
 let reportFilter = {cycle:"all", from:"", to:""};
