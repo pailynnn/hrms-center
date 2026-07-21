@@ -4416,6 +4416,57 @@ async function delDeduct(dedId, empId){
   logAudit("payroll","ยกเลิกรายการหักประจำ", `${e.name} · ${d.label} ฿${fmt(d.amount)}/เดือน`);
   closeModal(); render("payroll"); toast(`ยกเลิกรายการหัก "${d.label}" แล้ว ✓`);
 }
+// แก้ไขรายการหักที่มีอยู่ (เดิมทำได้แค่ลบ) — แก้หมวดหมู่/ยอดต่อเดือน/จำนวนงวด/จำนวนงวดที่หักไปแล้วได้
+function openDeductEditModal(dedId, empId){
+  const e = E(empId);
+  const d = (e?.deductions||[]).find(x=>String(x.id)===String(dedId));
+  if(!d){ toast("ไม่พบรายการหัก"); return; }
+  const cats = deductionCats();
+  // ให้ code เดิมมีในตัวเลือกเสมอ แม้หมวดหมู่จะถูกปิด/ลบ หรือเป็นรายการที่ระบบสร้างจากทรัพย์สิน (จะได้ไม่เผลอเปลี่ยนหมวดหมู่ตอนแก้ยอด)
+  const catOpts = cats.map(t=>`<option value="${t.code}" ${t.code===d.code?'selected':''}>${t.name}</option>`);
+  if(!cats.some(t=>t.code===d.code)) catOpts.unshift(`<option value="${d.code}" selected>${d.label} (หมวดเดิม)</option>`);
+  const isInstallment = d.monthsTotal>1;
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">✏️</div>
+      <div><h3 style="font-size:16px">แก้ไขรายการหักประจำ</h3><div class="hint">${e.name} · ${d.label}</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>หมวดหมู่</label><select id="edDedCat">${catOpts.join("")}</select></div>
+      <div class="field" style="margin-top:10px"><label>จำนวนเงินต่อเดือน (บาท)</label><input id="edDedAmount" type="number" value="${d.amount}"></div>
+      <div class="field" style="margin-top:10px"><label>จำนวนงวดทั้งหมด (1 = หักครั้งเดียว)</label><input id="edDedMonths" type="number" min="1" value="${d.monthsTotal}"></div>
+      <div class="field" style="margin-top:10px"><label>หักไปแล้ว (งวด)</label><input id="edDedPaid" type="number" min="0" value="${d.monthsPaid}"></div>
+      <div class="hint" style="margin-top:12px;padding:10px 12px;background:#fff9f0;border-radius:10px;line-height:1.6">
+        ✏️ แก้ยอด/จำนวนงวดจะมีผลกับ<b>งวดที่ยังไม่ถูกหัก</b>เท่านั้น (งวดที่จ่ายไปแล้วไม่เปลี่ยนย้อนหลัง)<br>
+        ${isInstallment?`ตอนนี้ผ่อนไปแล้ว <b>${d.monthsPaid}/${d.monthsTotal}</b> งวด — ถ้าตั้ง "หักไปแล้ว" = จำนวนงวดทั้งหมด รายการจะถือว่าชำระครบทันที`:'รายการนี้เป็นแบบหักครั้งเดียว — เพิ่มจำนวนงวดทั้งหมดเพื่อเปลี่ยนเป็นผ่อนหลายเดือนได้'}
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="saveDeductEdit('${dedId}','${empId}')">💾 บันทึกการแก้ไข</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function saveDeductEdit(dedId, empId){
+  const e = E(empId);
+  const orig = (e?.deductions||[]).find(x=>String(x.id)===String(dedId));
+  if(!orig){ toast("ไม่พบรายการหัก"); return; }
+  const code = document.getElementById("edDedCat").value;
+  // ถ้าเลือกหมวดหมู่จริง ใช้ชื่อหมวดหมู่เป็น label · ถ้าเป็น code เดิม (หมวดถูกปิด/มาจากทรัพย์สิน) คงชื่อเดิมไว้
+  const label = deductionCats().find(t=>t.code===code)?.name || orig.label;
+  const amount = Number(document.getElementById("edDedAmount").value)||0;
+  const monthsTotal = Math.max(1, Number(document.getElementById("edDedMonths").value)||1);
+  const monthsPaid = Math.max(0, Number(document.getElementById("edDedPaid").value)||0);
+  if(amount<=0){ toast("กรุณาระบุจำนวนเงินให้ถูกต้อง"); return; }
+  if(monthsPaid>monthsTotal){ toast("⚠️ จำนวนงวดที่หักไปแล้วต้องไม่เกินจำนวนงวดทั้งหมด"); return; }
+  const { error } = await sb.from("employee_deductions")
+    .update({ code, label, amount, months_total: monthsTotal, months_paid: monthsPaid }).eq("id", dedId);
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  await loadDeductions();
+  logAudit("payroll","แก้ไขรายการหักประจำ", `${e?.name} · ${label} ฿${fmt(amount)}/เดือน · ${monthsPaid}/${monthsTotal} งวด`);
+  closeModal(); render("payroll");
+  toast(`แก้ไขรายการหัก "${label}" ของ ${e?.name} แล้ว ✓`);
+}
 
 /* ============ DEDUCTIONS HUB — จัดการหักประจำ/ผ่อนชำระทุกคนในที่เดียว (ไม่ต้องไปแก้ในโปรไฟล์พนักงานทีละคน) ============ */
 let dedFilter = { emp:"all", status:"active" };
@@ -4461,14 +4512,17 @@ function pyDeductions(){
     </div>
     ${filtered.length===0?'<div class="hint" style="text-align:center;padding:20px">ไม่พบรายการตามเงื่อนไขที่เลือก</div>':`
     <table>
-      <tr><th>พนักงาน</th><th>รายการ</th><th class="num">ยอด/เดือน</th><th>ความคืบหน้า</th><th>สถานะ</th><th style="text-align:center"></th></tr>
+      <tr><th>พนักงาน</th><th>รายการ</th><th class="num">ยอด/เดือน</th><th>ความคืบหน้า</th><th>สถานะ</th><th style="text-align:center">จัดการ</th></tr>
       ${filtered.map(d=>{const paidOff=d.monthsPaid>=d.monthsTotal;return `<tr style="${paidOff?'opacity:.65':''}">
         <td>${empCell(d.emp,true)}</td>
         <td style="font-size:13px">${d.label}</td>
         <td class="num">฿${fmt(d.amount)}</td>
         <td style="min-width:140px"><div style="display:flex;align-items:center;gap:8px"><div style="width:80px;height:7px;background:#e7eaf1;border-radius:6px;overflow:hidden"><div style="height:100%;width:${Math.min(100,d.monthsPaid/d.monthsTotal*100)}%;background:${paidOff?'var(--green)':'var(--accent)'}"></div></div><span style="font-size:11.5px">${d.monthsPaid}/${d.monthsTotal}</span></div></td>
         <td>${paidOff?'<span class="pill green">✓ ชำระครบแล้ว</span>':'<span class="pill amber">กำลังหัก</span>'}</td>
-        <td style="text-align:center">${paidOff?'—':`<button class="btn danger xs" onclick="delDeduct('${d.id}','${d.emp.id}')">🗑 ยกเลิก</button>`}</td>
+        <td style="text-align:center;white-space:nowrap">
+          <button class="btn ghost xs" onclick="openDeductEditModal('${d.id}','${d.emp.id}')">✏️ แก้ไข</button>
+          ${paidOff?'':`<button class="btn danger xs" onclick="delDeduct('${d.id}','${d.emp.id}')">🗑 ยกเลิก</button>`}
+        </td>
       </tr>`;}).join("")}
     </table>`}
   </div>`;
