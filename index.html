@@ -1559,7 +1559,8 @@ function calcPay(e){
   const absentDeduct = (e.type==="monthly" && !isWfhExempt) ? Math.round((e.att.absent+overQuota)*dayRate) : 0;
   // #3 ลาไม่รับค่าจ้าง: หักตามวันสำหรับรายเดือนเสมอ (แม้เป็น WFH ก็หัก เพราะเลือกลาไม่รับค่าจ้างเอง)
   const unpaidLeaveDeduct = e.type==="monthly" ? Math.round((e.att.unpaidLeave||0)*dayRate) : 0;
-  const lateDeduct = settings.latePolicy==="deduct" ? e.att.lateMin*settings.latePerMin : 0;
+  // หักมาสายเริ่มมีผลจาก "งวดปัจจุบัน" เป็นต้นไปเท่านั้น — งวดเก่าที่ดูย้อนหลัง (payrollOffset<0) ไม่เคยถูกหักจริง จึงไม่คำนวณ/แสดงย้อนหลัง กันสับสน
+  const lateDeduct = (settings.latePolicy==="deduct" && payrollOffset>=0) ? e.att.lateMin*settings.latePerMin : 0;
   const advanceDeduct = (e.advances||[]).reduce((s,a)=>s+(Number(a.amount)||0),0); // เบิกล่วงหน้าที่อนุมัติแล้ว รอหักงวดนี้
   const otherDeduct = (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal).reduce((s,d)=>s+d.amount,0)
     + advanceDeduct
@@ -3474,10 +3475,10 @@ function attLate(){
         <td>${empCell(e)}</td>
         <td class="num"><b>${e.att.lateMin}</b> นาที</td>
         <td>${e.att.lateMin>60?'<span class="pill red">สายบ่อย</span>':'<span class="pill amber">สายบางวัน</span>'}</td>
-        <td class="num">฿${fmt(e.att.lateMin*settings.latePerMin)}</td>
+        <td class="num">${payrollOffset<0?'<span class="hint" style="font-size:11px">งวดเก่า — ไม่หัก</span>':'฿'+fmt(e.att.lateMin*settings.latePerMin)}</td>
       </tr>`).join("")}
     </table>`}
-    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ มีผลกับงวดร่างเลย</div>
+    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ มีผลกับงวดร่างปัจจุบันเท่านั้น (งวดเก่าที่ดูย้อนหลังจะไม่ถูกหักย้อนหลัง)</div>
   </div>`;
 }
 function attLoc(){
@@ -4326,7 +4327,7 @@ function pyCalc(){
         <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เฉลี่ยเข้ากลางรอบ ${Math.round(p.prorate*100)}%</div>`:''}</td>
         <td class="num" style="color:${p.extra?'var(--green)':'inherit'}">${p.extra?'+฿'+fmt(p.extra):'—'}</td>
         <td class="num" style="color:${(p.absentDeduct+p.unpaidLeaveDeduct)?'var(--red)':'inherit'}">${(p.absentDeduct+p.unpaidLeaveDeduct)?'-฿'+fmt(p.absentDeduct+p.unpaidLeaveDeduct):'—'}${p.unpaidLeaveDeduct?`<div style="font-size:10px;color:var(--muted)">ลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน</div>`:''}</td>
-        <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
+        <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':payrollOffset<0?'<span style="font-size:11px">งวดเก่า — ไม่หัก</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
         <td class="num" style="color:${p.otherDeduct?'var(--red)':'var(--muted)'}">${p.otherDeduct?'-฿'+fmt(p.otherDeduct):'—'}${activeDeductions(e).length?`<div style="font-size:10.5px;color:var(--muted)">${activeDeductions(e).map(d=>d.label+' ('+d.monthsPaid+'/'+d.monthsTotal+')').join(', ')}</div>`:''}</td>
         <td class="num"><b style="font-size:15px">฿${fmt(p.net)}</b></td>
         <td style="white-space:nowrap">${locked?'🔒':`<button class="btn ghost xs" onclick="openOverrideModal('${e.id}')">💵 Override เงิน</button>`}</td>
