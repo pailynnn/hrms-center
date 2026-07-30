@@ -840,7 +840,8 @@ async function loadDeductions(){
       id: row.id, code: row.code || "other",
       label: row.label || (DEDUCTION_TYPES.find(t=>t.code===row.code)?.name ?? "รายการหักอื่นๆ"),
       amount: Number(row.amount)||0,
-      monthsTotal: row.months_total, monthsPaid: row.months_paid
+      monthsTotal: row.months_total, monthsPaid: row.months_paid,
+      note: row.note || ""
     });
   });
 }
@@ -977,6 +978,9 @@ async function loadCycleStats(cy){
       if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
       return true;
     }).length;
+    const fullExpected = workdates.filter(dISO=>!isHolidayFor(dISO, e)).length; // วันทำงานทั้งรอบ (ไม่คิดวันเริ่มงาน) — ใช้เฉลี่ยเงินเดือนคนเข้ากลางรอบ
+    // #1 คนเข้างานกลางรอบ (รายเดือน): เฉลี่ยเงินเดือนงวดแรกตามสัดส่วน "วันทำงานที่อยู่จริง ÷ วันทำงานทั้งรอบ"
+    e.prorateFactor = (fullExpected>0 && expected<fullExpected) ? (expected/fullExpected) : 1;
     e.override = overrides.find(o=>String(o.employee_id)===String(e.id)) || null;
     e.advances = advances.filter(a=>String(a.employee_id)===String(e.id));
     const att = (attRes.data||[]).filter(a=>String(a.employee_id)===String(e.id));
@@ -987,11 +991,13 @@ async function loadCycleStats(cy){
     const apprLeaves = (lvRes.data||[]).filter(l=>String(l.employee_id)===String(e.id)&&l.supervisor_status==="approved"&&l.hr_status==="approved");
     const leaveDays = apprLeaves.length;
     e.leaveUsed = apprLeaves.filter(l=>LT(l.leave_type)?.paid==="quota").length;
+    // #3 ลาไม่รับค่าจ้าง (paid==="unpaid" เช่น "ลาไม่รับค่าจ้าง"/พักร้อนที่ยังไม่เปิด) — หักตามวันสำหรับรายเดือน (เดิมไม่ถูกหักเลย)
+    const unpaidLeave = apprLeaves.filter(l=>LT(l.leave_type)?.paid==="unpaid").length;
     // ขาดงาน = เฉพาะวันที่ HR "ยืนยันขาด" แล้วเท่านั้น (Exception-based) — การลืมลงเวลาไม่ถูกหักอัตโนมัติ
     const absentConfirmed = att.filter(a=>a.status==="absent").length;
     // missing = วันที่ควรมาแต่ไม่มีบันทึกใดๆ เลย → รอ HR ตรวจสอบในแท็บ "ตรวจสอบย้อนหลัง"
     const missing = Math.max(0, expected - workDays - leaveDays - absentConfirmed);
-    e.att = { workDays, lateMin, lateCount, leaveDays, absent: absentConfirmed, missing, expected };
+    e.att = { workDays, lateMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected };
     // OT: ถ้าตั้งค่า "ต้องอนุมัติก่อน" → นับเฉพาะที่อนุมัติแล้ว · ถ้าปิด → นับทุกใบที่ไม่ถูกปฏิเสธ
     const myOt = (otRes.data||[]).filter(o=>String(o.employee_id)===String(e.id));
     const countable = myOt.filter(o=> settings.otRequiresApproval ? o.status==="approved" : o.status!=="rejected");
@@ -1034,21 +1040,22 @@ async function approvePayroll(cy){
     // รายการหักแบบแยกบรรทัด (ชื่อ + จำนวนเงิน + งวดผ่อน) — เก็บเป็น JSON เพื่อโชว์รายละเอียดในสลิปให้พนักงานเข้าใจว่าถูกหักอะไรบ้าง
     const dedItems = [];
     if(pay.absentDeduct) dedItems.push({label:"หักขาดงาน/ลาเกินโควตา", amount: pay.absentDeduct});
+    if(pay.unpaidLeaveDeduct) dedItems.push({label:`หักลาไม่รับค่าจ้าง (${e.att.unpaidLeave} วัน)`, amount: pay.unpaidLeaveDeduct});
     if(pay.lateDeduct)   dedItems.push({label:"หักมาสาย", amount: pay.lateDeduct});
     if(pay.advanceDeduct) dedItems.push({label:"หักเบิกเงินล่วงหน้า (หักครั้งเดียวงวดนี้)", amount: pay.advanceDeduct});
     activeDeductions(e).forEach(d=>{
       dedItems.push({
         label: d.label,
         amount: d.amount,
-        note: d.monthsTotal>1 ? `ผ่อนงวดที่ ${d.monthsPaid+1}/${d.monthsTotal}` : ""
+        note: [d.note||"", d.monthsTotal>1 ? `ผ่อนงวดที่ ${d.monthsPaid+1}/${d.monthsTotal}` : ""].filter(Boolean).join(" · ")
       });
     });
     return {
       employee_id: e.id, cycle: cy, cycle_start_date: p.start, cycle_end_date: p.end,
       total_work_days: e.att.workDays, base_total: pay.base,
-      leave_deduction: pay.absentDeduct,
+      leave_deduction: pay.absentDeduct + pay.unpaidLeaveDeduct,
       other_deductions: pay.lateDeduct + pay.otherDeduct,
-      deduction_remarks: [pay.lateDeduct?`หักมาสาย ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
+      deduction_remarks: [pay.unpaidLeaveDeduct?`หักลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน ฿${fmt(pay.unpaidLeaveDeduct)}`:"", pay.lateDeduct?`หักมาสาย ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
       deduction_items: dedItems.length ? JSON.stringify(dedItems) : null,
       addition_amount: pay.extra, addition_remarks: [otNote, bonusNotes].filter(Boolean).join(" · ") || null,
       net_pay: pay.net, status: "approved"
@@ -1470,18 +1477,22 @@ function calcPay(e){
   const ov = e.override || null; // Override จากหน้า Payroll Preview
   const dayRate = e.type==="monthly" ? e.rate/30 : e.rate;
   const effWorkDays = (ov && ov.work_days!=null && ov.work_days!=="") ? Number(ov.work_days) : e.att.workDays;
-  const base = e.type==="monthly" ? e.rate : e.rate*effWorkDays;
+  // #1 รายเดือน: ถ้าเข้างานกลางรอบ เฉลี่ยเงินเดือนตามสัดส่วนวันทำงาน (prorateFactor<1) · คนเต็มรอบ = 1 (เต็มเดือน)
+  const prorate = (e.type==="monthly" && e.prorateFactor!=null) ? e.prorateFactor : 1;
+  const base = e.type==="monthly" ? Math.round(e.rate * prorate) : e.rate*effWorkDays;
   const overQuota = e.type==="monthly" ? Math.max(0, e.leaveUsed - settings.paidLeaveQuota) : 0;
   const isWfhExempt = e.type==="monthly" && e.wfh;
   const absentDeduct = (e.type==="monthly" && !isWfhExempt) ? Math.round((e.att.absent+overQuota)*dayRate) : 0;
+  // #3 ลาไม่รับค่าจ้าง: หักตามวันสำหรับรายเดือนเสมอ (แม้เป็น WFH ก็หัก เพราะเลือกลาไม่รับค่าจ้างเอง)
+  const unpaidLeaveDeduct = e.type==="monthly" ? Math.round((e.att.unpaidLeave||0)*dayRate) : 0;
   const lateDeduct = settings.latePolicy==="deduct" ? e.att.lateMin*settings.latePerMin : 0;
   const advanceDeduct = (e.advances||[]).reduce((s,a)=>s+(Number(a.amount)||0),0); // เบิกล่วงหน้าที่อนุมัติแล้ว รอหักงวดนี้
   const otherDeduct = (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal).reduce((s,d)=>s+d.amount,0)
     + advanceDeduct
     + (ov ? (Number(ov.extra_deduction)||0) : 0);
   const extra = (e.extra||0) + (e.otPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);
-  const net = base + extra - absentDeduct - lateDeduct - otherDeduct;
-  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, absentDeduct, lateDeduct, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, ov};
+  const net = base + extra - absentDeduct - unpaidLeaveDeduct - lateDeduct - otherDeduct;
+  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, ov, prorate};
 }
 function activeDeductions(e){return (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal);}
 const THAI_BANKS = ["KBANK (กสิกรไทย)","SCB (ไทยพาณิชย์)","BBL (กรุงเทพ)","KTB (กรุงไทย)","BAY (กรุงศรีอยุธยา)","TTB (ทหารไทยธนชาต)","GSB (ออมสิน)","BAAC (ธ.ก.ส.)","UOB (ยูโอบี)","CIMB (ซีไอเอ็มบี)"];
@@ -4100,7 +4111,7 @@ function openCycleSettingsModal(){
       <div class="grid" style="grid-template-columns:1fr 1fr;margin:8px 0 14px;gap:12px">
         <div class="field"><label>รอบการตัด</label><select id="cyCut">
           <option value="31" ${(settings.monthlyCutoffDay||25)>=31?'selected':''}>สิ้นเดือน (วันที่ 1 – วันสุดท้ายของเดือน)</option>
-          ${[25,20,15,10,5].map(d=>`<option value="${d}" ${(settings.monthlyCutoffDay||25)===d?'selected':''}>ตัดรอบวันที่ ${d} (${d+1} เดือนก่อน – ${d})</option>`).join("")}
+          ${[28,25,20,15,10,5].map(d=>`<option value="${d}" ${(settings.monthlyCutoffDay||25)===d?'selected':''}>ตัดรอบวันที่ ${d} (${d+1} เดือนก่อน – ${d})</option>`).join("")}
         </select></div>
         <div class="field"><label>วันจ่าย</label><select id="cyPay"><option value="0" ${!settings.monthlyPayDay?'selected':''}>สิ้นเดือน</option>${[1,5,10,15,25,28].map(d=>`<option value="${d}" ${settings.monthlyPayDay===d?'selected':''}>วันที่ ${d}</option>`).join("")}</select></div>
       </div>
@@ -4218,9 +4229,9 @@ function pyCalc(){
         <td>${empCell(e)}${p.ov?'<div style="margin-top:3px"><span class="pill amber" style="font-size:9.5px">✏️ Override'+(p.ov.note?': '+p.ov.note:'')+'</span></div>':''}</td>
         <td class="num"><b>${e.att.workDays}</b></td>
         <td class="num" style="font-size:12px">${e.att.leaveDays||0} / ${e.att.absent||0} / ${e.att.lateCount||0}${e.att.missing?'<div><span class="pill amber" style="font-size:9.5px">🧐 รอตรวจ '+e.att.missing+'</span></div>':''}</td>
-        <td class="num">฿${fmt(p.base)}</td>
+        <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เฉลี่ยเข้ากลางรอบ ${Math.round(p.prorate*100)}%</div>`:''}</td>
         <td class="num" style="color:${p.extra?'var(--green)':'inherit'}">${p.extra?'+฿'+fmt(p.extra):'—'}</td>
-        <td class="num" style="color:${p.absentDeduct?'var(--red)':'inherit'}">${p.absentDeduct?'-฿'+fmt(p.absentDeduct):'—'}</td>
+        <td class="num" style="color:${(p.absentDeduct+p.unpaidLeaveDeduct)?'var(--red)':'inherit'}">${(p.absentDeduct+p.unpaidLeaveDeduct)?'-฿'+fmt(p.absentDeduct+p.unpaidLeaveDeduct):'—'}${p.unpaidLeaveDeduct?`<div style="font-size:10px;color:var(--muted)">ลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน</div>`:''}</td>
         <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
         <td class="num" style="color:${p.otherDeduct?'var(--red)':'var(--muted)'}">${p.otherDeduct?'-฿'+fmt(p.otherDeduct):'—'}${activeDeductions(e).length?`<div style="font-size:10.5px;color:var(--muted)">${activeDeductions(e).map(d=>d.label+' ('+d.monthsPaid+'/'+d.monthsTotal+')').join(', ')}</div>`:''}</td>
         <td class="num"><b style="font-size:15px">฿${fmt(p.net)}</b></td>
@@ -4374,6 +4385,7 @@ function openDeductModal(empId){
     <div class="modal-body">
       <div class="field"><label>หมวดหมู่</label><select id="dedCat">${cats.map(t=>`<option value="${t.code}">${t.name}</option>`).join("")}</select></div>
       <div class="field" style="margin-top:10px"><label>จำนวนเงินต่อเดือน (บาท)</label><input id="dedAmount" type="number" value="1000"></div>
+      <div class="field" style="margin-top:10px"><label>หมายเหตุ (ไม่บังคับ)</label><input id="dedNote" placeholder="เช่น เบิกวันที่ 5 ก.ค. / ค่าปรับของเสีย ฯลฯ"></div>
       <div class="field" style="margin-top:10px"><label>รูปแบบการหัก</label>
         <select id="dedMode" onchange="document.getElementById('dedMonthsWrap').style.display=this.value==='installment'?'block':'none'">
           <option value="once">หักครั้งเดียว (งวดนี้)</option>
@@ -4397,8 +4409,9 @@ async function saveDeduct(empId){
   if(amount<=0){ toast("กรุณาระบุจำนวนเงินให้ถูกต้อง"); return; }
   const mode = document.getElementById("dedMode").value;
   const monthsTotal = mode==='installment' ? (Number(document.getElementById("dedMonths").value)||1) : 1;
+  const note = document.getElementById("dedNote").value.trim() || null;
   const { error } = await sb.from("employee_deductions").insert({
-    employee_id: e.id, code, label, amount, months_total: monthsTotal, months_paid: 0
+    employee_id: e.id, code, label, amount, months_total: monthsTotal, months_paid: 0, note
   });
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   await loadDeductions();
@@ -4436,6 +4449,7 @@ function openDeductEditModal(dedId, empId){
       <div class="field" style="margin-top:10px"><label>จำนวนเงินต่อเดือน (บาท)</label><input id="edDedAmount" type="number" value="${d.amount}"></div>
       <div class="field" style="margin-top:10px"><label>จำนวนงวดทั้งหมด (1 = หักครั้งเดียว)</label><input id="edDedMonths" type="number" min="1" value="${d.monthsTotal}"></div>
       <div class="field" style="margin-top:10px"><label>หักไปแล้ว (งวด)</label><input id="edDedPaid" type="number" min="0" value="${d.monthsPaid}"></div>
+      <div class="field" style="margin-top:10px"><label>หมายเหตุ (ไม่บังคับ)</label><input id="edDedNote" value="${(d.note||'').replace(/"/g,'&quot;')}" placeholder="เช่น เบิกวันที่ 5 ก.ค. / ค่าปรับของเสีย ฯลฯ"></div>
       <div class="hint" style="margin-top:12px;padding:10px 12px;background:#fff9f0;border-radius:10px;line-height:1.6">
         ✏️ แก้ยอด/จำนวนงวดจะมีผลกับ<b>งวดที่ยังไม่ถูกหัก</b>เท่านั้น (งวดที่จ่ายไปแล้วไม่เปลี่ยนย้อนหลัง)<br>
         ${isInstallment?`ตอนนี้ผ่อนไปแล้ว <b>${d.monthsPaid}/${d.monthsTotal}</b> งวด — ถ้าตั้ง "หักไปแล้ว" = จำนวนงวดทั้งหมด รายการจะถือว่าชำระครบทันที`:'รายการนี้เป็นแบบหักครั้งเดียว — เพิ่มจำนวนงวดทั้งหมดเพื่อเปลี่ยนเป็นผ่อนหลายเดือนได้'}
@@ -4457,10 +4471,11 @@ async function saveDeductEdit(dedId, empId){
   const amount = Number(document.getElementById("edDedAmount").value)||0;
   const monthsTotal = Math.max(1, Number(document.getElementById("edDedMonths").value)||1);
   const monthsPaid = Math.max(0, Number(document.getElementById("edDedPaid").value)||0);
+  const note = document.getElementById("edDedNote").value.trim() || null;
   if(amount<=0){ toast("กรุณาระบุจำนวนเงินให้ถูกต้อง"); return; }
   if(monthsPaid>monthsTotal){ toast("⚠️ จำนวนงวดที่หักไปแล้วต้องไม่เกินจำนวนงวดทั้งหมด"); return; }
   const { error } = await sb.from("employee_deductions")
-    .update({ code, label, amount, months_total: monthsTotal, months_paid: monthsPaid }).eq("id", dedId);
+    .update({ code, label, amount, months_total: monthsTotal, months_paid: monthsPaid, note }).eq("id", dedId);
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   await loadDeductions();
   logAudit("payroll","แก้ไขรายการหักประจำ", `${e?.name} · ${label} ฿${fmt(amount)}/เดือน · ${monthsPaid}/${monthsTotal} งวด`);
@@ -4515,7 +4530,7 @@ function pyDeductions(){
       <tr><th>พนักงาน</th><th>รายการ</th><th class="num">ยอด/เดือน</th><th>ความคืบหน้า</th><th>สถานะ</th><th style="text-align:center">จัดการ</th></tr>
       ${filtered.map(d=>{const paidOff=d.monthsPaid>=d.monthsTotal;return `<tr style="${paidOff?'opacity:.65':''}">
         <td>${empCell(d.emp,true)}</td>
-        <td style="font-size:13px">${d.label}</td>
+        <td style="font-size:13px">${d.label}${d.note?`<div style="font-size:11px;color:var(--muted)">📝 ${d.note}</div>`:''}</td>
         <td class="num">฿${fmt(d.amount)}</td>
         <td style="min-width:140px"><div style="display:flex;align-items:center;gap:8px"><div style="width:80px;height:7px;background:#e7eaf1;border-radius:6px;overflow:hidden"><div style="height:100%;width:${Math.min(100,d.monthsPaid/d.monthsTotal*100)}%;background:${paidOff?'var(--green)':'var(--accent)'}"></div></div><span style="font-size:11.5px">${d.monthsPaid}/${d.monthsTotal}</span></div></td>
         <td>${paidOff?'<span class="pill green">✓ ชำระครบแล้ว</span>':'<span class="pill amber">กำลังหัก</span>'}</td>
