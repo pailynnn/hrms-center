@@ -716,7 +716,7 @@ async function loadOtRequests(){
   }));
 }
 async function submitOt(){
-  const canPickOthers = canViewAll();
+  const canPickOthers = canSeePayroll();
   const empId = canPickOthers ? Number(document.getElementById("otEmp").value) : loggedInEmployeeId;
   if(canPickOthers && !empId){ toast("กรุณาเลือกพนักงาน"); return; }
   const dateISO = document.getElementById("otDate").value;
@@ -947,9 +947,50 @@ function refreshCycleLabels(){
 }
 function periodLabel(p){ return `${isoToThaiDisplay(p.start)} – ${isoToThaiDisplay(p.end)}`; }
 
+// ===== เลือกงวดย้อนหลังในหน้าทำจ่าย (payrollOffset: 0=งวดปัจจุบัน, -1=งวดก่อนหน้า, ...) =====
+// จำเป็นสำหรับโมเดล "ตัดรอบวันที่ X แล้วจ่ายทีหลัง" ที่ตอนจ่ายต้องเลือกงวดที่เพิ่งปิด (ไม่ใช่งวดที่มีวันนี้อยู่)
+let payrollOffset = 0;
+// ถอย/เดินงวดรายเดือนทีละงวด (รองรับทั้งโหมด "สิ้นเดือน" และ "ตัดวันที่ X")
+function stepMonthlyPeriod(cur, off){
+  let start = new Date(cur.start+"T00:00:00"), end = new Date(cur.end+"T00:00:00");
+  const cutRaw = Number(settings.monthlyCutoffDay)||25;
+  const n = Math.abs(off), dir = off<0?-1:1;
+  for(let i=0;i<n;i++){
+    if(dir<0){ // งวดก่อนหน้า
+      end = new Date(start.getFullYear(), start.getMonth(), start.getDate()-1); // วันก่อนวันเริ่มงวดปัจจุบัน
+      start = cutRaw>=31 ? new Date(end.getFullYear(), end.getMonth(), 1)
+                         : new Date(start.getFullYear(), start.getMonth()-1, start.getDate());
+    } else { // งวดถัดไป
+      start = new Date(end.getFullYear(), end.getMonth(), end.getDate()+1);
+      end = cutRaw>=31 ? new Date(start.getFullYear(), start.getMonth()+1, 0)
+                       : new Date(end.getFullYear(), end.getMonth()+1, end.getDate());
+    }
+  }
+  return {start:isoDate(start), end:isoDate(end)};
+}
+function periodByOffset(cy, off){
+  const cur = currentPeriod(cy);
+  if(!off) return cur;
+  if(cy==="monthly") return stepMonthlyPeriod(cur, off);
+  const days = cy==="weekly"?7 : cy==="biweekly"?14 : 1; // รอบอื่นเดินด้วยจำนวนวันคงที่
+  const s=new Date(cur.start+"T00:00:00"); s.setDate(s.getDate()+off*days);
+  const e=new Date(cur.end+"T00:00:00"); e.setDate(e.getDate()+off*days);
+  return {start:isoDate(s), end:isoDate(e)};
+}
+// งวดที่ระบบทำจ่ายกำลังทำงานอยู่จริง (ตาม offset ที่ผู้ใช้เลือก)
+function activePeriod(cy){ return periodByOffset(cy, payrollOffset); }
+async function setPayrollOffset(off){
+  payrollOffset = Number(off)||0;
+  const cy = payrollState.cycle;
+  runStep = null; // ให้เปิดที่ขั้นที่ควรทำต่อของงวดที่เลือก
+  await loadCycleStats(cy);
+  await loadPayrollStatus();
+  render("payroll");
+}
+
 // รวมสถิติ attendance + leave ของงวด แล้วเขียนลง e.att / e.leaveUsed (ที่ calcPay ใช้)
 async function loadCycleStats(cy){
-  const period = currentPeriod(cy);
+  const period = activePeriod(cy);
   const effEnd = period.end < todayISODate() ? period.end : todayISODate();
   const [attRes, lvRes, otRes] = await Promise.all([
     sb.from("attendances").select("employee_id,status,late_minutes,work_date").gte("work_date", period.start).lte("work_date", effEnd),
@@ -1009,8 +1050,8 @@ async function loadCycleStats(cy){
 // โหลดสถานะงวดปัจจุบันของทุกรอบจาก payroll_records จริง (ร่าง/อนุมัติ/จ่ายแล้ว)
 async function loadPayrollStatus(){
   await Promise.all(Object.keys(CYCLES).map(async cy=>{
-    const p = currentPeriod(cy);
-    CYCLES[cy].period = periodLabel(p); // อัปเดตป้ายช่วงงวดใน UI ให้เป็นวันที่จริง
+    const p = activePeriod(cy);
+    CYCLES[cy].period = periodLabel(p); // อัปเดตป้ายช่วงงวดใน UI ให้เป็นวันที่จริง (ตามงวดที่เลือก)
     const { data, error } = await sb.from("payroll_records").select("status").eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
     if(error){ console.error("loadPayrollStatus", cy, error); toastLoadError("สถานะรอบจ่ายเงินเดือน"); return; }
     payrollState.status[cy] = (data||[]).some(r=>r.status==="paid") ? "paid" : (data||[]).length ? "approved" : "draft";
@@ -1025,7 +1066,7 @@ async function recalcCycle(cy){
 // อนุมัติงวด: บันทึกตัวเลขที่แสดงอยู่ (รวมที่ HR แก้ไขย้อนหลัง) เป็นแถวใน payroll_records (สถานะ approved)
 // หมายเหตุ: ไม่ recalc ทับอัตโนมัติ เพื่อรักษาการแก้ไขย้อนหลังของ HR — ถ้าต้องการดึงข้อมูลลงเวลาล่าสุด กด "↻ คำนวณงวดนี้" ก่อน
 async function approvePayroll(cy){
-  const p = currentPeriod(cy);
+  const p = activePeriod(cy);
   const list = employees.filter(e=>e.cycle===cy && e.status!=="terminated");
   if(!list.length){ toast("ไม่มีพนักงานในรอบจ่ายนี้"); return; }
   if(!confirm(`ยืนยันอนุมัติงวด ${CYCLES[cy].name} (${periodLabel(p)}) จำนวน ${list.length} คน?`)) return;
@@ -1086,7 +1127,7 @@ async function autoDisposeFullyPaidAssets(){
 }
 // ยืนยันจ่าย: ล็อกงวด (status=paid) + ตัดงวดผ่อนของรายการหักประจำ + ปิดโบนัสงวดนี้เป็น "มีผลแล้ว"
 async function confirmPayroll(cy){
-  const p = currentPeriod(cy);
+  const p = activePeriod(cy);
   const list = employees.filter(e=>e.cycle===cy && e.status!=="terminated");
   const { error } = await sb.from("payroll_records").update({status:"paid", paid_at: new Date().toISOString()}).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end).eq("status","approved");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
@@ -1726,8 +1767,16 @@ function toggleSidebar(){
   document.getElementById("sidebarOverlay").classList.toggle("show");
 }
 function go(page,btn){
-  if((page==="settings"||page==="audit"||page==="assets") && !canAccessAdmin()){
+  if((page==="settings"||page==="audit") && !canAccessAdmin()){
     toast("🔒 เฉพาะ HR และ Super Admin เท่านั้นที่เข้าหน้านี้ได้");
+    return;
+  }
+  if(page==="assets" && !canManageAssets()){
+    toast("🔒 เฉพาะ HR / Super Admin / ผู้ช่วย HR เท่านั้น");
+    return;
+  }
+  if((page==="payroll"||page==="employees") && isHrAssistant()){
+    toast("🔒 ผู้ช่วย HR ไม่มีสิทธิ์เข้าหน้านี้ (ไม่เห็นข้อมูลเงินเดือน)");
     return;
   }
   document.querySelectorAll(".nav-item").forEach(b=>b.classList.remove("active"));
@@ -1972,7 +2021,7 @@ function updateSubtabArrows(){
 
 /* ================== PAGE: DASHBOARD ================== */
 function pgDashboard(){
-  if(!canViewAll()) return pgMyDashboard();
+  if(!canSeePayroll()) return pgMyDashboard(); // ผู้ช่วย HR เห็นแดชบอร์ดส่วนตัว (ไม่มียอดเงินเดือนรวม)
   const attKnown = attendanceToday.filter(a=>E(a.emp));
   const present = attKnown.filter(a=>a.in!=="—").length;
   const late = attKnown.filter(a=>a.status==="late").length;
@@ -2156,7 +2205,7 @@ function filteredEmployees(){
   });
 }
 function pgEmployees(){
-  if(!canViewAll()) return pgMyProfile();
+  if(!canSeePayroll()) return pgMyProfile(); // ผู้ช่วย HR ไม่เห็นรายชื่อ+ฐานเงินเดือน (กันเห็นเงินเดือน)
   const total = employees.length;
   const active = employees.filter(e=>e.status==="active").length;
   const probation = employees.filter(e=>e.status==="probation").length;
@@ -2820,12 +2869,12 @@ function pgAttendance(){
   <div class="subtabs-wrap"><button class="subtab-arrow left" onclick="scrollSubtabs(this,-160)">‹</button><div class="subtabs">
     ${tab("today","วันนี้","🕐")}
     ${tab("ot","ขอ OT","⏱️", canApproveLeave()&&otPending>0)}
-    ${canViewAll()?tab("review","ตรวจสอบย้อนหลัง","🧐", missingCount>0):''}
-    ${tab("adjust","แก้เวลา","🛠️", canApproveLeave()&&adjustRows!==null&&Array.isArray(adjustRows)&&adjustRows.some(a=>a.status==='pending'&&String(a.employee_id)!==String(loggedInEmployeeId)))}
+    ${canEditAttendance()?tab("review","ตรวจสอบย้อนหลัง","🧐", missingCount>0):''}
+    ${tab("adjust","แก้เวลา","🛠️", canEditAttendance()&&adjustRows!==null&&Array.isArray(adjustRows)&&adjustRows.some(a=>a.status==='pending'&&String(a.employee_id)!==String(loggedInEmployeeId)))}
     ${isPlain?'':tab("summary","สรุปเวลารายคน","📊")}
     ${isPlain?'':tab("late","สถิติมาสาย","⏰")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${t==="ot"?attOt():t==="adjust"?attAdjust():isPlain?attToday():(t==="review"&&canViewAll())?attReview():t==="summary"?attSummary():t==="late"?attLate():attToday()}`;
+  ${t==="ot"?attOt():t==="adjust"?attAdjust():isPlain?attToday():(t==="review"&&canEditAttendance())?attReview():t==="summary"?attSummary():t==="late"?attLate():attToday()}`;
 }
 
 /* ============ Missing Punch Regularization — ตรวจสอบวันที่ไม่มีบันทึกลงเวลา ============ */
@@ -2956,7 +3005,7 @@ function fmtHM(ts){ return ts ? new Date(ts).toLocaleTimeString("th-TH",{hour:"2
 function attAdjust(){
   if(adjustRows===null){ adjustRows="loading"; loadAdjustments().then(()=>{ if(currentPage==="attendance") render("attendance"); }); }
   const loading = !Array.isArray(adjustRows);
-  const canReview = canViewAll(); // ตาม Workflow: ยื่นคำขอ → HR อนุมัติ (ไม่ผ่านหัวหน้างาน)
+  const canReview = canEditAttendance(); // ตาม Workflow: ยื่นคำขอ → HR อนุมัติ (ไม่ผ่านหัวหน้างาน)
   const rows = loading?[]:adjustRows.filter(a=> canViewAll() ? true :
     (String(a.employee_id)===String(loggedInEmployeeId) || (E(a.employee_id)?.supervisorId===loggedInEmployeeId)));
   const stPill = st => st==='approved'?'<span class="pill green">✓ อนุมัติแล้ว</span>':st==='rejected'?'<span class="pill red">✗ ปฏิเสธ</span>':'<span class="pill amber">⏳ รออนุมัติ</span>';
@@ -3119,8 +3168,8 @@ function attReview(){
   </div>`;
 }
 function attOt(){
-  const canPickOthers = canViewAll();
-  const canApprove = canApproveLeave();
+  const canPickOthers = canSeePayroll();
+  const canApprove = canApproveLeave() && !isHrAssistant();
   const otRate = calcOTHourlyFor(myEmp()||employees[0]||{type:"monthly",rate:0});
   const stPill = s => s==="approved"?'<span class="pill green">✓ อนุมัติ</span>':s==="rejected"?'<span class="pill red">✕ ปฏิเสธ</span>':'<span class="pill amber">รออนุมัติ</span>';
   return `
@@ -3329,7 +3378,7 @@ function attSummary(){
     </div>
     ${loadingRange?'<div class="hint" style="margin-top:12px;text-align:center">⏳ กำลังดึงข้อมูล...</div>':`
     <table style="margin-top:12px">
-      <tr><th>พนักงาน</th><th>ประเภท</th><th class="num">มาทำงาน</th><th class="num">ขาด</th><th class="num">ลา (ใช้โควตา)</th><th class="num">มาสาย (นาที)</th><th class="num">OT เหมา</th>${canViewAll()&&!useRange?'<th style="text-align:center">แก้ไข</th>':''}</tr>
+      <tr><th>พนักงาน</th><th>ประเภท</th><th class="num">มาทำงาน</th><th class="num">ขาด</th><th class="num">ลา (ใช้โควตา)</th><th class="num">มาสาย (นาที)</th><th class="num">OT เหมา</th>${canEditAttendance()&&!useRange?'<th style="text-align:center">แก้ไข</th>':''}</tr>
       ${visibleEmployees().map(e=>{
         const r = useRange ? (attSummaryRangeData[e.id]||{workDays:0,absent:0,lateMin:0,leaveUsed:0}) : e.att;
         return `<tr>
@@ -3340,10 +3389,10 @@ function attSummary(){
         <td class="num">${useRange?r.leaveUsed:(e.type==="monthly"?e.leaveUsed+" / "+settings.paidLeaveQuota:'—')}</td>
         <td class="num">${r.lateMin?'<span class="pill amber">'+r.lateMin+'</span>':'—'}</td>
         <td class="num">${e.extra?'฿'+fmt(e.extra):'—'}</td>
-        ${canViewAll()&&!useRange?`<td style="text-align:center"><button class="btn ghost xs" onclick="openFixAttendanceModal('${e.id}')">✏️ แก้ไข</button></td>`:''}
+        ${canEditAttendance()&&!useRange?`<td style="text-align:center"><button class="btn ghost xs" onclick="openFixAttendanceModal('${e.id}')">✏️ แก้ไข</button></td>`:''}
       </tr>`;}).join("")}
     </table>
-    ${canViewAll()&&!useRange?'<div class="hint" style="margin-top:12px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 วันที่ไม่มีบันทึกลงเวลา = สถานะ "รอตรวจสอบ" (ยังไม่หัก/ยังไม่จ่าย) — ไปยืนยันที่แท็บ <b>🧐 ตรวจสอบย้อนหลัง</b> · "ขาด" จะนับเฉพาะวันที่ HR ยืนยันแล้วเท่านั้น</div>':''}
+    ${canEditAttendance()&&!useRange?'<div class="hint" style="margin-top:12px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 วันที่ไม่มีบันทึกลงเวลา = สถานะ "รอตรวจสอบ" (ยังไม่หัก/ยังไม่จ่าย) — ไปยืนยันที่แท็บ <b>🧐 ตรวจสอบย้อนหลัง</b> · "ขาด" จะนับเฉพาะวันที่ HR ยืนยันแล้วเท่านั้น</div>':''}
     `}
   </div>`;
 }
@@ -3672,7 +3721,7 @@ function leaveTypes(){
 }
 
 function leaveSubmit(){
-  const canPickOthers = canViewAll();
+  const canPickOthers = canSeePayroll();
   return `
   <div class="grid" style="grid-template-columns:1.4fr 1fr">
     <div class="card">
@@ -3710,7 +3759,7 @@ function leaveSubmit(){
   </div>`;
 }
 async function doSubmitLeave(){
-  const canPickOthers = canViewAll();
+  const canPickOthers = canSeePayroll();
   const empId = canPickOthers ? Number(document.getElementById("lvEmp").value) : loggedInEmployeeId;
   if(canPickOthers && !empId){ toast("กรุณาเลือกพนักงาน"); return; }
   const typeCode = document.getElementById("lvType").value;
@@ -3889,7 +3938,7 @@ function leaveQuota(){
           <div style="height:8px;background:#e7eaf1;border-radius:8px;overflow:hidden">
             <div style="height:100%;width:${pct}%;background:${pct>=100?'var(--red)':'linear-gradient(90deg,#ffb020,#f7941d)'};border-radius:8px"></div>
           </div>
-          <div class="hint" style="margin-top:7px">ใช้ไป <b>${e.leaveUsed} / ${settings.paidLeaveQuota}</b> วัน ${e.leaveUsed>=settings.paidLeaveQuota?'· ครั้งถัดไปหัก ฿'+fmt(e.rate/30)+'/วัน':''}</div>
+          <div class="hint" style="margin-top:7px">ใช้ไป <b>${e.leaveUsed} / ${settings.paidLeaveQuota}</b> วัน ${e.leaveUsed>=settings.paidLeaveQuota&&canSeePayroll()?'· ครั้งถัดไปหัก ฿'+fmt(e.rate/30)+'/วัน':''}</div>
           <button class="btn ghost xs" style="margin-top:8px" onclick="toast('เดโม่: ปรับสิทธิ์วันลาของ ${e.name}')">ปรับสิทธิ์</button>
         </div>`;}).join("")}
     </div>
@@ -3903,6 +3952,7 @@ function leaveQuota(){
 
 /* ================== PAGE: PAYROLL ================== */
 function pgPayroll(){
+  if(isHrAssistant()) return noAccessCard("ผู้ช่วย HR ไม่มีสิทธิ์ดูข้อมูลเงินเดือน — ดูได้เฉพาะเวลาเข้า-ออก การลา และทรัพย์สิน");
   if(!canAccessPayroll()) return `
   <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#fff9f0,#fff);border:1px solid #f2c98a">
     <div class="hint">🔒 เมนูเงินเดือนแบบเต็มดูได้เฉพาะ HR และ Super Admin — คุณเห็นได้เฉพาะสลิปและข้อมูลเงินเดือนของตัวเอง (Self-Service)</div>
@@ -4017,6 +4067,13 @@ function pyRun(){
         </div>`).join("")}
     </div>
     <div class="hint" style="text-align:center;margin-top:6px">งวดที่เลือก: <b>${CYCLES[cy].name}</b> · ${CYCLES[cy].period} · สถานะ ${st==='paid'?'🔒 จ่ายแล้ว (Locked)':st==='approved'?'✅ อนุมัติแล้ว รอจ่าย':'📝 ฉบับร่าง'}${st==='paid'?' · สลิปพร้อมแจกจ่ายที่แท็บ 🧾':''}</div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <span class="hint">เลือกงวด:</span>
+      <select onchange="setPayrollOffset(this.value)" style="padding:7px 12px;border:1.5px solid var(--line);border-radius:9px;font-size:12.5px">
+        ${[0,-1,-2,-3].map(o=>`<option value="${o}" ${payrollOffset===o?'selected':''}>${o===0?'งวดปัจจุบัน':'งวดก่อนหน้า '+Math.abs(o)+' งวด'} (${periodLabel(periodByOffset(cy,o))})</option>`).join("")}
+      </select>
+    </div>
+    ${payrollOffset!==0?`<div class="hint" style="text-align:center;margin-top:8px;padding:8px 12px;background:#fff9f0;border:1px solid #f2c98a;border-radius:10px">⏪ กำลังทำจ่าย <b>งวดย้อนหลัง</b> (ปิดรอบไปแล้ว) — ใช้กรณีตัดรอบก่อนวันจ่าย เช่น ตัดวันที่ 28 แล้วจ่ายสิ้นเดือน · กลับงวดปัจจุบันได้ที่ช่องเลือกงวดด้านบน</div>`:''}
   </div>
   ${content}`;
 }
@@ -4062,7 +4119,7 @@ function pySlipStep(){
 }
 function pyCycles(){
   const cycleCard = (key,c)=>{const st=payrollState.status[key];return `
-    <div class="card" style="cursor:pointer;border:2px solid ${payrollState.cycle===key?'var(--accent)':'transparent'};position:relative" onclick="payrollState.cycle='${key}';goRunStep(2)">
+    <div class="card" style="cursor:pointer;border:2px solid ${payrollState.cycle===key?'var(--accent)':'transparent'};position:relative" onclick="payrollState.cycle='${key}';payrollOffset=0;goRunStep(2)">
       ${payrollState.cycle===key?'<div style="position:absolute;top:14px;right:14px;width:26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;font-size:14px">✓</div>':''}
       <h3 style="color:${payrollState.cycle===key?'var(--blue)':'var(--text)'}">${c.name}</h3>
       <div class="hint">${c.desc}</div>
@@ -4349,7 +4406,7 @@ async function clearOverride(empId){
 /* ---------- ปลดล็อกงวด (เฉพาะ Super Admin) ---------- */
 async function unlockPayroll(cy){
   if(!canViewAll()){ toast("เฉพาะ Super Admin และ HR เท่านั้น"); return; }
-  const p = currentPeriod(cy);
+  const p = activePeriod(cy);
   if(!confirm(`⚠️ ปลดล็อกงวด ${CYCLES[cy].name} (${periodLabel(p)})?\nระบบจะลบรายการที่บันทึกไว้ของงวดนี้ และคืนสถานะรายการหักประจำ/โบนัส/เบิกล่วงหน้าที่ตัดไปแล้วกลับเป็นเหมือนก่อนจ่าย เพื่อแก้ไขและอนุมัติใหม่`)) return;
   const { error } = await sb.from("payroll_records").delete().eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
@@ -4546,7 +4603,7 @@ function pyDeductions(){
 /* ============ PAYROLL PRE-CHECK ก่อนอนุมัติ ============ */
 function checkPayrollReadiness(cy){
   const list = employees.filter(e=>e.cycle===cy && e.status!=="terminated");
-  const p = currentPeriod(cy);
+  const p = activePeriod(cy);
   const issues = [];
   list.forEach(e=>{
     const probs = [];
@@ -4716,7 +4773,7 @@ let loggedInEmployeeId = null;
 let currentRoleCode = null; // 'super_admin' | 'hr' | 'supervisor' | 'employee' — มาจาก RPC current_role_name()
 let signatures = {}; // keyed by employee id, only super_admin/hr (ผู้มีสิทธิ์อนุมัติ) ใช้
 
-const ROLE_LABELS = { super_admin:"Super Admin", hr:"HR", supervisor:"หัวหน้างาน", employee:"พนักงาน" };
+const ROLE_LABELS = { super_admin:"Super Admin", hr:"HR", supervisor:"หัวหน้างาน", employee:"พนักงาน", hr_assistant:"ผู้ช่วย HR" };
 function roleOf(empId){
   if(empId===loggedInEmployeeId && currentRoleCode) return ROLE_LABELS[currentRoleCode] || "พนักงาน";
   return "พนักงาน";
@@ -4725,11 +4782,17 @@ function canSign(empId){ return empId===loggedInEmployeeId && (currentRoleCode==
 
 /* ============ ROLE-BASED VISIBILITY ============ */
 function myEmp(){ return E(loggedInEmployeeId); }
-function canViewAll(){ return currentRoleCode==="super_admin" || currentRoleCode==="hr"; }
+function isHrAssistant(){ return currentRoleCode==="hr_assistant"; }
+// canViewAll = เห็นข้อมูล "ปฏิบัติการ" ของทุกคน (เวลา/ลา/ทรัพย์สิน) — รวมผู้ช่วย HR ด้วย
+function canViewAll(){ return currentRoleCode==="super_admin" || currentRoleCode==="hr" || currentRoleCode==="hr_assistant"; }
 function isTeamLead(){ return currentRoleCode==="supervisor"; }
-function canApproveLeave(){ return canViewAll() || isTeamLead(); }
-function canAccessPayroll(){ return canViewAll(); }
-function canAccessAdmin(){ return canViewAll(); }
+// canSeePayroll = เห็น "เงินเดือน/สลิป/ฐานเงินเดือน" — เฉพาะ Super Admin / HR (ผู้ช่วย HR ไม่เห็นเงินเดือนทุกกรณี)
+function canSeePayroll(){ return currentRoleCode==="super_admin" || currentRoleCode==="hr"; }
+function canEditAttendance(){ return canSeePayroll(); } // ผู้ช่วย HR ดูเวลาได้อย่างเดียว แก้ไม่ได้
+function canManageAssets(){ return canSeePayroll() || isHrAssistant(); }
+function canApproveLeave(){ return canViewAll() || isTeamLead(); } // รวมผู้ช่วย HR (อนุมัติลาได้)
+function canAccessPayroll(){ return canSeePayroll(); }
+function canAccessAdmin(){ return canSeePayroll(); }
 function visibleEmployees(){
   // RLS ของ Supabase กรองแถวที่มองเห็นได้ตาม role มาให้ตั้งแต่ตอน loadEmployees() แล้ว
   // (admin/hr เห็นทุกคน, หัวหน้างานเห็นทีมตัวเอง, พนักงานเห็นแค่ตัวเอง)
@@ -4743,11 +4806,11 @@ function noAccessCard(msg){
   </div>`;
 }
 function applyRoleUI(){
-  const adminOnly = ["settings","audit","assets"];
-  adminOnly.forEach(p=>{
-    const el = document.querySelector(`[data-page=${p}]`);
-    if(el) el.style.display = canAccessAdmin() ? "" : "none";
-  });
+  // settings/audit = เฉพาะ Super Admin/HR · assets = รวมผู้ช่วย HR
+  ["settings","audit"].forEach(p=>{ const el=document.querySelector(`[data-page=${p}]`); if(el) el.style.display = canAccessAdmin() ? "" : "none"; });
+  const assetsEl = document.querySelector('[data-page=assets]'); if(assetsEl) assetsEl.style.display = canManageAssets() ? "" : "none";
+  // ผู้ช่วย HR: ซ่อนเมนูเงินเดือน + จัดการพนักงาน (กันเห็นเงินเดือนทุกทาง)
+  ["payroll","employees"].forEach(p=>{ const el=document.querySelector(`[data-page=${p}]`); if(el) el.style.display = isHrAssistant() ? "none" : ""; });
   // ซ่อนเมนู "เฟสถัดไป" (จัดการเอกสาร/ทริปบริษัท) จากพนักงานทั่วไป — ไม่ให้เห็นสิ่งที่ยังไม่เปิด
   const isPlainEmp = !canViewAll() && !isTeamLead();
   document.querySelectorAll('[data-future="1"]').forEach(el=>{ el.style.display = isPlainEmp ? "none" : ""; });
@@ -4817,7 +4880,7 @@ function showApp(){
   document.getElementById("appRoot").style.display="flex";
   applyRoleUI();
   initLangSwitch();
-  const landing = (!canViewAll() && !isTeamLead()) ? "attendance" : "dashboard";
+  const landing = (isHrAssistant() || (!canViewAll() && !isTeamLead())) ? "attendance" : "dashboard";
   go(landing, document.querySelector(`[data-page=${landing}]`));
 }
 function showLogin(msg){
@@ -4850,6 +4913,7 @@ function resetAppState(){
   subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work", projects:"board" };
   slipPeriod = {monthly:"current", weekly:"current", daily:"current"};
   slipPeriod.biweekly = "current";
+  payrollOffset = 0;
 }
 async function logout(){
   const me = myEmp();
@@ -6373,6 +6437,7 @@ const ROLE_OPTIONS = [
   {code:"super_admin", label:"Super Admin", pill:"red", desc:"ทุกอย่างในระบบ"},
   {code:"hr", label:"HR", pill:"amber", desc:"พนักงาน · ลา · เงินเดือน · ข่าวประกาศ"},
   {code:"supervisor", label:"หัวหน้างาน", pill:"blue", desc:"อนุมัติลา + ดูข้อมูลลูกทีม"},
+  {code:"hr_assistant", label:"ผู้ช่วย HR", pill:"purple", desc:"ดูเวลาเข้า-ออก + ดู/อนุมัติลา + จัดการทรัพย์สิน · ไม่เห็นเงินเดือน"},
   {code:"employee", label:"พนักงาน", pill:"gray", desc:"ESS ของตัวเอง"}
 ];
 let userRolesRows = null; // null=ยังไม่โหลด | array [{employee_id, role}]
@@ -7468,7 +7533,7 @@ function openAssetModal(id){
         <div class="field"><label>วันที่รับมอบทรัพย์สิน</label><input id="asAssigned" type="date" value="${a.assigned_date||""}"></div>
         <div class="field"><label>วันที่คืนทรัพย์สิน</label><input id="asReturned" type="date" value="${a.returned_date||""}"><span class="hint" style="font-size:10.5px">ใช้เมื่อพนักงานลาออก/คืนอุปกรณ์</span></div>
       </div>
-      ${isNew?`
+      ${isNew&&canSeePayroll()?`
       <div style="margin-top:12px;padding:12px;background:#fff9f0;border-radius:11px;border:1px solid #f2c98a">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input type="checkbox" id="asPersonal" onchange="document.getElementById('asPersonalOpts').style.display=this.checked?'grid':'none'">
         🧍 <b>ทรัพย์สินส่วนตัวพนักงาน — บริษัทสำรองจ่าย หักคืนจากเงินเดือน</b></label>
