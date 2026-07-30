@@ -979,6 +979,25 @@ function periodByOffset(cy, off){
 }
 // งวดที่ระบบทำจ่ายกำลังทำงานอยู่จริง (ตาม offset ที่ผู้ใช้เลือก)
 function activePeriod(cy){ return periodByOffset(cy, payrollOffset); }
+// เดินหน้า 1 งวดจากงวดที่กำหนด (ไม่อิง "วันนี้" — ต่างจาก periodByOffset) ใช้เลื่อนงวดเบิกล่วงหน้าที่ค้างอนุมัติจนงวดเดิมปิดจ่ายไปแล้ว
+function nextPeriodOf(cy, cur){
+  if(cy==="monthly") return stepMonthlyPeriod(cur, 1);
+  const days = cy==="weekly"?7 : cy==="biweekly"?14 : 1;
+  const s=new Date(cur.start+"T00:00:00"); s.setDate(s.getDate()+days);
+  const e=new Date(cur.end+"T00:00:00"); e.setDate(e.getDate()+days);
+  return {start:isoDate(s), end:isoDate(e)};
+}
+// หางวดเปิด (ยังไม่จ่าย) ถัดจากงวดที่ผูกไว้ — ใช้ตอนอนุมัติเบิกล่วงหน้าที่ยื่นไว้แต่ HR เพิ่งมากดอนุมัติหลังงวดเดิมจ่ายไปแล้ว (เลื่อนอัตโนมัติ)
+async function resolveOpenAdvancePeriod(cy, start, end){
+  let cur = {start, end};
+  for(let guard=0; guard<36; guard++){
+    const { data, error } = await sb.from("payroll_records").select("id").eq("cycle_start_date", cur.start).eq("cycle_end_date", cur.end).eq("status","paid").limit(1);
+    if(error){ console.error("resolveOpenAdvancePeriod", error); return cur; }
+    if(!data || !data.length) return cur;
+    cur = nextPeriodOf(cy, cur);
+  }
+  return cur;
+}
 async function setPayrollOffset(off){
   payrollOffset = Number(off)||0;
   const cy = payrollState.cycle;
@@ -1002,9 +1021,11 @@ async function loadCycleStats(cy){
   // Override จาก Payroll Preview (HR แก้ตัวเลขก่อนอนุมัติ)
   const ovRes = await sb.from("payroll_overrides").select("*").eq("cycle_start_date", period.start).eq("cycle_end_date", period.end);
   const overrides = ovRes.error?[]:(ovRes.data||[]);
-  // เบิกเงินล่วงหน้าที่อนุมัติแล้ว (รอหักงวดถัดไป = งวดนี้)
+  // เบิกเงินล่วงหน้าที่อนุมัติแล้ว และผูกไว้กับ "งวดนี้" โดยตรง (ผูกอัตโนมัติตอนยื่นขอ) — รายการเก่าก่อนอัปเดตระบบที่ยังไม่มีงวดผูก (target_cycle_start เป็น null) จะยังคงพฤติกรรมเดิมคือรอหักในงวดถัดไปที่ปิด
   const advRes = await sb.from("salary_advances").select("*").eq("status","approved");
-  const advances = advRes.error?[]:(advRes.data||[]);
+  const advances = advRes.error?[]:(advRes.data||[]).filter(a=>
+    (a.target_cycle_start===period.start && a.target_cycle_end===period.end) || !a.target_cycle_start
+  );
   // นับวันทำงานที่ควรมาในงวด (ตัดวันหยุดประจำสัปดาห์ + วันหยุดบริษัทจาก Holiday Calendar)
   const holidayDow = THAI_DAYS[settings.weeklyHoliday] ?? 0;
   const isWeeklyOff = d => settings.weeklyHoliday==="เสาร์-อาทิตย์" ? (d.getDay()===0||d.getDay()===6) : d.getDay()===holidayDow;
@@ -1120,7 +1141,8 @@ async function autoDisposeFullyPaidAssets(){
   for(const a of linked){
     const d = (deds||[]).find(x=>String(x.id)===String(a.deduction_id));
     if(d && d.months_paid>=d.months_total){
-      await sb.from("assets").update({ status:"disposed", ownership:"employee", note:"ผ่อนชำระครบแล้ว — โอนกรรมสิทธิ์เป็นของพนักงานสมบูรณ์ (อัตโนมัติ)", updated_at:new Date().toISOString() }).eq("id", a.id);
+      const r = await sb.from("assets").update({ status:"disposed", ownership:"employee", note:"ผ่อนชำระครบแล้ว — โอนกรรมสิทธิ์เป็นของพนักงานสมบูรณ์ (อัตโนมัติ)", updated_at:new Date().toISOString() }).eq("id", a.id);
+      if(r.error){ console.error("autoDisposeFullyPaidAssets", a.id, r.error); continue; }
       logAudit("assets","ผ่อนครบ → โอนกรรมสิทธิ์อัตโนมัติ", `${a.asset_code} ${a.name} · ${E(a.holder_id)?.name||a.holder_id}`);
     }
   }
@@ -1133,17 +1155,27 @@ async function confirmPayroll(cy){
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   payrollHistLoaded = false;
   logAudit("payroll", `ยืนยันจ่ายเงินงวด ${CYCLES[cy].name}`, `งวด ${periodLabel(p)} — ล็อกงวดแล้ว`);
-  // มาร์กเบิกล่วงหน้าที่หักในงวดนี้เป็น "หักแล้ว" (จะไม่ถูกหักซ้ำงวดหน้า)
-  await sb.from("salary_advances").update({ status:"deducted", deducted_cycle_start:p.start, deducted_cycle_end:p.end })
-    .in("employee_id", list.map(e=>e.id)).eq("status","approved");
+  // มาร์กเบิกล่วงหน้าที่ผูกกับงวดนี้โดยตรงเป็น "หักแล้ว" (ผูกอัตโนมัติตอนยื่นขอ — จะไม่ถูกหักซ้ำงวดหน้า และจะไม่ไปหักงวดอื่นที่ไม่ใช่งวดที่ยื่นขอ)
+  const advTargeted = await sb.from("salary_advances").update({ status:"deducted", deducted_cycle_start:p.start, deducted_cycle_end:p.end })
+    .in("employee_id", list.map(e=>e.id)).eq("status","approved").eq("target_cycle_start", p.start).eq("target_cycle_end", p.end);
+  if(advTargeted.error) console.error("confirmPayroll advances(targeted)", advTargeted.error);
+  // รายการเก่าก่อนอัปเดตระบบที่ยังไม่มีงวดผูก (target_cycle_start เป็น null) — คงพฤติกรรมเดิม: หักในงวดถัดไปที่ปิด
+  const advLegacy = await sb.from("salary_advances").update({ status:"deducted", deducted_cycle_start:p.start, deducted_cycle_end:p.end })
+    .in("employee_id", list.map(e=>e.id)).eq("status","approved").is("target_cycle_start", null);
+  if(advLegacy.error) console.error("confirmPayroll advances(legacy)", advLegacy.error);
   // ตัดงวดผ่อน: เพิ่ม months_paid ให้รายการหักที่ยังหักไม่ครบของพนักงานในรอบนี้
+  const writeFails = []; // เก็บรายการที่ตัดงวดไม่สำเร็จ ไว้แจ้งเตือน HR ท้ายสุด (ไม่ให้ error เงียบเหมือนบั๊กเบิกล่วงหน้าที่เจอก่อนหน้านี้)
   for(const e of list){
     for(const d of activeDeductions(e)){
-      await sb.from("employee_deductions").update({months_paid: d.monthsPaid+1, last_deducted_cycle_start:p.start, last_deducted_cycle_end:p.end}).eq("id", d.id);
+      const r = await sb.from("employee_deductions").update({months_paid: d.monthsPaid+1, last_deducted_cycle_start:p.start, last_deducted_cycle_end:p.end}).eq("id", d.id);
+      if(r.error){ console.error("confirmPayroll deduction cut", e.id, d.id, r.error); writeFails.push(`${e.name}: ${d.label}`); }
     }
     // โบนัสที่รวมงวดนี้ → มีผลแล้ว (จะไม่ถูกนับซ้ำงวดหน้า)
     const bIds = bonusRecords.filter(b=>String(b.emp)===String(e.id)&&b.status==="รวมงวดนี้").map(b=>b.id);
-    if(bIds.length) await sb.from("bonuses").update({status:"มีผลแล้ว", applied_cycle_start:p.start, applied_cycle_end:p.end}).in("id", bIds);
+    if(bIds.length){
+      const rb = await sb.from("bonuses").update({status:"มีผลแล้ว", applied_cycle_start:p.start, applied_cycle_end:p.end}).in("id", bIds);
+      if(rb.error){ console.error("confirmPayroll bonus apply", e.id, rb.error); writeFails.push(`${e.name}: โบนัส`); }
+    }
   }
   await Promise.all([loadDeductions(), loadBonuses()]);
   await autoDisposeFullyPaidAssets(); // ผ่อนครบ → โอนกรรมสิทธิ์ทรัพย์สินเป็นของพนักงานอัตโนมัติ
@@ -1151,7 +1183,8 @@ async function confirmPayroll(cy){
   list.forEach(e=>notifyLineBestEffort(e.id, `💰 เงินเดือนงวด ${periodLabel(p)} ของคุณจ่ายเรียบร้อยแล้ว ดูสลิปได้ที่แอป HRMS CENTER`));
   payrollState.status[cy] = "paid";
   goRunStep(6); // → ขั้นแจกสลิปพนักงาน
-  toast("บันทึกจ่ายเงินแล้ว 💸 งวดถูกล็อก · สลิปพร้อมแจกจ่าย — พนักงานเห็นของตัวเองใน Self-Service ทันที");
+  if(writeFails.length) toast(`⚠️ บันทึกจ่ายเงินแล้ว แต่มี ${writeFails.length} รายการตัดงวดผ่อน/โบนัสไม่สำเร็จ (${writeFails.slice(0,3).join(", ")}${writeFails.length>3?" ...":""}) — แจ้งผู้ดูแลระบบตรวจสอบ`);
+  else toast("บันทึกจ่ายเงินแล้ว 💸 งวดถูกล็อก · สลิปพร้อมแจกจ่าย — พนักงานเห็นของตัวเองใน Self-Service ทันที");
 }
 // ระยะทางระหว่าง 2 พิกัด (เมตร) — สูตร Haversine
 function distMeters(lat1,lng1,lat2,lng2){
@@ -2411,23 +2444,28 @@ async function completeOffboarding(id){
   ].join("\n");
   if(!confirm(cutMsg)) return;
   toast("⏳ กำลังดำเนินการ Offboarding...");
+  const offboardFails = [];
   for(const b of assetBoxes){
     const aid = Number(b.dataset.id);
     const a = assetRecords.find(x=>String(x.id)===String(aid)); if(!a) continue;
-    await sb.from("assets").update({ holder_id:null, status:"stock", returned_date:lastDay, updated_at:new Date().toISOString() }).eq("id", aid);
-    await sb.from("asset_transfers").insert({ asset_id:aid, from_holder:id, to_holder:null, transferred_by:loggedInEmployeeId, note:"Offboarding: รับคืนตอนพ้นสภาพ" });
+    const rA = await sb.from("assets").update({ holder_id:null, status:"stock", returned_date:lastDay, updated_at:new Date().toISOString() }).eq("id", aid);
+    if(rA.error){ console.error("offboard asset return", aid, rA.error); offboardFails.push(a.asset_code||("#"+aid)); }
+    const rT = await sb.from("asset_transfers").insert({ asset_id:aid, from_holder:id, to_holder:null, transferred_by:loggedInEmployeeId, note:"Offboarding: รับคืนตอนพ้นสภาพ" });
+    if(rT.error) console.error("offboard asset_transfers log", aid, rT.error);
   }
   const checklist = {};
   fixedBoxes.forEach(b=>checklist[b.dataset.key]=true);
   accessBoxes.forEach(b=>checklist["access_"+b.dataset.key]=true);
   checklist.assets = assetBoxes.map(b=>Number(b.dataset.id));
-  await sb.from("offboardings").insert({
+  const rOff = await sb.from("offboardings").insert({
     employee_id:id, last_work_date:lastDay, reason, checklist,
     assets_returned:true, access_revoked:true, completed:true, note,
     created_by:loggedInEmployeeId, completed_at:new Date().toISOString()
   });
+  if(rOff.error) console.error("offboardings insert", id, rOff.error);
   const { error } = await sb.from("employees").update({ status:"terminated", end_date:lastDay, resign_reason:reason }).eq("id", id);
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  if(offboardFails.length) toast(`⚠️ รับคืนทรัพย์สินไม่สำเร็จบางรายการ: ${offboardFails.join(", ")} — กรุณาตรวจสอบในหน้าทรัพย์สิน`);
   // ตัดสิทธิ์เว็บ (ban auth) + ยกเลิกผูก LINE อัตโนมัติ ผ่าน edge function
   let cutResult = "";
   try{
@@ -3868,11 +3906,10 @@ async function actLeave(id,level,status){
 async function syncLeaveToAttendance(empId, dateISO){
   if(!dateISO) return;
   const { data: existing } = await sb.from("attendances").select("id").eq("employee_id", empId).eq("work_date", dateISO).maybeSingle();
-  if(existing){
-    await sb.from("attendances").update({ status:"leave" }).eq("id", existing.id);
-  } else {
-    await sb.from("attendances").insert({ employee_id: empId, work_date: dateISO, status:"leave" });
-  }
+  const r = existing
+    ? await sb.from("attendances").update({ status:"leave" }).eq("id", existing.id)
+    : await sb.from("attendances").insert({ employee_id: empId, work_date: dateISO, status:"leave" });
+  if(r.error) console.error("syncLeaveToAttendance", empId, dateISO, r.error);
   if(dateISO === todayISODate()) await loadAttendanceToday();
 }
 
@@ -4411,24 +4448,29 @@ async function unlockPayroll(cy){
   const { error } = await sb.from("payroll_records").delete().eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   // คืนสถานะรายการหักประจำ/ผ่อนชำระที่ถูกตัดงวดไปในรอบนี้ กลับเป็น "กำลังหักอยู่"
+  const unlockFails = []; // เก็บรายการที่คืนสถานะไม่สำเร็จ ไว้แจ้งเตือน HR (แทนที่จะปล่อยเงียบเหมือนบั๊กเบิกล่วงหน้าที่เจอก่อนหน้านี้)
   const { data: dedRows } = await sb.from("employee_deductions").select("id, months_paid")
     .eq("last_deducted_cycle_start", p.start).eq("last_deducted_cycle_end", p.end);
   for(const d of (dedRows||[])){
-    await sb.from("employee_deductions").update({ months_paid: Math.max(0,(d.months_paid||0)-1), last_deducted_cycle_start:null, last_deducted_cycle_end:null }).eq("id", d.id);
+    const r = await sb.from("employee_deductions").update({ months_paid: Math.max(0,(d.months_paid||0)-1), last_deducted_cycle_start:null, last_deducted_cycle_end:null }).eq("id", d.id);
+    if(r.error){ console.error("unlockPayroll deduction revert", d.id, r.error); unlockFails.push("รายการหักประจำ #"+d.id); }
   }
   // คืนสถานะโบนัสที่ "มีผลแล้ว" ในงวดนี้ กลับเป็น "รวมงวดนี้"
-  await sb.from("bonuses").update({ status:"รวมงวดนี้", applied_cycle_start:null, applied_cycle_end:null })
+  const rBonus = await sb.from("bonuses").update({ status:"รวมงวดนี้", applied_cycle_start:null, applied_cycle_end:null })
     .eq("applied_cycle_start", p.start).eq("applied_cycle_end", p.end).eq("status","มีผลแล้ว");
+  if(rBonus.error){ console.error("unlockPayroll bonus revert", rBonus.error); unlockFails.push("โบนัส"); }
   // คืนสถานะเบิกล่วงหน้าที่ "หักแล้ว" ในงวดนี้ กลับเป็น "อนุมัติ — รอหักงวดถัดไป"
-  await sb.from("salary_advances").update({ status:"approved", deducted_cycle_start:null, deducted_cycle_end:null })
+  const rAdv = await sb.from("salary_advances").update({ status:"approved", deducted_cycle_start:null, deducted_cycle_end:null })
     .eq("deducted_cycle_start", p.start).eq("deducted_cycle_end", p.end).eq("status","deducted");
+  if(rAdv.error){ console.error("unlockPayroll advance revert", rAdv.error); unlockFails.push("เบิกเงินล่วงหน้า"); }
   await Promise.all([loadDeductions(), loadBonuses()]);
   advanceRows = null; // ให้หน้าเบิกล่วงหน้าโหลดสถานะใหม่ครั้งถัดไปที่เปิด
   payrollState.status[cy] = "draft";
   payrollHistLoaded = false;
   logAudit("payroll","🔓 ปลดล็อกงวดจ่าย (Admin)", `${CYCLES[cy].name} · ${periodLabel(p)} · คืนสถานะหักประจำ/โบนัส/เบิกล่วงหน้าแล้ว`);
   render("payroll");
-  toast("ปลดล็อกงวดแล้ว — กลับสู่ฉบับร่าง แก้ไขและอนุมัติใหม่ได้ (รายการหักประจำ/โบนัส/เบิกล่วงหน้ากลับสถานะเดิมแล้ว)");
+  if(unlockFails.length) toast(`⚠️ ปลดล็อกงวดแล้ว แต่คืนสถานะไม่สำเร็จ: ${unlockFails.join(", ")} — แจ้งผู้ดูแลระบบตรวจสอบก่อนอนุมัติจ่ายซ้ำ`);
+  else toast("ปลดล็อกงวดแล้ว — กลับสู่ฉบับร่าง แก้ไขและอนุมัติใหม่ได้ (รายการหักประจำ/โบนัส/เบิกล่วงหน้ากลับสถานะเดิมแล้ว)");
 }
 
 function openDeductModal(empId){
@@ -5166,13 +5208,15 @@ function pyAdvance(){
   const me = myEmp();
   const myRows = loading?[]:advanceRows.filter(a=>String(a.employee_id)===String(loggedInEmployeeId));
   const pendAll = loading?[]:advanceRows.filter(a=>a.status==="pending");
-  const stPill = a => a.status==="approved"?'<span class="pill blue">✓ อนุมัติ — รอหักงวดถัดไป</span>'
+  const stPill = a => a.status==="approved"?'<span class="pill blue">✓ อนุมัติ — รอหักงวดที่ผูกไว้</span>'
     :a.status==="deducted"?`<span class="pill green">✓ หักออกจากเงินเดือนแล้ว</span>`
     :a.status==="rejected"?'<span class="pill red">✗ ไม่อนุมัติ</span>':'<span class="pill amber">⏳ รออนุมัติ</span>';
+  const targetHint = a => (a.target_cycle_start && a.target_cycle_end && (a.status==="pending"||a.status==="approved"))
+    ? `<div class="hint" style="font-size:10px">จะหักในงวด ${isoToThaiDisplay(a.target_cycle_start)} – ${isoToThaiDisplay(a.target_cycle_end)}</div>` : '';
   const reqCard = `
   <div class="card" style="margin-bottom:16px">
     <h3>💳 ยื่นขอเบิกเงินล่วงหน้า</h3>
-    <div class="hint">อนุมัติแล้วระบบจะ<b>หักออกจากเงินเดือนงวดถัดไปโดยตรง (ครั้งเดียว)</b> ไม่ใช่เงินกู้ผ่อนจ่าย — แสดงเป็นรายการหักในสลิปงวดนั้น</div>
+    <div class="hint">ระบบจะ<b>ผูกกับงวดปัจจุบันอัตโนมัติตอนยื่นขอ</b> และหักออกจากเงินเดือนงวดนั้นครั้งเดียว (ไม่ใช่เงินกู้ผ่อนจ่าย) — ถ้า HR อนุมัติช้าจนงวดนั้นจ่ายไปแล้ว ระบบจะเลื่อนไปหักงวดถัดไปให้อัตโนมัติ</div>
     <div class="grid" style="grid-template-columns:200px 1fr auto;gap:12px;margin-top:12px;align-items:end">
       <div class="field"><label>จำนวนเงิน (บาท) <span style="color:var(--red)">*</span></label><input type="number" id="advAmt" min="1" placeholder="เช่น 3000"></div>
       <div class="field"><label>เหตุผล <span style="color:var(--red)">*</span></label><input id="advReason" placeholder="เช่น ค่ารักษาพยาบาลฉุกเฉิน"></div>
@@ -5190,14 +5234,14 @@ function pyAdvance(){
       <td style="font-size:12px">${new Date(a.requested_at).toLocaleDateString("th-TH")}</td>
       <td class="num"><b>฿${fmt(a.amount)}</b></td>
       <td class="hint" style="font-size:12.5px">${a.reason||"—"}</td>
-      <td>${stPill(a)}${a.status==='deducted'&&a.deducted_cycle_end?'<div class="hint" style="font-size:10px">งวด '+isoToThaiDisplay(a.deducted_cycle_start)+' – '+isoToThaiDisplay(a.deducted_cycle_end)+'</div>':''}</td>
+      <td>${stPill(a)}${targetHint(a)}${a.status==='deducted'&&a.deducted_cycle_end?'<div class="hint" style="font-size:10px">งวด '+isoToThaiDisplay(a.deducted_cycle_start)+' – '+isoToThaiDisplay(a.deducted_cycle_end)+'</div>':''}</td>
       <td style="text-align:center">${a.status==='pending'?`<button class="btn danger xs" onclick="cancelAdvance(${a.id})">✕ ยกเลิก</button>`:''}</td>
     </tr>`).join("")}</table>`}
   </div>`;
   const hrList = !isHR ? "" : `
   <div class="card">
     <h3>🗂️ คำร้องขอเบิกเงินล่วงหน้า (HR) ${pendAll.length?`<span class="pill red" style="margin-left:6px">${pendAll.length} รออนุมัติ</span>`:''}</h3>
-    <div class="hint">อนุมัติแล้วยอดจะถูก<b>หักออกจากเงินเดือนงวดถัดไปของพนักงานครั้งเดียว</b> (ไม่มีการผ่อนคืน/แบ่งงวด) — แสดงในสลิปว่า "หักเบิกล่วงหน้า"</div>
+    <div class="hint">ผูกงวดอัตโนมัติตามงวดที่พนักงานยื่นขอ — อนุมัติแล้วยอดจะถูก<b>หักออกจากเงินเดือนงวดนั้นของพนักงานครั้งเดียว</b> (ไม่มีการผ่อนคืน/แบ่งงวด) — แสดงในสลิปว่า "หักเบิกล่วงหน้า" (ถ้าอนุมัติช้าจนงวดที่ยื่นขอจ่ายไปแล้ว ระบบเลื่อนไปหักงวดถัดไปให้อัตโนมัติ)</div>
     ${loading?'<div class="hint" style="text-align:center;padding:20px">⏳ กำลังโหลด...</div>':
     advanceRows.length===0?'<div class="hint" style="text-align:center;padding:20px">ยังไม่มีคำขอ</div>':`
     <table style="margin-top:10px"><tr><th>ยื่นเมื่อ</th><th>พนักงาน</th><th class="num">จำนวน</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center"></th></tr>
@@ -5206,7 +5250,7 @@ function pyAdvance(){
       <td>${e?empCell(e,true):'#'+a.employee_id}</td>
       <td class="num"><b>฿${fmt(a.amount)}</b></td>
       <td class="hint" style="font-size:12.5px;max-width:180px">${a.reason||"—"}</td>
-      <td>${stPill(a)}${a.reviewed_by?'<div class="hint" style="font-size:10px">โดย '+(E(a.reviewed_by)?.name||"—")+'</div>':''}</td>
+      <td>${stPill(a)}${targetHint(a)}${a.reviewed_by?'<div class="hint" style="font-size:10px">โดย '+(E(a.reviewed_by)?.name||"—")+'</div>':''}</td>
       <td style="text-align:center;white-space:nowrap">${a.status==='pending'?`
         <button class="btn green xs" onclick="reviewAdvance(${a.id},'approved')">✓ อนุมัติ</button>
         <button class="btn danger xs" onclick="reviewAdvance(${a.id},'rejected')">✗</button>`:''}</td>
@@ -5230,23 +5274,35 @@ async function submitAdvance(){
   const reason = document.getElementById("advReason").value.trim();
   if(amount<=0){ toast("กรุณาระบุจำนวนเงิน"); return; }
   if(!reason){ toast("กรุณาระบุเหตุผล"); return; }
-  const { error } = await sb.from("salary_advances").insert({ employee_id: loggedInEmployeeId, amount, reason, status:"pending" });
+  const me = myEmp();
+  const cy = me?.cycle || "monthly";
+  const p = currentPeriod(cy); // ผูกกับ "งวดปัจจุบันจริง" ตอนยื่นขอ (ไม่ใช่งวดที่ HR อาจกำลังดูย้อนหลังอยู่)
+  const { error } = await sb.from("salary_advances").insert({ employee_id: loggedInEmployeeId, amount, reason, status:"pending", target_cycle_start:p.start, target_cycle_end:p.end });
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
-  logAudit("payroll","ยื่นขอเบิกเงินล่วงหน้า", `฿${fmt(amount)} · ${reason}`);
+  logAudit("payroll","ยื่นขอเบิกเงินล่วงหน้า", `฿${fmt(amount)} · ${reason} · ผูกงวด ${periodLabel(p)}`);
   advanceRows = null;
   render("payroll");
-  toast("ส่งคำขอเบิกเงินล่วงหน้าแล้ว ✓ รอ HR อนุมัติ");
+  toast(`ส่งคำขอเบิกเงินล่วงหน้าแล้ว ✓ รอ HR อนุมัติ (จะหักจากเงินเดือนงวด ${periodLabel(p)})`);
 }
 async function reviewAdvance(id, decision){
   const a = (Array.isArray(advanceRows)?advanceRows:[]).find(x=>String(x.id)===String(id)); if(!a) return;
   const e = E(a.employee_id);
-  const { error } = await sb.from("salary_advances").update({ status:decision, reviewed_by:loggedInEmployeeId, reviewed_at:new Date().toISOString() }).eq("id", id).eq("status","pending");
+  let targetStart = a.target_cycle_start, targetEnd = a.target_cycle_end, rolled = false;
+  if(decision==="approved" && e && targetStart && targetEnd){
+    // ถ้างวดที่ผูกไว้ตอนยื่นขอปิดจ่ายไปแล้วก่อน HR จะมาอนุมัติ (อนุมัติช้า) → เลื่อนไปหักงวดเปิดถัดไปให้อัตโนมัติ
+    const resolved = await resolveOpenAdvancePeriod(e.cycle, targetStart, targetEnd);
+    if(resolved.start!==targetStart || resolved.end!==targetEnd){ rolled = true; targetStart = resolved.start; targetEnd = resolved.end; }
+  }
+  const payload = { status:decision, reviewed_by:loggedInEmployeeId, reviewed_at:new Date().toISOString() };
+  if(decision==="approved" && targetStart && targetEnd){ payload.target_cycle_start = targetStart; payload.target_cycle_end = targetEnd; }
+  const { error } = await sb.from("salary_advances").update(payload).eq("id", id).eq("status","pending");
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
-  logAudit("payroll", decision==="approved"?"อนุมัติเบิกเงินล่วงหน้า":"ไม่อนุมัติเบิกเงินล่วงหน้า", `${e?e.name:a.employee_id} · ฿${fmt(a.amount)}`);
+  const targetLabel = (targetStart&&targetEnd) ? periodLabel({start:targetStart,end:targetEnd}) : "";
+  logAudit("payroll", decision==="approved"?"อนุมัติเบิกเงินล่วงหน้า":"ไม่อนุมัติเบิกเงินล่วงหน้า", `${e?e.name:a.employee_id} · ฿${fmt(a.amount)}${targetLabel?` · งวด ${targetLabel}`:""}${rolled?" (เลื่อนงวด — งวดเดิมจ่ายไปแล้ว)":""}`);
   advanceRows = null;
-  if(decision==="approved" && e) await loadCycleStats(e.cycle); // ยอดหักเข้าร่างงวดทันที
+  if(decision==="approved" && e) await loadCycleStats(e.cycle); // ยอดหักเข้าร่างงวดทันที (ถ้าตรงกับงวดที่กำลังดูอยู่)
   render("payroll");
-  toast(decision==="approved"?`อนุมัติแล้ว ✓ ฿${fmt(a.amount)} จะถูกหักออกจากเงินเดือนงวดถัดไปของ ${e?.name} ครั้งเดียว (แสดงในสลิป)`:"บันทึกไม่อนุมัติแล้ว");
+  toast(decision==="approved"?`อนุมัติแล้ว ✓ ฿${fmt(a.amount)} จะถูกหักจากเงินเดือนของ ${e?.name} ในงวด ${targetLabel} ครั้งเดียว${rolled?" (เลื่อนงวดเพราะงวดเดิมจ่ายไปแล้ว)":""}`:"บันทึกไม่อนุมัติแล้ว");
 }
 function pyBonus(){
   return `
