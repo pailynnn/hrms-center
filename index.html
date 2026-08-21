@@ -336,7 +336,7 @@ th.num{text-align:right}
     <button class="hamburger" onclick="toggleSidebar()"><span></span><span></span><span></span></button>
     <div><h2 id="pageTitle">Dashboard</h2><div class="sub" id="pageSub">Aluminium Glass PRO · Phuket, Thailand</div></div>
     <div class="topbar-right">
-      <div class="date-box"><b>วันที่ 04 กรกฎาคม 2569</b><div id="clock">--:--:--</div></div>
+      <div class="date-box"><b id="todayLabel">—</b><div id="clock">--:--:--</div></div>
       <div style="position:relative">
       <button class="bell" id="bellBtn" onclick="toggleNotifPanel(event)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5b6472" stroke-width="2"><path d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 004 0"/></svg></button>
       <div id="notifPanel" style="display:none;position:absolute;top:48px;right:0;width:320px;max-height:400px;overflow-y:auto;background:#fff;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.18);z-index:60;padding:10px"></div>
@@ -536,7 +536,7 @@ function isoToThaiDisplay(iso){
 function isRequestOnTime(ts, leaveDateISO){
   if(!ts) return true;
   const reqDate = new Date(ts);
-  const reqISO = reqDate.toISOString().slice(0,10);
+  const reqISO = isoDate(reqDate);  // เทียบด้วยวันที่ท้องถิ่น ไม่ใช่ UTC
   if(reqISO < leaveDateISO) return true;
   if(reqISO > leaveDateISO) return false;
   const [ch,cm] = (settings.leaveCutoff||"08:30").split(":").map(Number);
@@ -578,7 +578,9 @@ function mapAttendanceRow(row){
     loc: row.location_lat_long || "—"
   };
 }
-function todayISODate(){ return new Date().toISOString().slice(0,10); }
+// ⚠️ ต้องใช้ "วันที่ตามเครื่องผู้ใช้" ไม่ใช่ UTC — เดิมใช้ toISOString() ทำให้ช่วงเที่ยงคืน–07:00 น. เวลาไทย
+// ระบบมองว่ายังเป็น "เมื่อวาน" (UTC+7) พนักงานเลยลงเวลาของวันนี้ไม่ได้ และวันที่ทุกหน้าเพี้ยนตามไปด้วย
+function todayISODate(){ return isoDate(new Date()); }
 // วันที่วันนี้พร้อมชื่อวัน แบบไทย เช่น "ศุกร์ 11 ก.ค. 2569" — ใช้เวลาเครื่องผู้ใช้จริง (อัปเดตทุกวันเอง)
 function todayThaiFull(){
   const now = new Date();
@@ -777,8 +779,14 @@ async function submitOt(){
 async function actOt(id, status){
   const o = otRequests.find(x=>String(x.id)===String(id)); if(!o) return;
   const e = E(o.emp);
-  const { error } = await sb.from("ot_requests").update({ status, approved_by: loggedInEmployeeId, approved_at: new Date().toISOString() }).eq("id", id);
+  const { data: upd, error } = await sb.from("ot_requests").update({ status, approved_by: loggedInEmployeeId, approved_at: new Date().toISOString() }).eq("id", id).select("id");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  // 0 แถว = คำขอถูกลบ/ถูกคนอื่นดำเนินการไปแล้ว หรือเราไม่มีสิทธิ์ (RLS กรองเงียบๆ ไม่คืน error)
+  if(!upd || upd.length===0){
+    await loadOtRequests(); render("attendance"); updateNotifBell();
+    toast("รายการนี้ไม่มีอยู่แล้ว (พนักงานยกเลิกไป หรือมีคนดำเนินการก่อนหน้า) — รีเฟรชรายการให้แล้ว");
+    return;
+  }
   await loadOtRequests();
   await loadCycleStats(e?.cycle||"monthly"); // อัปเดตยอด OT ในงวดร่างทันที
   logAudit("attendance", `${status==='approved'?'อนุมัติ':'ปฏิเสธ'} OT`, `${e?e.name:'พนักงาน'} · ${o.hours} ชม. วันที่ ${o.date}`);
@@ -789,8 +797,13 @@ async function delOt(id){
   const o = otRequests.find(x=>String(x.id)===String(id)); if(!o) return;
   if(o.status!=="pending" && !canViewAll()){ toast("ยกเลิกได้เฉพาะรายการที่ยังรออนุมัติ"); return; }
   if(!confirm(`ยืนยันยกเลิกคำขอ OT ${o.hours} ชม. วันที่ ${o.date}?`)) return;
-  const { error } = await sb.from("ot_requests").delete().eq("id", id);
+  const { data: del, error } = await sb.from("ot_requests").delete().eq("id", id).select("id");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  if(!del || del.length===0){
+    await loadOtRequests(); render("attendance"); updateNotifBell();
+    toast("ลบไม่สำเร็จ — คุณไม่มีสิทธิ์ยกเลิกคำขอนี้ (ยกเลิกได้เฉพาะเจ้าของคำขอ หรือ HR/Super Admin)");
+    return;
+  }
   await loadOtRequests();
   logAudit("attendance","ยกเลิกคำขอ OT", `${E(o.emp)?.name||""} · ${o.hours} ชม. วันที่ ${o.date}`);
   render("attendance");
@@ -966,6 +979,21 @@ function currentPeriod(cy){
   return {start: todayISODate(), end: todayISODate()}; // daily
 }
 const DOW_TH = ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"];
+// วันจ่ายจริงของงวดรายเดือนที่ระบุ (0 = วันสุดท้ายของเดือนที่ตัดรอบ)
+function monthlyPayDateISO(period){
+  const end = new Date((period.end||todayISODate())+"T00:00:00");
+  const payD = Number(settings.monthlyPayDay)||0;
+  if(payD===0) return isoDate(new Date(end.getFullYear(), end.getMonth()+1, 0));
+  // จ่ายวันที่ N — ถ้าวันที่ N มาก่อนวันตัดรอบแล้ว ให้เลื่อนไปเดือนถัดไป
+  let d = new Date(end.getFullYear(), end.getMonth(), payD);
+  if(d < end) d = new Date(end.getFullYear(), end.getMonth()+1, payD);
+  return isoDate(d);
+}
+// เหลืออีกกี่วันถึงวันที่กำหนด (ตามวันที่ท้องถิ่น)
+function daysUntilISO(iso){
+  const a = new Date(todayISODate()+"T00:00:00"), b = new Date(iso+"T00:00:00");
+  return Math.round((b-a)/86400000);
+}
 // อัปเดตข้อความรอบ/ตัดรอบ/วันจ่าย ให้ตรงกับตั้งค่าจริง (เรียกหลัง loadSettings และหลังแก้รอบ)
 function refreshCycleLabels(){
   const cut = Number(settings.monthlyCutoffDay)||25;
@@ -1734,6 +1762,54 @@ async function loadNotifReads(){
   notifReadKeys = error ? new Set() : new Set((data||[]).map(r=>r.notif_key));
 }
 // สร้างรายการแจ้งเตือนทีละอัน — คืน [{key, icon, title, sub, nav()}]  ใช้ทั้งตอนเปิดพาเนลและตอนคำนวณจุดแดง
+/* ===================== รีเฟรชข้อมูลสด (Live refresh) =====================
+   ปัญหาเดิม: ข้อมูล ใบลา/OT/คำขอแก้เวลา/เบิกล่วงหน้า โหลดครั้งเดียวตอนล็อกอิน
+   → พนักงานลบคำขอ OT ทิ้งไปแล้ว แต่จอของคนที่มีสิทธิ์อนุมัติยังค้างปุ่ม "อนุมัติ" อยู่
+   วิธีแก้: ดึงข้อมูลใหม่เป็นระยะ + ตอนเปลี่ยนหน้า + ตอนเปิดกระดิ่ง
+   แล้ว re-render เฉพาะเมื่อข้อมูล "เปลี่ยนจริง" และผู้ใช้ไม่ได้กำลังกรอกฟอร์ม/เปิดโมดัลอยู่ */
+let _liveBusy = false;
+function liveSignature(){
+  const j = a => a.join("|");
+  return j([
+    j(leaves.map(l=>`L${l.id}:${l.supStatus}:${l.hrStatus}`)),
+    j(otRequests.map(o=>`O${o.id}:${o.status}:${o.hours}`)),
+    j((Array.isArray(adjustRows)?adjustRows:[]).map(a=>`J${a.id}:${a.status}`)),
+    j((Array.isArray(advanceRows)?advanceRows:[]).map(a=>`V${a.id}:${a.status}`)),
+    j(attendanceToday.map(a=>`A${a.id}:${a.in}:${a.out}:${a.status}`))
+  ]);
+}
+// ปลอดภัยที่จะวาดหน้าใหม่ไหม (ห้ามทับตอนผู้ใช้กำลังพิมพ์/เปิดโมดัล/เปิดพาเนลแจ้งเตือน)
+function canRerenderNow(){
+  if(!currentPage) return false;
+  const bg = document.getElementById("modalBg");
+  if(bg && bg.classList.contains("show")) return false;
+  const panel = document.getElementById("notifPanel");
+  if(panel && panel.style.display!=="none") return false;
+  const ae = document.activeElement;
+  if(ae && ["INPUT","TEXTAREA","SELECT"].indexOf(ae.tagName)>=0) return false;
+  return true;
+}
+async function refreshLiveData(opts){
+  opts = opts || {};
+  if(!loggedInEmployeeId || _liveBusy) return;
+  _liveBusy = true;
+  const before = liveSignature();
+  try{
+    await Promise.all([loadLeaves(), loadOtRequests(), loadAdjustments(), loadAdvances(), loadAttendanceToday()]);
+  }catch(err){ console.warn("refreshLiveData", err); }
+  _liveBusy = false;
+  const changed = liveSignature() !== before;
+  if(typeof updateBadge==="function") updateBadge();
+  updateNotifBell();
+  if(opts.rerender && (changed || opts.force) && canRerenderNow()){
+    const y = window.scrollY;
+    render(currentPage);
+    window.scrollTo({top:y});   // ไม่ให้จอเด้งกลับไปบนสุดระหว่างที่ผู้ใช้กำลังอ่าน
+  }
+  return changed;
+}
+setInterval(()=>refreshLiveData({rerender:true}), 45000);
+
 function computeNotifications(){
   const items = [];
   const navBtn = page => document.querySelector(`[data-page=${page}]`);
@@ -1889,6 +1965,11 @@ function toggleNotifPanel(e){
   const opening = panel.style.display==="none";
   panel.style.display = opening ? "block" : "none";
   if(!opening) return;
+  // ดึงข้อมูลล่าสุดก่อน แล้ววาดพาเนลซ้ำ — กันแจ้งเตือนค้างของรายการที่ถูกลบ/อนุมัติไปแล้ว
+  refreshLiveData().then(changed=>{
+    const pn = document.getElementById("notifPanel");
+    if(changed && pn && pn.style.display!=="none"){ pn.style.display="none"; toggleNotifPanel(null); }
+  });
   notifPanelItems = computeNotifications();
   const unreadCount = notifPanelItems.filter(it=>!notifReadKeys.has(it.key)).length;
   const head = `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px 10px;border-bottom:1px solid var(--line);margin-bottom:8px">
@@ -1988,6 +2069,8 @@ function go(page,btn){
   render(page);
   document.querySelector(".sidebar").classList.remove("mobile-open");
   document.getElementById("sidebarOverlay").classList.remove("show");
+  // ดึงข้อมูลล่าสุดทุกครั้งที่เปิดหน้าที่มีรายการรออนุมัติ (กันจอค้างข้อมูลเก่า)
+  if(["dashboard","attendance","leave","payroll"].indexOf(page)>=0) refreshLiveData({rerender:true});
 }
 let currentPage = "dashboard";
 function render(page){
@@ -2253,10 +2336,15 @@ function pgDashboard(){
     return {d,n,color:deptColors[i%deptColors.length],path:`M 100 100 L ${x1} ${y1} A 70 70 0 ${large} 1 ${x2} ${y2} Z`};
   });
 
-  // monthly leave bars — คำนวณจากข้อมูลการลาจริง (ก.พ.-ก.ค.)
+  // monthly leave bars — 6 เดือนล่าสุดนับถึงเดือนปัจจุบันจริง (เดิมตรึงไว้ที่ ก.พ.–ก.ค.)
   const byMonth = {};
-  leaves.forEach(l=>{const d=parseThaiDate(l.date); if(d){const key=THAI_MONTHS[d.getMonth()]; byMonth[key]=(byMonth[key]||0)+1;}});
-  const leaveData = THAI_MONTHS.slice(1,7).map(m=>({m, v:byMonth[m]||0}));
+  leaves.forEach(l=>{ if(!l.dateISO) return; byMonth[l.dateISO.slice(0,7)] = (byMonth[l.dateISO.slice(0,7)]||0)+1; });
+  const _now = new Date();
+  const leaveData = Array.from({length:6}, (_,i)=>{
+    const d = new Date(_now.getFullYear(), _now.getMonth()-5+i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    return { m: THAI_MONTHS[d.getMonth()], v: byMonth[key]||0 };
+  });
   const maxV = Math.max(1,...leaveData.map(x=>x.v));
 
   return `
@@ -2316,7 +2404,7 @@ function pgDashboard(){
       <div style="margin-top:12px">
         ${leaveData.map(d=>`<div class="bar-row"><span>${d.m}</span><div class="bar-track"><div class="bar-fill" style="width:${d.v/maxV*100}%"></div></div><span class="num"><b>${d.v}</b></span></div>`).join("")}
       </div>
-      <div class="hint" style="margin-top:10px">รวมทุกประเภทลา · ปี 2569</div>
+      <div class="hint" style="margin-top:10px">รวมทุกประเภทลา · 6 เดือนล่าสุด (ถึง ${THAI_MONTHS_FULL[new Date().getMonth()]} ${new Date().getFullYear()+543})</div>
     </div>
 
     <div class="card">
@@ -2953,7 +3041,7 @@ async function saveEmp(id,isNew){
     base_wage: Number(val("empRate")) || 0,
     status,
     start_date: val("empStart") || null,
-    end_date: status==="terminated" ? (val("empEnd") || new Date().toISOString().slice(0,10)) : null,
+    end_date: status==="terminated" ? (val("empEnd") || todayISODate()) : null,
     supervisor_id,
     wfh: document.getElementById("empWfh")?.checked || false,
     is_system_test: document.getElementById("empIsTest")?.checked || false
@@ -3288,8 +3376,13 @@ async function submitAdjustment(){
 async function reviewAdjustment(id, decision){
   const a = (Array.isArray(adjustRows)?adjustRows:[]).find(x=>String(x.id)===String(id)); if(!a) return;
   const e = E(a.employee_id);
-  const { error } = await sb.from("attendance_adjustments").update({ status: decision, reviewed_by: loggedInEmployeeId, reviewed_at: new Date().toISOString() }).eq("id", id).eq("status","pending");
+  const { data: upd, error } = await sb.from("attendance_adjustments").update({ status: decision, reviewed_by: loggedInEmployeeId, reviewed_at: new Date().toISOString() }).eq("id", id).eq("status","pending").select("id");
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  if(!upd || upd.length===0){
+    adjustRows = null; await loadAdjustments(); render("attendance"); updateNotifBell();
+    toast("คำขอนี้ถูกดำเนินการไปแล้ว หรือคุณไม่มีสิทธิ์อนุมัติ — รีเฟรชรายการให้แล้ว");
+    return;
+  }
   if(decision==="approved"){
     let lateMin = 0;
     if(a.new_check_in){
@@ -3585,10 +3678,11 @@ function attSummary(){
   return `
   <div class="card">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <h3>📊 สรุปเวลารายคน ${useRange?`— ${rangeText}`:`— เดือน กรกฎาคม 2569`}</h3>
+      <h3>📊 สรุปเวลารายคน ${useRange?`— ${rangeText}`:`— งวดจ่ายปัจจุบันของแต่ละคน`}</h3>
       <button class="btn ghost sm" style="margin-left:auto" onclick="exportAttSummaryExcel()">📥 Export Excel</button>
     </div>
     <div class="hint">ข้อมูลนี้ส่งเข้า Payroll โดยตรง — HR ไม่ต้องนั่งนับใน Excel${!canViewAll()?' · แสดงเฉพาะข้อมูลที่คุณมีสิทธิ์เห็น':''}</div>
+    ${useRange?'':`<div class="hint" style="margin-top:4px">ตัวเลขด้านล่างคิดตามงวดจ่ายของพนักงานแต่ละคน — รายเดือน: <b>${periodLabel(activePeriod("monthly"))}</b> · รายสัปดาห์: <b>${periodLabel(activePeriod("weekly"))}</b></div>`}
     <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:12px">
       <div class="field"><label>ตั้งแต่วันที่</label><input type="date" id="asFrom" value="${attSummaryFilter.from}"></div>
       <div class="field"><label>ถึงวันที่</label><input type="date" id="asTo" value="${attSummaryFilter.to}"></div>
@@ -3905,7 +3999,7 @@ function leaveDash(){
           <div style="font-size:12.5px"><b>Auto-Deduct → Payroll</b><div class="hint">หักเงินอัตโนมัติเมื่อลาเกินโควตา / ลาไม่รับค่าจ้าง</div></div>
           <span class="pill green">พร้อมใช้งาน</span>
         </div>
-        <div class="hint" style="margin-top:4px">Sync ล่าสุด: วันนี้ 09:15 · ${leaves.length} รายการ</div>
+        <div class="hint" style="margin-top:4px">ข้อมูลการลาในระบบขณะนี้ ${leaves.length} รายการ · อัปเดตล่าสุด ${new Date().toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",hour12:false})} น.</div>
       </div>
     </div>
   </div>
@@ -3995,8 +4089,8 @@ async function doSubmitLeave(){
   if(to < from){ toast("วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มลา"); return; }
 
   const dates = [];
-  for(let d=new Date(from); d<=new Date(to); d.setDate(d.getDate()+1)){
-    dates.push(d.toISOString().slice(0,10));
+  for(let d=new Date(from+"T00:00:00"); isoDate(d)<=to; d.setDate(d.getDate()+1)){
+    dates.push(isoDate(d));   // เดินวันด้วยเวลาท้องถิ่น กันวันเลื่อนข้ามเขตเวลา
   }
   const isPaid = LT(typeCode)?.paid === "quota";
   const nowISO = new Date().toISOString();
@@ -4066,8 +4160,13 @@ async function actLeave(id,level,status){
   const payload = level==="sup"
     ? { supervisor_status: status, supervisor_approved_by: loggedInEmployeeId, supervisor_approved_at: nowISO }
     : { hr_status: status, hr_approved_by: loggedInEmployeeId, hr_approved_at: nowISO };
-  const { error } = await sb.from("leave_requests").update(payload).eq("id", id);
+  const { data: upd, error } = await sb.from("leave_requests").update(payload).eq("id", id).select("id");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  if(!upd || upd.length===0){
+    await loadLeaves(); render("leave"); updateNotifBell();
+    toast("ใบลานี้ถูกยกเลิก/ดำเนินการไปแล้ว หรือคุณไม่มีสิทธิ์อนุมัติ — รีเฟรชรายการให้แล้ว");
+    return;
+  }
 
   const bothApprovedNow = status==="approved" && (
     (level==="sup" && l.hrStatus==="approved") || (level==="hr" && l.supStatus==="approved")
@@ -4194,8 +4293,8 @@ function leaveCal(){
 function leaveQuota(){
   return `
   <div class="card">
-    <h3>🎫 โควตาลาไม่หักเงิน — กรกฎาคม 2569</h3>
-    <div class="hint">รีเซ็ตทุกต้นเดือน · ไม่สะสมข้ามเดือน · เฉพาะพนักงานรายเดือน</div>
+    <h3>🎫 โควตาลาไม่หักเงิน — งวด ${periodLabel(activePeriod("monthly"))}</h3>
+    <div class="hint">นับตามงวดจ่ายรายเดือน · ไม่สะสมข้ามงวด · เฉพาะพนักงานรายเดือน</div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:14px">
       ${visibleEmployees().filter(e=>e.type==="monthly").map(e=>{
         const pct = Math.min(100, e.leaveUsed/settings.paidLeaveQuota*100);
@@ -4275,9 +4374,25 @@ function pyDash(){
     <div class="card">
       <h3>🔔 การแจ้งเตือน</h3>
       <div style="margin-top:10px">
-        <div class="notif-item"><div class="ic" style="background:var(--amber-soft);color:#b47100">📅</div><div style="flex:1"><b style="font-size:13px">ตัดรอบ Monthly Payroll</b><div class="hint">อีก 21 วัน · 25 ก.ค. 2569</div></div></div>
-        <div class="notif-item"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">💸</div><div style="flex:1"><b style="font-size:13px">จ่าย Weekly Payroll</b><div class="hint">พรุ่งนี้ (จันทร์) · ${employees.filter(e=>e.cycle==="weekly").length} คน</div></div></div>
-        <div class="notif-item"><div class="ic" style="background:var(--red-soft);color:var(--red)">⚠️</div><div style="flex:1"><b style="font-size:13px">พนักงานลาเกินโควตา</b><div class="hint">วรรณา ศรีสุข · +1 วัน หัก ฿${fmt(18000/30)}</div></div></div>
+        ${(()=>{
+          const pm = activePeriod("monthly"), pw = activePeriod("weekly");
+          const dCut = daysUntilISO(pm.end), payISO = monthlyPayDateISO(pm), dPay = daysUntilISO(payISO);
+          const wCut = daysUntilISO(pw.end);
+          const dayWord = n => n===0?"วันนี้" : n===1?"พรุ่งนี้" : n<0?`เลยมาแล้ว ${Math.abs(n)} วัน` : `อีก ${n} วัน`;
+          const over = visibleEmployees().filter(e=>e.type==="monthly" && (e.leaveUsed||0) > settings.paidLeaveQuota);
+          const rows = [];
+          rows.push(`<div class="notif-item"><div class="ic" style="background:var(--amber-soft);color:#b47100">📅</div><div style="flex:1"><b style="font-size:13px">ตัดรอบ ${CYCLES.monthly.name}</b><div class="hint">${dayWord(dCut)} · ${isoToThaiDisplay(pm.end)}</div></div></div>`);
+          rows.push(`<div class="notif-item"><div class="ic" style="background:var(--accent-soft);color:#b47100">💰</div><div style="flex:1"><b style="font-size:13px">วันจ่าย ${CYCLES.monthly.name}</b><div class="hint">${dayWord(dPay)} · ${isoToThaiDisplay(payISO)} · ${employees.filter(e=>e.cycle==="monthly"&&e.status!=="terminated").length} คน</div></div></div>`);
+          rows.push(`<div class="notif-item"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">💸</div><div style="flex:1"><b style="font-size:13px">ตัดรอบ ${CYCLES.weekly.name}</b><div class="hint">${dayWord(wCut)} · ${isoToThaiDisplay(pw.end)} · ${employees.filter(e=>e.cycle==="weekly"&&e.status!=="terminated").length} คน</div></div></div>`);
+          over.slice(0,3).forEach(e=>{
+            rows.push(`<div class="notif-item"><div class="ic" style="background:var(--red-soft);color:var(--red)">⚠️</div><div style="flex:1"><b style="font-size:13px">ลาเกินโควตา: ${e.name}</b><div class="hint">ใช้ไป ${e.leaveUsed} / ${settings.paidLeaveQuota} วัน${canSeePayroll()?` · หักวันละ ฿${fmt(Math.round(e.rate/30))}`:""}</div></div></div>`);
+          });
+          const hols = (Array.isArray(holidayRows)?holidayRows:[]).filter(h=>h.holiday_date>=todayISODate()).slice(0,2);
+          hols.forEach(h=>{
+            rows.push(`<div class="notif-item"><div class="ic" style="background:#fff1d6;color:#b47100">🎌</div><div style="flex:1"><b style="font-size:13px">วันหยุดบริษัท: ${h.name}</b><div class="hint">${dayWord(daysUntilISO(h.holiday_date))} · ${isoToThaiDisplay(h.holiday_date)}</div></div></div>`);
+          });
+          return rows.join("");
+        })()}
       </div>
     </div>
   </div>`;
@@ -5557,8 +5672,13 @@ async function reviewAdvance(id, decision){
   }
   const payload = { status:decision, reviewed_by:loggedInEmployeeId, reviewed_at:new Date().toISOString() };
   if(decision==="approved" && targetStart && targetEnd){ payload.target_cycle_start = targetStart; payload.target_cycle_end = targetEnd; }
-  const { error } = await sb.from("salary_advances").update(payload).eq("id", id).eq("status","pending");
+  const { data: upd, error } = await sb.from("salary_advances").update(payload).eq("id", id).eq("status","pending").select("id");
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  if(!upd || upd.length===0){
+    advanceRows = null; await loadAdvances(); render("payroll"); updateNotifBell();
+    toast("คำขอนี้ถูกดำเนินการไปแล้ว หรือคุณไม่มีสิทธิ์อนุมัติ — รีเฟรชรายการให้แล้ว");
+    return;
+  }
   const targetLabel = (targetStart&&targetEnd) ? periodLabel({start:targetStart,end:targetEnd}) : "";
   logAudit("payroll", decision==="approved"?"อนุมัติเบิกเงินล่วงหน้า":"ไม่อนุมัติเบิกเงินล่วงหน้า", `${e?e.name:a.employee_id} · ฿${fmt(a.amount)}${targetLabel?` · งวด ${targetLabel}`:""}${rolled?" (เลื่อนงวด — งวดเดิมจ่ายไปแล้ว)":""}`);
   advanceRows = null;
@@ -5947,7 +6067,7 @@ function pyESS(){
         <div style="background:rgba(255,255,255,.08);border-radius:12px;padding:14px;margin-bottom:10px">
           <div style="font-size:11px;opacity:.7">เงินเดือนงวดปัจจุบัน</div>
           <div class="display" style="font-size:24px;font-weight:700;color:var(--accent)">฿${fmt(monthlyNet)}</div>
-          <div style="font-size:11px;opacity:.7">จะจ่ายวันที่ 31 ก.ค. 2569</div>
+          <div style="font-size:11px;opacity:.7">จะจ่ายวันที่ ${isoToThaiDisplay(monthlyPayDateISO(activePeriod("monthly")))}</div>
         </div>
         <div style="background:rgba(124,108,240,.18);border:1px solid #7c6cf0;border-radius:12px;padding:14px;margin-bottom:14px">
           <div style="font-size:11px;opacity:.85">💰 ยอดรับรวมปีนี้ ${thisYear+543}${openingKnown&&opening>0?' <span style="opacity:.7">(รวมยอดยกมาก่อนใช้ระบบ)</span>':''}</div>
@@ -8200,9 +8320,29 @@ function pgAudit(){
 
 /* ================== INIT ================== */
 function closeModal(){document.getElementById("modalBg").classList.remove("show");}
+// วันที่ไทยแบบเต็มของ "วันนี้" ตามเครื่องผู้ใช้ เช่น "วันศุกร์ที่ 21 สิงหาคม 2569"
+function todayThaiLabel(){
+  const n = new Date();
+  const dow = ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"][n.getDay()];
+  return `วัน${dow}ที่ ${n.getDate()} ${THAI_MONTHS_FULL[n.getMonth()]} ${n.getFullYear()+543}`;
+}
+let _lastDayLabel = "";
 function tick(){const d=new Date();const t=d.toLocaleTimeString("th-TH",{hour12:false});
   document.getElementById("clock").textContent=t;
-  const b=document.getElementById("bigClock"); if(b) b.textContent=t.slice(0,5);}
+  const b=document.getElementById("bigClock"); if(b) b.textContent=t.slice(0,5);
+  // อัปเดตป้ายวันที่เฉพาะตอนที่วันเปลี่ยนจริง (เปิดจอค้างข้ามคืนก็ยังถูกต้อง)
+  const lbl = todayThaiLabel();
+  if(lbl !== _lastDayLabel){
+    const first = !_lastDayLabel;
+    _lastDayLabel = lbl;
+    const el = document.getElementById("todayLabel");
+    if(el) el.textContent = lbl;
+    // ข้ามวันแล้ว → โหลดข้อมูลลงเวลาของวันใหม่ + รีเฟรชหน้าที่เปิดอยู่
+    if(!first && loggedInEmployeeId && typeof loadAttendanceToday==="function"){
+      loadAttendanceToday().then(()=>{ if(currentPage) render(currentPage); }).catch(()=>{});
+    }
+  }
+}
 setInterval(tick,1000); tick();
 (function(){
   const img = document.getElementById("brandLogo");
