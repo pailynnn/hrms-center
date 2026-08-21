@@ -608,6 +608,8 @@ async function loadSettings(){
   // นโยบายมาสาย
   settings.latePolicy = data.late_policy || "record";
   settings.latePerMin = Number(data.late_per_min)||0;
+  // ผ่อนผันมาสาย: สายไม่เกินกี่นาทีแรก "ไม่หักเงิน" (ยังบันทึกสถิติว่าสายตามปกติ) · คิดแยกรายวัน ไม่ใช่หักครั้งเดียวทั้งงวด
+  settings.lateGraceMinutes = data.late_grace_minutes!=null ? Number(data.late_grace_minutes) : 10;
   // ช่องทางแจ้งเตือน / ออโต้
   settings.channels = { line: data.channel_line!==false, email: data.channel_email!==false };
   settings.autoSyncLeaveAtt = data.auto_sync_leave_att!==false;
@@ -705,6 +707,33 @@ function calcOTHourlyFor(e){
   const step = settings.otRoundTo||5;
   return Math.ceil(perHour/step)*step;
 }
+// ===== OT แบบกรอก "เวลาเริ่ม – เวลาสิ้นสุด" (แทนการกรอกจำนวนชั่วโมงเอง) =====
+// ตัดวินาทีจากค่า time ของ Postgres ("17:30:00" → "17:30") ให้ใส่ใน <input type="time"> ได้
+function hhmm(t){ return t ? String(t).slice(0,5) : ""; }
+// คำนวณจำนวนชั่วโมงจากช่วงเวลา · รองรับข้ามเที่ยงคืน: ถ้าเวลาสิ้นสุดน้อยกว่าเวลาเริ่ม ถือว่าจบวันถัดไป (22:00→02:00 = 4 ชม.)
+function otHoursFromTimes(startHHMM, endHHMM){
+  if(!startHHMM || !endHHMM) return 0;
+  const [sh,sm] = String(startHHMM).split(":").map(Number);
+  const [eh,em] = String(endHHMM).split(":").map(Number);
+  if(![sh,sm,eh,em].every(Number.isFinite)) return 0;
+  let mins = (eh*60+em) - (sh*60+sm);
+  if(mins === 0) return 0;          // เวลาเริ่ม=สิ้นสุด ถือว่ายังไม่ได้กรอก (กัน 24 ชม. โดยไม่ตั้งใจ)
+  if(mins < 0) mins += 24*60;       // ข้ามเที่ยงคืน
+  return Math.round((mins/60)*100)/100;
+}
+// ข้ามเที่ยงคืนหรือไม่ (ใช้โชว์ป้าย "+1 วัน" ให้ไม่สับสนว่าทำไม 22:00–02:00 ถึงได้ 4 ชม.)
+function otCrossesMidnight(startHHMM, endHHMM){
+  if(!startHHMM || !endHHMM) return false;
+  const [sh,sm] = String(startHHMM).split(":").map(Number);
+  const [eh,em] = String(endHHMM).split(":").map(Number);
+  if(![sh,sm,eh,em].every(Number.isFinite)) return false;
+  return (eh*60+em) < (sh*60+sm);
+}
+// ข้อความช่วงเวลา OT สำหรับตาราง/สลิป · แถวเก่าที่ไม่มีเวลา (ก่อนอัปเดตระบบ) จะ fallback เป็น "X ชม." เหมือนเดิม
+function otSpanLabel(o){
+  if(o.startTime && o.endTime) return `${o.startTime} – ${o.endTime}${otCrossesMidnight(o.startTime,o.endTime)?' <span class="pill blue" style="font-size:9.5px">+1 วัน</span>':''}`;
+  return '<span class="hint" style="font-size:11.5px">— (รายการเดิม)</span>';
+}
 async function loadOtRequests(){
   const { data, error } = await sb.from("ot_requests").select("*").order("work_date", {ascending:false});
   if(error){ console.error("loadOtRequests error", error); toastLoadError("ข้อมูล OT"); return; }
@@ -712,24 +741,39 @@ async function loadOtRequests(){
     id: row.id, emp: row.employee_id, dateISO: row.work_date,
     date: isoToThaiDisplay(row.work_date),
     hours: Number(row.hours)||0, reason: row.reason || "",
+    startTime: hhmm(row.start_time), endTime: hhmm(row.end_time),
     status: row.status, approvedBy: row.approved_by
   }));
 }
+// อัปเดตตัวเลข "รวมกี่ชั่วโมง" ใต้ช่องเวลาแบบสด ๆ ให้เห็นก่อนกดยื่น (กันงงว่ากรอกเวลาแล้วได้กี่ ชม.)
+function updateOtHoursPreview(){
+  const box = document.getElementById("otHoursPreview"); if(!box) return;
+  const s = document.getElementById("otStart")?.value, e = document.getElementById("otEnd")?.value;
+  const h = otHoursFromTimes(s, e);
+  if(!h){ box.innerHTML = '<span class="hint">กรอกเวลาเริ่มและเวลาสิ้นสุดเพื่อคำนวณชั่วโมง</span>'; return; }
+  const cross = otCrossesMidnight(s, e);
+  box.innerHTML = `รวม <b style="color:var(--accent);font-size:16px">${h}</b> ชม.${cross?' <span class="pill blue" style="font-size:10px">ข้ามเที่ยงคืน (+1 วัน)</span>':''}`;
+}
 async function submitOt(){
-  const canPickOthers = canSeePayroll();
+  const canPickOthers = canSubmitForOthers();
   const empId = canPickOthers ? Number(document.getElementById("otEmp").value) : loggedInEmployeeId;
   if(canPickOthers && !empId){ toast("กรุณาเลือกพนักงาน"); return; }
   const dateISO = document.getElementById("otDate").value;
-  const hours = Number(document.getElementById("otHoursInput").value)||0;
+  const startTime = document.getElementById("otStart").value;
+  const endTime = document.getElementById("otEnd").value;
   const reason = document.getElementById("otReason").value.trim();
   if(!dateISO){ toast("กรุณาเลือกวันที่ทำ OT"); return; }
-  if(hours<=0 || hours>12){ toast("จำนวนชั่วโมงต้องอยู่ระหว่าง 0.5 – 12 ชม."); return; }
-  const { error } = await sb.from("ot_requests").insert({ employee_id: empId, work_date: dateISO, hours, reason });
+  if(!startTime || !endTime){ toast("กรุณากรอกทั้งเวลาเริ่มและเวลาสิ้นสุด"); return; }
+  if(startTime === endTime){ toast("เวลาเริ่มกับเวลาสิ้นสุดต้องไม่ตรงกัน"); return; }
+  const hours = otHoursFromTimes(startTime, endTime);
+  if(hours<=0 || hours>12){ toast(`ช่วงเวลานี้ได้ ${hours} ชม. — ต้องอยู่ระหว่าง 0.5 – 12 ชม. กรุณาตรวจสอบเวลาอีกครั้ง`); return; }
+  const { error } = await sb.from("ot_requests").insert({ employee_id: empId, work_date: dateISO, hours, reason, start_time: startTime, end_time: endTime });
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   await loadOtRequests();
-  logAudit("attendance","ยื่นขอ OT", `${E(empId)?.name||""} · ${hours} ชม. วันที่ ${isoToThaiDisplay(dateISO)}`);
+  const crossNote = otCrossesMidnight(startTime, endTime) ? " (ข้ามเที่ยงคืน)" : "";
+  logAudit("attendance","ยื่นขอ OT", `${E(empId)?.name||""} · ${startTime}–${endTime}${crossNote} = ${hours} ชม. วันที่ ${isoToThaiDisplay(dateISO)}`);
   render("attendance");
-  toast("ยื่นขอ OT สำเร็จ ✓ รอหัวหน้างานอนุมัติ");
+  toast(`ยื่นขอ OT สำเร็จ ✓ ${startTime}–${endTime} = ${hours} ชม.${crossNote} — รอ HR อนุมัติ`);
 }
 async function actOt(id, status){
   const o = otRequests.find(x=>String(x.id)===String(id)); if(!o) return;
@@ -1050,6 +1094,9 @@ async function loadCycleStats(cy){
     const workDays = att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").length;
     const lateMin = att.reduce((s,a)=>s+(a.late_minutes||0),0);
     const lateCount = att.filter(a=>(a.late_minutes||0)>0).length;
+    // #6 ผ่อนผันมาสาย: หักเฉพาะนาทีที่เกินโควตาฟรี และต้องคิด "แยกรายวัน" (สาย 8 น. สองวัน = ไม่หักเลย ไม่ใช่รวมเป็น 16 แล้วหัก 6)
+    const graceMin = Number(settings.lateGraceMinutes)||0;
+    const lateBillableMin = att.reduce((s,a)=>s+Math.max(0,(a.late_minutes||0)-graceMin),0);
     const apprLeaves = (lvRes.data||[]).filter(l=>String(l.employee_id)===String(e.id)&&l.supervisor_status==="approved"&&l.hr_status==="approved");
     const leaveDays = apprLeaves.length;
     e.leaveUsed = apprLeaves.filter(l=>LT(l.leave_type)?.paid==="quota").length;
@@ -1059,7 +1106,7 @@ async function loadCycleStats(cy){
     const absentConfirmed = att.filter(a=>a.status==="absent").length;
     // missing = วันที่ควรมาแต่ไม่มีบันทึกใดๆ เลย → รอ HR ตรวจสอบในแท็บ "ตรวจสอบย้อนหลัง"
     const missing = Math.max(0, expected - workDays - leaveDays - absentConfirmed);
-    e.att = { workDays, lateMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected };
+    e.att = { workDays, lateMin, lateBillableMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected };
     // OT: ถ้าตั้งค่า "ต้องอนุมัติก่อน" → นับเฉพาะที่อนุมัติแล้ว · ถ้าปิด → นับทุกใบที่ไม่ถูกปฏิเสธ
     const myOt = (otRes.data||[]).filter(o=>String(o.employee_id)===String(e.id));
     const countable = myOt.filter(o=> settings.otRequiresApproval ? o.status==="approved" : o.status!=="rejected");
@@ -1103,7 +1150,7 @@ async function approvePayroll(cy){
     const dedItems = [];
     if(pay.absentDeduct) dedItems.push({label:"หักขาดงาน/ลาเกินโควตา", amount: pay.absentDeduct});
     if(pay.unpaidLeaveDeduct) dedItems.push({label:`หักลาไม่รับค่าจ้าง (${e.att.unpaidLeave} วัน)`, amount: pay.unpaidLeaveDeduct});
-    if(pay.lateDeduct)   dedItems.push({label:"หักมาสาย", amount: pay.lateDeduct});
+    if(pay.lateDeduct)   dedItems.push({label:`หักมาสาย (${pay.lateBillable} นาทีที่เกินผ่อนผัน ${settings.lateGraceMinutes} นาที/วัน)`, amount: pay.lateDeduct});
     if(pay.advanceDeduct) dedItems.push({label:"หักเบิกเงินล่วงหน้า (หักครั้งเดียวงวดนี้)", amount: pay.advanceDeduct});
     activeDeductions(e).forEach(d=>{
       dedItems.push({
@@ -1117,7 +1164,7 @@ async function approvePayroll(cy){
       total_work_days: e.att.workDays, base_total: pay.base,
       leave_deduction: pay.absentDeduct + pay.unpaidLeaveDeduct,
       other_deductions: pay.lateDeduct + pay.otherDeduct,
-      deduction_remarks: [pay.unpaidLeaveDeduct?`หักลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน ฿${fmt(pay.unpaidLeaveDeduct)}`:"", pay.lateDeduct?`หักมาสาย ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
+      deduction_remarks: [pay.unpaidLeaveDeduct?`หักลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน ฿${fmt(pay.unpaidLeaveDeduct)}`:"", pay.lateDeduct?`หักมาสาย ${pay.lateBillable} นาที (สายรวม ${e.att.lateMin} น. ผ่อนผัน ${settings.lateGraceMinutes} น./วัน) ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
       deduction_items: dedItems.length ? JSON.stringify(dedItems) : null,
       addition_amount: pay.extra, addition_remarks: [otNote, bonusNotes].filter(Boolean).join(" · ") || null,
       net_pay: pay.net, status: "approved"
@@ -1560,14 +1607,18 @@ function calcPay(e){
   // #3 ลาไม่รับค่าจ้าง: หักตามวันสำหรับรายเดือนเสมอ (แม้เป็น WFH ก็หัก เพราะเลือกลาไม่รับค่าจ้างเอง)
   const unpaidLeaveDeduct = e.type==="monthly" ? Math.round((e.att.unpaidLeave||0)*dayRate) : 0;
   // หักมาสายเริ่มมีผลจาก "งวดปัจจุบัน" เป็นต้นไปเท่านั้น — งวดเก่าที่ดูย้อนหลัง (payrollOffset<0) ไม่เคยถูกหักจริง จึงไม่คำนวณ/แสดงย้อนหลัง กันสับสน
-  const lateDeduct = (settings.latePolicy==="deduct" && payrollOffset>=0) ? e.att.lateMin*settings.latePerMin : 0;
+  // #6 หักเฉพาะนาทีที่เกินโควตาผ่อนผัน (lateBillableMin คิดแยกรายวันมาแล้วจาก loadCycleStats)
+  const lateBillable = e.att.lateBillableMin!=null
+    ? e.att.lateBillableMin
+    : Math.max(0, (e.att.lateMin||0) - (Number(settings.lateGraceMinutes)||0)); // fallback กรณี e.att ถูกแก้มือ (saveFixAttendance)
+  const lateDeduct = (settings.latePolicy==="deduct" && payrollOffset>=0) ? lateBillable*settings.latePerMin : 0;
   const advanceDeduct = (e.advances||[]).reduce((s,a)=>s+(Number(a.amount)||0),0); // เบิกล่วงหน้าที่อนุมัติแล้ว รอหักงวดนี้
   const otherDeduct = (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal).reduce((s,d)=>s+d.amount,0)
     + advanceDeduct
     + (ov ? (Number(ov.extra_deduction)||0) : 0);
   const extra = (e.extra||0) + (e.otPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);
   const net = base + extra - absentDeduct - unpaidLeaveDeduct - lateDeduct - otherDeduct;
-  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, ov, prorate};
+  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, ov, prorate};
 }
 function activeDeductions(e){return (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal);}
 const THAI_BANKS = ["KBANK (กสิกรไทย)","SCB (ไทยพาณิชย์)","BBL (กรุงเทพ)","KTB (กรุงไทย)","BAY (กรุงศรีอยุธยา)","TTB (ทหารไทยธนชาต)","GSB (ออมสิน)","BAAC (ธ.ก.ส.)","UOB (ยูโอบี)","CIMB (ซีไอเอ็มบี)"];
@@ -3207,22 +3258,25 @@ function attReview(){
   </div>`;
 }
 function attOt(){
-  const canPickOthers = canSeePayroll();
-  const canApprove = canApproveLeave() && !isHrAssistant();
+  const canPickOthers = canSubmitForOthers();
+  const canApprove = canApproveOt();
   const otRate = calcOTHourlyFor(myEmp()||employees[0]||{type:"monthly",rate:0});
   const stPill = s => s==="approved"?'<span class="pill green">✓ อนุมัติ</span>':s==="rejected"?'<span class="pill red">✕ ปฏิเสธ</span>':'<span class="pill amber">รออนุมัติ</span>';
   return `
   <div class="grid" style="grid-template-columns:1.4fr 1fr">
     <div class="card">
       <h3>⏱️ ยื่นขอ OT</h3>
-      <div class="hint">${canPickOthers?'Admin/HR ยื่นแทนพนักงานได้':'ยื่นในนามของตัวเอง'} · เริ่มคิด OT หลังเวลา ${settings.otStartTime} น. · ${settings.otRequiresApproval?'<b>ต้องได้รับอนุมัติจากหัวหน้างานก่อนจึงจะเข้ารอบเงินเดือน</b>':'ไม่บังคับอนุมัติ (นับทุกใบที่ไม่ถูกปฏิเสธ)'}</div>
+      <div class="hint">${canPickOthers?(isHrAssistant()?'ผู้ช่วย HR ยื่นแทนพนักงานได้ (แต่อนุมัติไม่ได้ — HR เป็นผู้อนุมัติ)':'Admin/HR ยื่นแทนพนักงานได้'):'ยื่นในนามของตัวเอง'} · เริ่มคิด OT หลังเวลา ${settings.otStartTime} น. · ${settings.otRequiresApproval?'<b>ต้องได้รับอนุมัติก่อนจึงจะเข้ารอบเงินเดือน</b>':'ไม่บังคับอนุมัติ (นับทุกใบที่ไม่ถูกปฏิเสธ)'}</div>
       <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:14px">
         ${canPickOthers?`<div class="field" style="grid-column:span 2"><label>ยื่นในนามของ</label>
           <select id="otEmp"><option value="">-- เลือกพนักงาน --</option>${employees.filter(e=>e.status!=="terminated").map(e=>`<option value="${e.id}">${e.code} — ${e.name}</option>`).join("")}</select></div>`:''}
-        <div class="field"><label>วันที่ทำ OT *</label><input id="otDate" type="date" value="${todayISODate()}"></div>
-        <div class="field"><label>จำนวนชั่วโมง *</label><input id="otHoursInput" type="number" min="0.5" max="12" step="0.5" value="1"></div>
+        <div class="field" style="grid-column:span 2"><label>วันที่ทำ OT *</label><input id="otDate" type="date" value="${todayISODate()}"></div>
+        <div class="field"><label>เวลาเริ่มทำ OT *</label><input id="otStart" type="time" value="${settings.otStartTime||'17:30'}" onchange="updateOtHoursPreview()" oninput="updateOtHoursPreview()"></div>
+        <div class="field"><label>เวลาสิ้นสุด *</label><input id="otEnd" type="time" onchange="updateOtHoursPreview()" oninput="updateOtHoursPreview()"></div>
+        <div style="grid-column:span 2;padding:10px 12px;background:#fff9f0;border:1px solid #f2c98a;border-radius:10px;font-size:13.5px" id="otHoursPreview"><span class="hint">กรอกเวลาเริ่มและเวลาสิ้นสุดเพื่อคำนวณชั่วโมง</span></div>
         <div class="field" style="grid-column:span 2"><label>เหตุผล / งานที่ทำ</label><textarea id="otReason" rows="2" placeholder="เช่น เร่งปิดงานติดตั้งหน้างาน..."></textarea></div>
       </div>
+      <div class="hint" style="margin-top:8px">🌙 ถ้าทำข้ามเที่ยงคืน กรอกได้ตามจริงเลย เช่น 22:00 ถึง 02:00 ระบบจะคิดให้เป็น 4 ชม. อัตโนมัติ</div>
       <button class="btn primary" style="margin-top:12px" onclick="submitOt()">📤 ยื่นขอ OT</button>
     </div>
     <div class="card" style="background:linear-gradient(135deg,#fff9f0,#fff);border:1px solid #f2c98a">
@@ -3235,13 +3289,14 @@ function attOt(){
   <div class="card" style="margin-top:16px">
     <h3>📋 รายการขอ OT ${canApprove?'(ของทีม/ทั้งหมดที่คุณมีสิทธิ์เห็น)':'ของฉัน'}</h3>
     <table style="margin-top:10px">
-      <tr><th>วันที่</th><th>พนักงาน</th><th class="num">ชั่วโมง</th><th class="num">คิดเป็นเงิน</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center">การดำเนินการ</th></tr>
-      ${otRequests.length===0?'<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px">ยังไม่มีรายการขอ OT</td></tr>':otRequests.map(o=>{
+      <tr><th>วันที่</th><th>พนักงาน</th><th>ช่วงเวลาที่ทำ</th><th class="num">ชั่วโมง</th><th class="num">คิดเป็นเงิน</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center">การดำเนินการ</th></tr>
+      ${otRequests.length===0?'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">ยังไม่มีรายการขอ OT</td></tr>':otRequests.map(o=>{
         const e=E(o.emp); if(!e) return '';
         const isMine = String(o.emp)===String(loggedInEmployeeId);
         const showApprove = canApprove && o.status==="pending" && (!isMine || canViewAll());
         return `<tr>
         <td>${o.date}</td><td>${empCell(e,true)}</td>
+        <td style="white-space:nowrap;font-size:12.5px">${otSpanLabel(o)}</td>
         <td class="num"><b>${o.hours}</b></td>
         <td class="num">฿${fmt(o.hours*calcOTHourlyFor(e))}</td>
         <td style="font-size:12px;color:var(--muted)">${o.reason||"—"}</td>
@@ -3461,6 +3516,8 @@ function saveFixAttendance(id){
   e.att.workDays = Number(document.getElementById("fixWorkDays").value)||0;
   e.att.absent = Number(document.getElementById("fixAbsent").value)||0;
   e.att.lateMin = Number(document.getElementById("fixLate").value)||0;
+  // แก้มือเป็น "ยอดรวมทั้งงวด" แยกรายวันไม่ได้ → ล้างค่าที่คำนวณแยกวันไว้ ให้ calcPay ใช้สูตร fallback (หักผ่อนผัน 1 ครั้ง)
+  e.att.lateBillableMin = null;
   closeModal(); render("attendance"); toast(`แก้ไขข้อมูลเข้างานของ ${e.name} แล้ว ✓ จะถูกใช้ในงวดร่างจนกว่าจะกด "↻ คำนวณงวดนี้" ใหม่`);
 }
 function attLate(){
@@ -3468,15 +3525,19 @@ function attLate(){
   return `
   <div class="card">
     <h3>⏰ สถิติมาสาย เดือนนี้ <span class="pill ${settings.latePolicy==='deduct'?'red':'gray'}" style="margin-left:auto">${settings.latePolicy==='deduct'?'โหมด: หัก '+settings.latePerMin+' บ./นาที':'โหมด: บันทึกอย่างเดียว'}</span></h3>
+    <div class="hint" style="margin-top:4px">🕒 ผ่อนผัน <b>${settings.lateGraceMinutes} นาทีแรกของแต่ละวัน</b> — สายไม่เกินนี้ยังขึ้นสถิติว่าสาย แต่ไม่ถูกหักเงิน</div>
     ${withLate.length===0?'<div class="hint" style="margin-top:12px">ไม่มีพนักงานมาสายเดือนนี้ 🎉</div>':
     `<table style="margin-top:14px">
-      <tr><th>พนักงาน</th><th class="num">รวมนาที</th><th>สถานะ</th><th class="num">หักเงิน (ถ้าเปิดโหมด)</th></tr>
-      ${withLate.map(e=>`<tr>
+      <tr><th>พนักงาน</th><th class="num">รวมนาที</th><th class="num">นาทีที่เกินผ่อนผัน</th><th>สถานะ</th><th class="num">หักเงิน (ถ้าเปิดโหมด)</th></tr>
+      ${withLate.map(e=>{
+        const billable = e.att.lateBillableMin!=null ? e.att.lateBillableMin : Math.max(0,(e.att.lateMin||0)-(Number(settings.lateGraceMinutes)||0));
+        return `<tr>
         <td>${empCell(e)}</td>
         <td class="num"><b>${e.att.lateMin}</b> นาที</td>
+        <td class="num">${billable>0?'<b style="color:var(--red)">'+billable+'</b> นาที':'<span class="pill green" style="font-size:10px">อยู่ในเกณฑ์ผ่อนผัน</span>'}</td>
         <td>${e.att.lateMin>60?'<span class="pill red">สายบ่อย</span>':'<span class="pill amber">สายบางวัน</span>'}</td>
-        <td class="num">${payrollOffset<0?'<span class="hint" style="font-size:11px">งวดเก่า — ไม่หัก</span>':'฿'+fmt(e.att.lateMin*settings.latePerMin)}</td>
-      </tr>`).join("")}
+        <td class="num">${payrollOffset<0?'<span class="hint" style="font-size:11px">งวดเก่า — ไม่หัก</span>':'฿'+fmt(billable*settings.latePerMin)}</td>
+      </tr>`;}).join("")}
     </table>`}
     <div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ มีผลกับงวดร่างปัจจุบันเท่านั้น (งวดเก่าที่ดูย้อนหลังจะไม่ถูกหักย้อนหลัง)</div>
   </div>`;
@@ -3760,12 +3821,12 @@ function leaveTypes(){
 }
 
 function leaveSubmit(){
-  const canPickOthers = canSeePayroll();
+  const canPickOthers = canSubmitForOthers();
   return `
   <div class="grid" style="grid-template-columns:1.4fr 1fr">
     <div class="card">
       <h3>📝 ยื่นใบลาอิเล็กทรอนิกส์</h3>
-      <div class="hint">${canPickOthers?'Admin/HR สามารถยื่นแทนพนักงานได้ (กรณีพนักงานไม่สะดวก)':'ยื่นใบลาในนามของตัวเอง'} · ระบบจะเช็คเวลายื่นเทียบ ${settings.leaveCutoff} น. อัตโนมัติ</div>
+      <div class="hint">${canPickOthers?(isHrAssistant()?'ผู้ช่วย HR ยื่นแทนพนักงานได้ (กรณีพนักงานไม่สะดวก)':'Admin/HR สามารถยื่นแทนพนักงานได้ (กรณีพนักงานไม่สะดวก)'):'ยื่นใบลาในนามของตัวเอง'} · ระบบจะเช็คเวลายื่นเทียบ ${settings.leaveCutoff} น. อัตโนมัติ</div>
       <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:16px">
         <div class="field" style="grid-column:span 2"><label>ยื่นในนามของ</label>
           ${canPickOthers
@@ -3798,7 +3859,7 @@ function leaveSubmit(){
   </div>`;
 }
 async function doSubmitLeave(){
-  const canPickOthers = canSeePayroll();
+  const canPickOthers = canSubmitForOthers();
   const empId = canPickOthers ? Number(document.getElementById("lvEmp").value) : loggedInEmployeeId;
   if(canPickOthers && !empId){ toast("กรุณาเลือกพนักงาน"); return; }
   const typeCode = document.getElementById("lvType").value;
@@ -4831,7 +4892,12 @@ function canViewAll(){ return currentRoleCode==="super_admin" || currentRoleCode
 function isTeamLead(){ return currentRoleCode==="supervisor"; }
 // canSeePayroll = เห็น "เงินเดือน/สลิป/ฐานเงินเดือน" — เฉพาะ Super Admin / HR (ผู้ช่วย HR ไม่เห็นเงินเดือนทุกกรณี)
 function canSeePayroll(){ return currentRoleCode==="super_admin" || currentRoleCode==="hr"; }
-function canEditAttendance(){ return canSeePayroll(); } // ผู้ช่วย HR ดูเวลาได้อย่างเดียว แก้ไม่ได้
+// ผู้ช่วย HR แก้เวลา/ตรวจสอบย้อนหลังให้พนักงานคนอื่นได้ (ทุกจุดที่ gate ด้วยตัวนี้เป็นข้อมูลเวลาล้วน ไม่มีตัวเลขเงินเดือน)
+function canEditAttendance(){ return canSeePayroll() || isHrAssistant(); }
+// ยื่นขอ OT / ยื่นใบลา "แทนพนักงานคนอื่น" ได้ — ผู้ช่วย HR ยื่นได้ แต่ดูข้อ canApproveOt() เรื่องการอนุมัติ
+function canSubmitForOthers(){ return canSeePayroll() || isHrAssistant(); }
+// อนุมัติ OT: ผู้ช่วย HR ยื่นได้แต่ "กดอนุมัติไม่ได้" (ต้องให้ HR อนุมัติ) · ระดับ DB ก็ไม่มี policy UPDATE ให้ role นี้เช่นกัน
+function canApproveOt(){ return (canViewAll() || isTeamLead()) && !isHrAssistant(); }
 function canManageAssets(){ return canSeePayroll() || isHrAssistant(); }
 function canApproveLeave(){ return canViewAll() || isTeamLead(); } // รวมผู้ช่วย HR (อนุมัติลาได้)
 function canAccessPayroll(){ return canSeePayroll(); }
@@ -5092,7 +5158,7 @@ function openSlip(id, overrideNet, periodLabel, isHist){
               ${irow("OT / Additional (เหมา)","฿"+fmt(p.extra))}
               ${!isHist?`<tr><td colspan="2" style="padding:8px 12px;border:1px solid #1a1a1a;font-weight:700;font-size:12.5px;background:#f4f5f7">Deductions</td></tr>
               ${irow("Absence / Over Quota", p.absentDeduct?"-฿"+fmt(p.absentDeduct):"—")}
-              ${irow("Late Arrival", p.lateDeduct?"-฿"+fmt(p.lateDeduct):"—")}
+              ${irow(`Late Arrival${p.lateDeduct?` (${p.lateBillable} min เกินผ่อนผัน ${settings.lateGraceMinutes} min/day)`:""}`, p.lateDeduct?"-฿"+fmt(p.lateDeduct):"—")}
               ${p.advanceDeduct?irow("Salary Advance Repayment","-฿"+fmt(p.advanceDeduct)):""}
               ${activeDeductions(e).length
                 ? activeDeductions(e).map(d=>irow(d.label+" (งวดที่ "+(d.monthsPaid+1)+"/"+d.monthsTotal+")", "-฿"+fmt(d.amount))).join("")
@@ -6349,9 +6415,22 @@ function stLate(){
       <button class="${settings.latePolicy==='deduct'?'on':''}" onclick="setLatePolicy('deduct')">💸 หักตามนาที</button>
     </div>
     ${settings.latePolicy==='deduct'?`<div style="margin-top:14px;display:flex;align-items:center;gap:10px;font-size:13.5px">อัตราหัก
-      <input type="number" value="${settings.latePerMin}" min="0" style="width:80px;padding:7px 10px;border:1.5px solid var(--line);border-radius:8px;text-align:right" onchange="setLateRate(this.value)"> บาท/นาที</div>`:""}
+      <input type="number" value="${settings.latePerMin}" min="0" style="width:80px;padding:7px 10px;border:1.5px solid var(--line);border-radius:8px;text-align:right" onchange="setLateRate(this.value)"> บาท/นาที</div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:10px;font-size:13.5px;flex-wrap:wrap">ผ่อนผันวันละ
+      <input type="number" value="${settings.lateGraceMinutes}" min="0" max="120" style="width:80px;padding:7px 10px;border:1.5px solid var(--line);border-radius:8px;text-align:right" onchange="setLateGrace(this.value)"> นาทีแรก (ไม่หักเงิน)</div>
+    <div class="hint" style="margin-top:10px;padding:12px;background:#f0f7ff;border:1px solid #cfe1ff;border-radius:10px">
+      ตัวอย่างที่ตั้งไว้ตอนนี้ (ผ่อนผัน ${settings.lateGraceMinutes} นาที · ${settings.latePerMin} บ./นาที):<br>
+      • สาย ${Math.max(1,(settings.lateGraceMinutes||10)-2)} นาที → <b style="color:var(--green)">ไม่หัก</b> (ยังขึ้นสถิติว่าสาย)<br>
+      • สาย ${(settings.lateGraceMinutes||10)+15} นาที → หัก <b style="color:var(--red)">${15} นาที = ฿${fmt(15*(settings.latePerMin||0))}</b> (หักเฉพาะส่วนที่เกิน)<br>
+      • ผ่อนผัน<b>แยกรายวัน</b> — สาย ${Math.max(1,(settings.lateGraceMinutes||10)-2)} นาที 5 วัน ก็ยังไม่ถูกหักสักบาท
+    </div>`:""}
     <div class="hint" style="margin-top:14px;padding:12px;background:#f8f9fc;border-radius:10px">💡 ลองสลับโหมดแล้วไปดูหน้า <b>เงินเดือน → คำนวณ</b> — คอลัมน์ "หักมาสาย" จะเปลี่ยนตามทันที</div>
   </div>`;
+}
+async function setLateGrace(v){
+  const g = Math.max(0, Math.min(120, Number(v)||0));
+  const ok = await saveSettingsFields({late_grace_minutes:g}, `ตั้งผ่อนผันมาสายเป็น ${g} นาที/วันแล้ว ✓ มีผลกับงวดร่างทันที`, "แก้ไขนาทีผ่อนผันมาสาย", `${g} นาที/วัน`);
+  if(ok) await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy))); // คำนวณยอดหักใหม่ให้ตรงกับค่าที่เพิ่งตั้ง
 }
 async function setLatePolicy(mode){
   await saveSettingsFields({late_policy:mode},
