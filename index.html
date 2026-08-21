@@ -151,7 +151,7 @@ th.num{text-align:right}
 /* calendar */
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:12px}
 .cal-head{text-align:center;font-size:11.5px;color:var(--muted);font-weight:600;padding:6px 0}
-.cal-day{aspect-ratio:1;background:#f8f9fc;border-radius:9px;padding:6px;font-size:12px;position:relative;min-height:64px}
+.cal-day{background:#f8f9fc;border-radius:9px;padding:6px;font-size:12px;position:relative;min-height:86px}
 .cal-day.sun{background:#f8f9fc;color:#c1c6d1}
 .cal-day.today{background:var(--accent-soft);border:2px solid var(--accent)}
 .cal-day.pad{background:transparent}
@@ -160,6 +160,12 @@ th.num{text-align:right}
 .cal-tag.p{background:var(--pink)}
 .cal-tag.s{background:var(--purple)}
 .cal-tag.g{background:var(--amber);color:#5a3800}
+.cal-tag.pending{opacity:.45;border:1px dashed rgba(255,255,255,.7)}
+.cal-day.holiday{background:#fff6e6;box-shadow:inset 0 0 0 1px #ffd9a8}
+.cal-day .num small{display:block;font-size:9px;font-weight:400;color:#c1c6d1}
+/* แถวที่ถูกเปิดจากแจ้งเตือน — กระพริบให้เห็นชัดว่า "อันนี้แหละ" */
+.row-flash{animation:rowFlash 2.6s ease-out 1}
+@keyframes rowFlash{0%{background:#ffe9c4}35%{background:#fff3dd}100%{background:transparent}}
 
 /* notif card */
 .notif-item{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;background:#f8f9fc;margin-bottom:8px;cursor:pointer;transition:.15s}
@@ -360,15 +366,8 @@ const settings = {
   otCalcType:"flat_rate", otStartTime:"17:30", otDivisorDays:30, otDivisorHours:8, otRoundTo:5, otRequiresApproval:true
 };
 
-const HOLIDAYS = [
- {name:"วันขึ้นปีใหม่", date:"1 มกราคม 2569"},
- {name:"วันมาฆบูชา", date:"24 กุมภาพันธ์ 2569"},
- {name:"วันจักรี", date:"6 เมษายน 2569"},
- {name:"วันสงกรานต์", date:"13 เมษายน 2569"},
- {name:"วันสงกรานต์", date:"14 เมษายน 2569"},
- {name:"วันสงกรานต์", date:"15 เมษายน 2569"},
- {name:"วันแรงงานแห่งชาติ", date:"1 พฤษภาคม 2569"}
-];
+// วันหยุดประจำปีย้ายไปเก็บในตาราง holidays แล้ว (HR เพิ่มเองที่ ตั้งค่าระบบ → วันหยุดประจำปี)
+const THAI_MONTHS_FULL = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
 function primaryLocation(){ return settings.locations[0]; }
 const CYCLES = {
   monthly:{name:"Monthly Payroll", desc:"จ่ายพนักงานรายเดือน", cut:"ตัดรอบ: วันที่ 25 ของเดือน", pay:"จ่าย: วันสุดท้ายของเดือน", period:"26 มิ.ย. – 25 ก.ค. 2569"},
@@ -1594,6 +1593,37 @@ function holidayNameOn(dISO, e){
   const h = (Array.isArray(holidayRows)?holidayRows:[]).find(h=>h.holiday_date===dISO && (!h.dept || h.dept===(e&&e.dept)));
   return h ? h.name : null;
 }
+// ===== วันหยุดตามประเพณี: โหลด/เพิ่ม/ลบ (HR กรอกเองเป็นครั้งๆ ตามมติที่ประชุม ไม่ผูกปฏิทินราชการ) =====
+let holidayLoading = false;
+// เรียกจากหน้าที่ต้องใช้วันหยุด — คืน true ถ้าข้อมูลพร้อมแล้ว, false = กำลังโหลด (จะ re-render ให้เองเมื่อเสร็จ)
+function ensureHolidaysForRender(page){
+  if(Array.isArray(holidayRows)) return true;
+  if(holidayLoading) return false;
+  holidayLoading = true;
+  ensureHolidaysLoaded().then(()=>{ holidayLoading = false; if(currentPage===page) render(page); });
+  return false;
+}
+async function reloadHolidays(){ holidayRows = null; holidayLoading = false; await ensureHolidaysLoaded(); }
+// วันหยุดทั้งหมดในเดือนนั้น (ไม่กรองแผนก — ใช้โชว์ในปฏิทิน)
+function holidaysOn(dISO){
+  return (Array.isArray(holidayRows)?holidayRows:[]).filter(h=>h.holiday_date===dISO);
+}
+// รวมวันหยุดที่ติดกัน ชื่อเดียวกัน ขอบเขตเดียวกัน ให้เป็น "ช่วง" เดียว เพื่อแสดงผล/ลบทั้งช่วงทีเดียว
+function groupHolidays(rows){
+  const sorted = rows.slice().sort((a,b)=> a.holiday_date<b.holiday_date?-1:a.holiday_date>b.holiday_date?1:0);
+  const out = [];
+  sorted.forEach(h=>{
+    const last = out[out.length-1];
+    const prevDay = last ? isoDate(new Date(new Date(last.to+"T00:00:00").getTime()+86400000)) : null;
+    if(last && last.name===h.name && (last.dept||"")===(h.dept||"") && prevDay===h.holiday_date){
+      last.to = h.holiday_date; last.ids.push(h.id); last.days++;
+    } else {
+      out.push({name:h.name, dept:h.dept||"", from:h.holiday_date, to:h.holiday_date, ids:[h.id], days:1});
+    }
+  });
+  return out;
+}
+
 function calcPay(e){
   const ov = e.override || null; // Override จากหน้า Payroll Preview
   const dayRate = e.type==="monthly" ? e.rate/30 : e.rate;
@@ -1707,16 +1737,65 @@ async function loadNotifReads(){
 function computeNotifications(){
   const items = [];
   const navBtn = page => document.querySelector(`[data-page=${page}]`);
-  if(canViewAll()){
-    leaves.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").forEach(l=>{
+  const goTo = (page, key, sub, rowId) => () => { setSub(key, sub); go(page, navBtn(page)); flashRow(rowId); };
+  const adj = Array.isArray(adjustRows) ? adjustRows : [];
+  const adv = Array.isArray(advanceRows) ? advanceRows : [];
+  const me = myEmp();
+
+  // ---------- กลุ่มที่ 1: สิ่งที่ "ฉันต้องอนุมัติ/ดำเนินการ" ----------
+  if(canApproveLeave()){
+    const scope = canViewAll()
+      ? leaves
+      : leaves.filter(l=>{const e=E(l.emp); return e && me && e.supervisor===me.name;});
+    scope.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").forEach(l=>{
+      // หัวหน้างานเห็นเฉพาะที่ถึงคิวตัวเอง · HR เห็นทั้งที่รอหัวหน้าและที่รอ HR
+      if(!canViewAll() && l.supStatus!=="pending") return;
       const emp = E(l.emp);
+      const waitHr = l.hrStatus==="pending" && l.supStatus==="approved";
       items.push({
         key:`leave_${l.id}_${l.supStatus}_${l.hrStatus}`, icon:"✅",
         title:`ใบลารออนุมัติ: ${emp?emp.name:'พนักงาน #'+l.emp}`,
-        sub:`${LT(l.type).name} · ${l.date} · ${(l.hrStatus==="pending"&&l.supStatus==="approved")?'รอ HR':'รอหัวหน้างาน'}`,
-        nav:()=>{ setSub('leave','approve'); go('leave', navBtn('leave')); }
+        sub:`${LT(l.type).name} · ${l.date} · ${waitHr?'รอ HR อนุมัติ':'รอหัวหน้างาน'}`,
+        nav: goTo('leave','leave','approve',`lv-${l.id}`)
       });
     });
+  }
+  if(canApproveOt()){
+    otRequests.filter(o=>o.status==="pending").forEach(o=>{
+      const emp = E(o.emp); if(!emp) return;
+      if(!canViewAll() && !(me && emp.supervisor===me.name)) return;
+      if(String(o.emp)===String(loggedInEmployeeId) && !canViewAll()) return;
+      items.push({
+        key:`ot_${o.id}_${o.status}`, icon:"⏱️",
+        title:`คำขอ OT รออนุมัติ: ${emp.name}`,
+        sub:`${o.date} · ${o.hours} ชม.${o.reason?' · '+o.reason:''}`,
+        nav: goTo('attendance','attendance','ot',`ot-${o.id}`)
+      });
+    });
+  }
+  if(canEditAttendance()){
+    adj.filter(a=>a.status==="pending" && String(a.employee_id)!==String(loggedInEmployeeId)).forEach(a=>{
+      const emp = E(a.employee_id);
+      items.push({
+        key:`adj_${a.id}_${a.status}`, icon:"🛠️",
+        title:`คำขอแก้เวลารออนุมัติ: ${emp?emp.name:'พนักงาน #'+a.employee_id}`,
+        sub:`${isoToThaiDisplay(a.work_date)} · ${fmtHM(a.new_check_in)}–${fmtHM(a.new_check_out)}${a.reason?' · '+a.reason:''}`,
+        nav: goTo('attendance','attendance','adjust',`adj-${a.id}`)
+      });
+    });
+  }
+  if(canSeePayroll()){
+    adv.filter(a=>a.status==="pending").forEach(a=>{
+      const emp = E(a.employee_id);
+      items.push({
+        key:`adv_${a.id}_${a.status}`, icon:"💳",
+        title:`ขอเบิกเงินล่วงหน้ารออนุมัติ: ${emp?emp.name:'พนักงาน #'+a.employee_id}`,
+        sub:`฿${fmt(a.amount)}${a.reason?' · '+a.reason:''}`,
+        nav: goTo('payroll','payroll','advance',`adv-${a.id}`)
+      });
+    });
+  }
+  if(canViewAll()){
     employees.filter(emp=>emp.status==='probation').forEach(emp=>{
       items.push({
         key:`probation_${emp.id}`, icon:"📝",
@@ -1724,69 +1803,85 @@ function computeNotifications(){
         nav:()=>{ go('employees', navBtn('employees')); setTimeout(()=>openEmpModal(emp.id),50); }
       });
     });
-    if(projectsLoaded){
-      const todayISO = todayISODate();
-      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISO).map(d=>String(d.group_id)));
-      projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));}).forEach(g=>{
-        const p = PJ(g.project_id);
-        items.push({
-          key:`dispatch_${g.id}_${todayISO}`, icon:"📋",
-          title:`ทีมยังไม่ถูกมอบหมายงานวันนี้: ${g.name||'ทีม #'+g.id}`, sub:p?p.name:'',
-          nav:()=>{ setSub('projects','dispatch'); go('projects', navBtn('projects')); }
-        });
-      });
-    }
-  } else if(isTeamLead()){
-    const me = myEmp();
-    leaves.filter(l=>{const emp=E(l.emp);return emp && me && emp.supervisor===me.name && l.supStatus==="pending";}).forEach(l=>{
-      const emp = E(l.emp);
+  }
+  if((canViewAll()||isTeamLead()) && projectsLoaded){
+    const todayISO = todayISODate();
+    const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISO).map(d=>String(d.group_id)));
+    projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));}).forEach(g=>{
+      const p = PJ(g.project_id);
       items.push({
-        key:`leave_${l.id}_${l.supStatus}_${l.hrStatus}`, icon:"✅",
-        title:`ใบลาทีมรออนุมัติ: ${emp?emp.name:'พนักงาน #'+l.emp}`,
-        sub:`${LT(l.type).name} · ${l.date}`,
-        nav:()=>{ setSub('leave','approve'); go('leave', navBtn('leave')); }
+        key:`dispatch_${g.id}_${todayISO}`, icon:"📋",
+        title:`ทีมยังไม่ถูกมอบหมายงานวันนี้: ${g.name||'ทีม #'+g.id}`, sub:p?p.name:'',
+        nav:()=>{ setSub('projects','dispatch'); go('projects', navBtn('projects')); }
       });
     });
-    if(projectsLoaded){
-      const todayISO = todayISODate();
-      const todayAssignedIds = new Set(dailyAssignments.filter(d=>d.work_date===todayISO).map(d=>String(d.group_id)));
-      projectGroups.filter(g=>{const p=PJ(g.project_id); return p && p.status==="active" && !todayAssignedIds.has(String(g.id));}).forEach(g=>{
-        const p = PJ(g.project_id);
-        items.push({
-          key:`dispatch_${g.id}_${todayISO}`, icon:"📋",
-          title:`ทีมยังไม่ถูกมอบหมายงานวันนี้: ${g.name||'ทีม #'+g.id}`, sub:p?p.name:'',
-          nav:()=>{ setSub('projects','dispatch'); go('projects', navBtn('projects')); }
-        });
-      });
-    }
-  } else {
-    leaves.filter(l=>String(l.emp)===String(loggedInEmployeeId)).forEach(l=>{
-      const isPending = (l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected";
-      const isApproved = l.hrStatus==="approved";
-      const isRejected = l.supStatus==="rejected"||l.hrStatus==="rejected";
-      if(!isPending && !isApproved && !isRejected) return;
-      items.push({
-        key:`leave_mine_${l.id}_${l.supStatus}_${l.hrStatus}`,
-        icon: isRejected?"❌":isApproved?"✅":"⏳",
-        title: isRejected?`ใบลาไม่ได้รับการอนุมัติ: ${l.date}`:isApproved?`ใบลาอนุมัติแล้ว: ${l.date}`:`ใบลารออนุมัติ: ${l.date}`,
-        sub:`${LT(l.type).name}${l.note?' · '+l.note:''}`,
-        nav:()=>{ setSub('leave','dashboard'); go('leave', navBtn('leave')); }
-      });
+  }
+
+  // ---------- กลุ่มที่ 2: เรื่องของ "ตัวฉันเอง" (ทุก role เห็น รวม HR ด้วย) ----------
+  leaves.filter(l=>String(l.emp)===String(loggedInEmployeeId)).forEach(l=>{
+    const isPending = (l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected";
+    const isApproved = l.hrStatus==="approved" && l.supStatus==="approved";
+    const isRejected = l.supStatus==="rejected"||l.hrStatus==="rejected";
+    if(!isPending && !isApproved && !isRejected) return;
+    items.push({
+      key:`leave_mine_${l.id}_${l.supStatus}_${l.hrStatus}`,
+      icon: isRejected?"❌":isApproved?"✅":"⏳",
+      title: isRejected?`ใบลาของคุณไม่ได้รับการอนุมัติ: ${l.date}`:isApproved?`ใบลาของคุณอนุมัติแล้ว: ${l.date}`:`ใบลาของคุณรออนุมัติ: ${l.date}`,
+      sub:`${LT(l.type).name}${l.note?' · '+l.note:''}`,
+      nav: goTo('leave','leave','dashboard',`lvmine-${l.id}`)
     });
-    if(projectsLoaded){
-      const tr = transferCovering(loggedInEmployeeId, todayISODate());
-      if(tr){
-        const toG = PG(tr.to_group_id), toP = toG?PJ(toG.project_id):null;
-        items.push({
-          key:`transfer_${tr.employee_id}_${tr.start_date}_${tr.to_group_id}`, icon:"🔁",
-          title:"คุณถูกย้ายไปช่วยงานชั่วคราว",
-          sub:`${toP?toP.name:'-'}${tr.end_date?' ถึง '+isoToThaiDisplay(tr.end_date):''}`,
-          nav:()=>{ setSub('projects','teams'); go('projects', navBtn('projects')); }
-        });
-      }
+  });
+  otRequests.filter(o=>String(o.emp)===String(loggedInEmployeeId) && o.status!=="pending").forEach(o=>{
+    items.push({
+      key:`ot_mine_${o.id}_${o.status}`, icon:o.status==="approved"?"✅":"❌",
+      title:`คำขอ OT ของคุณ${o.status==="approved"?"อนุมัติแล้ว":"ไม่ได้รับการอนุมัติ"}: ${o.date}`,
+      sub:`${o.hours} ชม.${o.reason?' · '+o.reason:''}`,
+      nav: goTo('attendance','attendance','ot',`ot-${o.id}`)
+    });
+  });
+  adj.filter(a=>String(a.employee_id)===String(loggedInEmployeeId) && a.status!=="pending").forEach(a=>{
+    items.push({
+      key:`adj_mine_${a.id}_${a.status}`, icon:a.status==="approved"?"✅":"❌",
+      title:`คำขอแก้เวลาของคุณ${a.status==="approved"?"อนุมัติแล้ว":"ถูกปฏิเสธ"}: ${isoToThaiDisplay(a.work_date)}`,
+      sub:`${fmtHM(a.new_check_in)}–${fmtHM(a.new_check_out)}${a.reason?' · '+a.reason:''}`,
+      nav: goTo('attendance','attendance','adjust',`adj-${a.id}`)
+    });
+  });
+  adv.filter(a=>String(a.employee_id)===String(loggedInEmployeeId) && a.status!=="pending").forEach(a=>{
+    items.push({
+      key:`adv_mine_${a.id}_${a.status}`, icon:a.status==="rejected"?"❌":"✅",
+      title:`คำขอเบิกเงินล่วงหน้าของคุณ${a.status==="rejected"?"ถูกปฏิเสธ":a.status==="deducted"?"ถูกหักในสลิปแล้ว":"อนุมัติแล้ว"}`,
+      sub:`฿${fmt(a.amount)}${a.reason?' · '+a.reason:''}`,
+      nav: goTo('payroll','payroll','advance',`advmine-${a.id}`)
+    });
+  });
+  if(projectsLoaded){
+    const tr = transferCovering(loggedInEmployeeId, todayISODate());
+    if(tr){
+      const toG = PG(tr.to_group_id), toP = toG?PJ(toG.project_id):null;
+      items.push({
+        key:`transfer_${tr.employee_id}_${tr.start_date}_${tr.to_group_id}`, icon:"🔁",
+        title:"คุณถูกย้ายไปช่วยงานชั่วคราว",
+        sub:`${toP?toP.name:'-'}${tr.end_date?' ถึง '+isoToThaiDisplay(tr.end_date):''}`,
+        nav:()=>{ setSub('projects','teams'); go('projects', navBtn('projects')); }
+      });
     }
   }
-  return items;
+
+  // ที่ยังไม่อ่านขึ้นก่อนเสมอ
+  return items.sort((a,b)=>(notifReadKeys.has(a.key)?1:0)-(notifReadKeys.has(b.key)?1:0));
+}
+// เลื่อนไปหาแถวที่เกี่ยวข้องแล้วกระพริบให้เห็น — บางแท็บโหลดข้อมูลแบบ lazy จึงต้องรอ/ลองซ้ำ
+function flashRow(rowId, tries){
+  if(!rowId) return;
+  tries = tries || 0;
+  const el = document.getElementById(rowId);
+  if(!el){ if(tries < 16) setTimeout(()=>flashRow(rowId, tries+1), 250); return; }
+  try{ el.scrollIntoView({behavior:"smooth", block:"center"}); }catch(_e){ el.scrollIntoView(); }
+  el.classList.remove("row-flash");
+  void el.offsetWidth;
+  el.classList.add("row-flash");
+  setTimeout(()=>el.classList.remove("row-flash"), 3200);
 }
 function toggleNotifPanel(e){
   if(e) e.stopPropagation();
@@ -1795,15 +1890,37 @@ function toggleNotifPanel(e){
   panel.style.display = opening ? "block" : "none";
   if(!opening) return;
   notifPanelItems = computeNotifications();
-  panel.innerHTML = notifPanelItems.length===0 ? `<div class="hint" style="padding:16px;text-align:center">ไม่มีการแจ้งเตือนใหม่ 🎉</div>` :
+  const unreadCount = notifPanelItems.filter(it=>!notifReadKeys.has(it.key)).length;
+  const head = `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px 10px;border-bottom:1px solid var(--line);margin-bottom:8px">
+      <b style="font-size:13.5px">แจ้งเตือน</b>
+      ${unreadCount?`<span class="pill red" style="font-size:10px">${unreadCount} ใหม่</span>`:''}
+      ${unreadCount?`<button class="btn ghost xs" style="margin-left:auto" onclick="markAllNotifRead(event)">อ่านทั้งหมด</button>`:''}
+    </div>`;
+  panel.innerHTML = head + (notifPanelItems.length===0 ? `<div class="hint" style="padding:16px;text-align:center">ไม่มีการแจ้งเตือนใหม่ 🎉</div>` :
     notifPanelItems.map((it,idx)=>{
       const unread = !notifReadKeys.has(it.key);
       return `
     <div class="notif-item${unread?' unread':''}" onclick="clickNotif(${idx})">
       <div class="ic" style="background:#f3f5f9">${it.icon}</div>
-      <div style="flex:1"><b style="font-size:13px">${it.title}</b><div class="hint">${it.sub}</div></div>
+      <div style="flex:1;min-width:0"><b style="font-size:13px">${it.title}</b><div class="hint">${it.sub}</div></div>
       ${unread?'<span class="unread-dot"></span>':''}
-    </div>`;}).join("");
+    </div>`;}).join(""));
+}
+// ทำเครื่องหมายว่าอ่านทั้งหมด (บันทึกลง notification_reads จริง ไม่ใช่แค่ซ่อนจุดแดงชั่วคราว)
+async function markAllNotifRead(ev){
+  if(ev) ev.stopPropagation();
+  const unread = computeNotifications().filter(it=>!notifReadKeys.has(it.key));
+  if(!unread.length || !loggedInEmployeeId) return;
+  const nowISO = new Date().toISOString();
+  unread.forEach(it=>notifReadKeys.add(it.key));
+  updateNotifBell();
+  const panel = document.getElementById("notifPanel");
+  if(panel) panel.style.display = "none";
+  const { error } = await sb.from("notification_reads").upsert(
+    unread.map(it=>({employee_id:loggedInEmployeeId, notif_key:it.key, read_at:nowISO})),
+    {onConflict:"employee_id,notif_key"});
+  if(error) console.error("markAllNotifRead", error);
+  toast(`ทำเครื่องหมายอ่านแล้ว ${unread.length} รายการ ✓`);
 }
 // กดแจ้งเตือน → จำว่าอ่านแล้ว (บันทึกลง notification_reads จริง) + พาไปหน้า/แท็บที่เกี่ยวข้องทันที
 function clickNotif(idx){
@@ -3121,7 +3238,7 @@ function attAdjust(){
     rows.length===0?'<div class="hint" style="text-align:center;padding:24px">ยังไม่มีคำขอ</div>':`
     <table style="margin-top:10px">
       <tr><th>ยื่นเมื่อ</th><th>พนักงาน</th><th>วันที่แก้</th><th>เดิม → ใหม่</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center"></th></tr>
-      ${rows.map(a=>{const e=E(a.employee_id);const mine=String(a.employee_id)===String(loggedInEmployeeId);return `<tr>
+      ${rows.map(a=>{const e=E(a.employee_id);const mine=String(a.employee_id)===String(loggedInEmployeeId);return `<tr id="adj-${a.id}">
         <td style="font-size:11.5px;white-space:nowrap">${a.created_at?new Date(a.created_at).toLocaleString("th-TH",{dateStyle:"short",timeStyle:"short"}):"—"}</td>
         <td>${e?empCell(e,true):'#'+a.employee_id}</td>
         <td style="white-space:nowrap"><b>${isoToThaiDisplay(a.work_date)}</b></td>
@@ -3294,7 +3411,7 @@ function attOt(){
         const e=E(o.emp); if(!e) return '';
         const isMine = String(o.emp)===String(loggedInEmployeeId);
         const showApprove = canApprove && o.status==="pending" && (!isMine || canViewAll());
-        return `<tr>
+        return `<tr id="ot-${o.id}">
         <td>${o.date}</td><td>${empCell(e,true)}</td>
         <td style="white-space:nowrap;font-size:12.5px">${otSpanLabel(o)}</td>
         <td class="num"><b>${o.hours}</b></td>
@@ -3315,6 +3432,14 @@ function attOt(){
 function attToday(){
   const me = E(loggedInEmployeeId) || employees[0];
   const isWfhOk = me.type==="monthly" && me.wfh;
+  // แบนเนอร์วันหยุดบริษัท — ให้เห็นชัดว่าวันนี้ระบบไม่นับเป็นวันทำงาน
+  ensureHolidaysForRender("attendance");
+  const todayHols = holidaysOn(todayISODate());
+  const holidayBanner = todayHols.length ? `
+      <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#fff6e6,#fff);border:1px solid #ffd9a8">
+        <h3>🎌 วันนี้เป็นวันหยุดของบริษัท — ${todayHols.map(h=>h.name).join(" · ")}</h3>
+        <div class="hint" style="margin-top:4px">ระบบไม่นับวันนี้เป็นวันทำงาน (ไม่ต้องลงเวลา ไม่ขึ้นว่าขาดงาน) · พนักงานรายเดือนได้รับเงินเดือนตามปกติ · พนักงานรายวันได้ค่าแรงเฉพาะกรณีมาทำงานและลงเวลาจริง</div>
+      </div>` : "";
   const visibleIds = visibleEmployees().map(e=>e.id);
   const attRows = attendanceToday.filter(a=>visibleIds.includes(a.emp));
   const isPlainEmployee = !canViewAll() && !isTeamLead();
@@ -3348,7 +3473,7 @@ function attToday(){
       </div>`;
 
   if(isPlainEmployee){
-    return `
+    return holidayBanner + `
     <div class="grid" style="grid-template-columns:1fr">${clockCard}</div>
     <div class="card" style="margin-top:16px">
       <h3>📅 สถานะของฉันวันนี้</h3>
@@ -3363,7 +3488,7 @@ function attToday(){
     </div>`;
   }
 
-  return `
+  return holidayBanner + `
   <div class="grid" style="grid-template-columns:2fr 1fr">
     <div class="card">
       <h3>🕐 บันทึกเวลาวันนี้ — ${todayThaiFull()}</h3>
@@ -3703,7 +3828,7 @@ function leaveMyDash(){
     <h3>🗓️ ประวัติการลาของฉัน</h3>
     <table style="margin-top:10px">
       <tr><th>วันที่ลา</th><th>ประเภท</th><th>เหตุผล</th><th>ระดับหัวหน้า</th><th>ระดับ HR</th></tr>
-      ${data.length===0?'<tr><td colspan="5" class="hint" style="text-align:center;padding:16px">ยังไม่มีประวัติการลา</td></tr>':data.map(l=>{const lt=LT(l.type);return `<tr>
+      ${data.length===0?'<tr><td colspan="5" class="hint" style="text-align:center;padding:16px">ยังไม่มีประวัติการลา</td></tr>':data.map(l=>{const lt=LT(l.type);return `<tr id="lvmine-${l.id}">
         <td>${l.date}</td>
         <td style="color:${lt.color}">${lt.name}</td>
         <td class="hint" style="font-size:12.5px">${l.note||"—"}</td>
@@ -3790,7 +3915,7 @@ function leaveDash(){
     <table style="margin-top:10px">
       <tr><th>วันที่ลา</th><th>พนักงาน</th><th>ประเภท</th><th>สถานะ</th></tr>
       ${data.length===0?'<tr><td colspan="4" class="hint" style="text-align:center;padding:16px">ไม่มีข้อมูลลาในช่วงที่เลือก</td></tr>':
-      data.slice().sort((a,b)=>(parseThaiDate(b.date)||0)-(parseThaiDate(a.date)||0)).map(l=>{const e=E(l.emp);return `<tr>
+      data.slice().sort((a,b)=>(parseThaiDate(b.date)||0)-(parseThaiDate(a.date)||0)).map(l=>{const e=E(l.emp);return `<tr id="lvmine-${l.id}">
         <td>${l.date}</td><td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td style="color:${LT(l.type).color}">${LT(l.type).name}</td><td>${leaveStatus(l)}</td>
       </tr>`;}).join("")}
     </table>
@@ -3900,7 +4025,7 @@ function leaveApprove(){
     <div class="hint">ใบลาที่หัวหน้าอนุมัติแล้วจะเด้งมาให้ HR อนุมัติต่อ · ปฏิเสธที่ระดับไหนก็จบทันที${!canViewAll()?' · แสดงเฉพาะใบลาของทีมคุณ':''}</div>
     <table style="margin-top:12px">
       <tr><th>พนักงาน</th><th>วันที่ลา</th><th>ประเภท</th><th>ยื่นเมื่อ</th><th>ตรงเวลา</th><th>ระดับหัวหน้า</th><th>ระดับ HR</th><th style="text-align:center">การดำเนินการ</th></tr>
-      ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);return `<tr>
+      ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);return `<tr id="lv-${l.id}">
         <td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td>${l.date}</td>
         <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}<div style="color:var(--muted);font-size:11.5px">${l.note}</div></td>
         <td class="num">${l.submitted}</td>
@@ -3975,49 +4100,94 @@ async function syncLeaveToAttendance(empId, dateISO){
   if(dateISO === todayISODate()) await loadAttendanceToday();
 }
 
+// ปฏิทินการลาแบบใช้งานจริง — เลื่อนเดือนได้ · เห็นว่าวันไหนใครลาบ้าง · ซ้อนวันหยุดบริษัทให้ด้วย
+let leaveCalCursor = null; // {y, m} (m = 0-11) · null = เดือนปัจจุบัน
+function leaveCalMove(delta){
+  const c = leaveCalCursor || (()=>{const n=new Date();return {y:n.getFullYear(), m:n.getMonth()};})();
+  const d = new Date(c.y, c.m + delta, 1);
+  leaveCalCursor = {y:d.getFullYear(), m:d.getMonth()};
+  render("leave");
+}
+function leaveCalToday(){ leaveCalCursor = null; render("leave"); }
 function leaveCal(){
-  // July 2569 (2026) — 1st is Wed
-  const monthName = "กรกฎาคม 2569";
-  const startWeekday = 3; // Wednesday
-  const daysInMonth = 31;
+  const ready = ensureHolidaysForRender("leave");
+  const now = new Date();
+  const cur = leaveCalCursor || {y:now.getFullYear(), m:now.getMonth()};
+  const y = cur.y, m = cur.m;
+  const monthName = `${THAI_MONTHS_FULL[m]} ${y+543}`;
+  const startWeekday = new Date(y, m, 1).getDay();   // 0=อาทิตย์
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const todayISO = todayISODate();
+  const ym = `${y}-${String(m+1).padStart(2,"0")}`;
+
+  // ใบลาของเดือนนี้ — อนุมัติครบ = สีทึบ · ยังรออนุมัติ = สีจาง · ที่ถูกปฏิเสธไม่แสดง
   const events = {};
   myVisibleLeaves().forEach(l=>{
-    // แสดงเฉพาะใบลาที่ "อนุมัติครบแล้ว" เท่านั้น — ที่ยังรอ/ไม่อนุมัติ ไม่โชว์ชื่อในปฏิทิน
-    if(l.hrStatus!=="approved") return;
-    const d = parseInt(l.date.split(" ")[0]);
-    if(l.date.includes("ก.ค.")){
-      (events[d]=events[d]||[]).push({emp:E(l.emp), type:l.type, status:l.hrStatus, sup:l.supStatus});
-    }
+    if(!l.dateISO || l.dateISO.slice(0,7) !== ym) return;
+    if(l.supStatus==="rejected" || l.hrStatus==="rejected") return;
+    const approved = l.hrStatus==="approved" && l.supStatus==="approved";
+    const d = Number(l.dateISO.slice(8,10));
+    (events[d] = events[d] || []).push({emp:E(l.emp), type:l.type, approved});
   });
+  Object.values(events).forEach(list=>list.sort((a,b)=> (b.approved?1:0)-(a.approved?1:0)));
+
+  const holidayDow = THAI_DAYS[settings.weeklyHoliday] != null ? THAI_DAYS[settings.weeklyHoliday] : 0;
+  const isWeeklyOff = wd => settings.weeklyHoliday==="เสาร์-อาทิตย์" ? (wd===0||wd===6) : wd===holidayDow;
+  const firstName = n => (n||"").replace(/\(.*\)/,"").trim().split(" ")[0] || n;
 
   let html = '';
   ["อา","จ","อ","พ","พฤ","ศ","ส"].forEach(d=>html+=`<div class="cal-head">${d}</div>`);
   for(let i=0;i<startWeekday;i++) html+='<div class="cal-day pad"></div>';
-  for(let d=1;d<=daysInMonth;d++){
-    const weekday = (startWeekday+d-1)%7;
-    const isSun = weekday===0;
-    const isToday = d===4;
+  let totalApproved = 0, totalPending = 0;
+  for(let d=1; d<=daysInMonth; d++){
+    const dISO = `${ym}-${String(d).padStart(2,"0")}`;
+    const off = isWeeklyOff(new Date(y, m, d).getDay());
+    const isToday = dISO===todayISO;
+    const hols = holidaysOn(dISO);
     const ev = events[d]||[];
-    html += `<div class="cal-day ${isSun?'sun':''} ${isToday?'today':''}">
-      <div class="num">${d}${isSun?'<div style="font-size:9px;font-weight:400;color:#c1c6d1">หยุด</div>':''}</div>
-      ${ev.filter(e=>e.emp).map(e=>`<span class="cal-tag ${e.type==='personal'?'':e.type==='sick'?'p':'s'}" title="${e.emp.name} - ${LT(e.type).name}">${e.emp.name.replace(/\(.*\)/,"").split(" ")[0]}</span>`).join("")}
+    ev.forEach(e=>{ if(e.approved) totalApproved++; else totalPending++; });
+    html += `<div class="cal-day ${off?'sun':''} ${hols.length?'holiday':''} ${isToday?'today':''}">
+      <div class="num">${d}${off?'<small>หยุดสัปดาห์</small>':''}</div>
+      ${hols.map(h=>`<span class="cal-tag g" title="วันหยุดบริษัท: ${h.name}${h.dept?' (เฉพาะ '+h.dept+')':''}">🎌 ${h.name}</span>`).join("")}
+      ${ev.filter(e=>e.emp).map(e=>`<span class="cal-tag ${e.type==='personal'?'':e.type==='sick'?'p':'s'}${e.approved?'':' pending'}" title="${e.emp.name} · ${LT(e.type).name}${e.approved?'':' · ยังรออนุมัติ'}">${firstName(e.emp.name)}</span>`).join("")}
     </div>`;
   }
 
+  const detailRows = Object.keys(events).map(Number).sort((a,b)=>a-b).map(d=>
+    events[d].filter(e=>e.emp).map(e=>`<tr>
+      <td style="white-space:nowrap"><b>${d} ${THAI_MONTHS[m]} ${y+543}</b></td>
+      <td>${empCell(e.emp,true)}</td>
+      <td style="color:${LT(e.type).color};font-weight:600">${LT(e.type).name}</td>
+      <td>${e.approved?'<span class="pill green">✓ อนุมัติแล้ว</span>':'<span class="pill amber">⏳ รออนุมัติ</span>'}</td>
+    </tr>`).join("")).join("");
+
   return `
   <div class="card">
-    <div style="display:flex;align-items:center;gap:12px">
-      <button class="btn ghost xs">‹</button>
-      <h3 style="margin-bottom:0">📅 ${monthName}</h3>
-      <button class="btn ghost xs">›</button>
-      <div style="margin-left:auto;display:flex;gap:12px;font-size:12px">
-        <span><span class="cal-tag" style="display:inline-block">ลากิจ</span></span>
-        <span><span class="cal-tag p" style="display:inline-block">ลาป่วย</span></span>
-        <span><span class="cal-tag s" style="display:inline-block">พักร้อน</span></span>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn ghost xs" onclick="leaveCalMove(-1)">‹</button>
+      <h3 style="margin-bottom:0;min-width:140px;text-align:center">📅 ${monthName}</h3>
+      <button class="btn ghost xs" onclick="leaveCalMove(1)">›</button>
+      <button class="btn ghost xs" onclick="leaveCalToday()">วันนี้</button>
+      <div style="margin-left:auto;display:flex;gap:10px;font-size:12px;flex-wrap:wrap;align-items:center">
+        <span class="cal-tag" style="display:inline-block">ลากิจ</span>
+        <span class="cal-tag p" style="display:inline-block">ลาป่วย</span>
+        <span class="cal-tag s" style="display:inline-block">อื่นๆ</span>
+        <span class="cal-tag pending" style="display:inline-block">รออนุมัติ</span>
+        <span class="cal-tag g" style="display:inline-block">🎌 วันหยุด</span>
       </div>
     </div>
+    <div class="hint" style="margin-top:8px">อนุมัติแล้ว ${totalApproved} รายการ · รออนุมัติ ${totalPending} รายการ ในเดือนนี้${ready?'':' · ⏳ กำลังโหลดวันหยุด...'}</div>
     <div class="cal-grid">${html}</div>
-    ${Object.keys(events).length===0?'<div class="hint" style="text-align:center;margin-top:20px">ไม่มีพนักงานลาในช่วงนี้ 🎉</div>':''}
+    ${(totalApproved+totalPending)===0?'<div class="hint" style="text-align:center;margin-top:20px">ไม่มีพนักงานลาในเดือนนี้ 🎉</div>':''}
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>📋 รายละเอียดการลาในเดือนนี้</h3>
+    ${!detailRows?'<div class="hint" style="text-align:center;padding:20px">— ไม่มีรายการ —</div>':`
+    <table style="margin-top:10px">
+      <tr><th>วันที่</th><th>พนักงาน</th><th>ประเภท</th><th>สถานะ</th></tr>
+      ${detailRows}
+    </table>`}
   </div>`;
 }
 
@@ -4975,7 +5145,8 @@ async function afterLogin(){
     showLogin("บัญชีนี้ถูกระงับการใช้งาน (พ้นสภาพพนักงาน) — กรุณาติดต่อ HR");
     return false;
   }
-  await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits(), loadNotifReads()]);
+  // loadAdjustments/loadAdvances/ensureHolidaysLoaded โหลดตั้งแต่ตอนล็อกอิน เพราะกระดิ่งแจ้งเตือนต้องใช้นับ "สิ่งที่รออนุมัติ" ให้ครบทุกประเภท
+  await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits(), loadNotifReads(), loadAdjustments(), loadAdvances(), ensureHolidaysLoaded()]);
   await loadProjectsModule(); projectsLoaded = true;
   updateProjectBadge();
   await loadPayrollStatus();
@@ -4989,8 +5160,32 @@ function showApp(){
   document.getElementById("appRoot").style.display="flex";
   applyRoleUI();
   initLangSwitch();
+  if(applyDeepLink()) return;   // เปิดจากลิงก์ในการ์ด LINE → เด้งไปหน้า/แท็บนั้นเลย
   const landing = (isHrAssistant() || (!canViewAll() && !isTeamLead())) ? "attendance" : "dashboard";
   go(landing, document.querySelector(`[data-page=${landing}]`));
+}
+// ลิงก์ลึกจากการ์ดแจ้งเตือน LINE เช่น  ...index.html#/leave/approve  หรือ  #/attendance/ot
+// รองรับเฉพาะหน้าที่มีจริง และยังผ่านการตรวจสิทธิ์ของ go() ตามปกติ
+const DEEPLINK_PAGES = {
+  leave:      {key:"leave",      subs:["dashboard","types","submit","approve","calendar","report","quota"]},
+  attendance: {key:"attendance", subs:["today","ot","review","adjust","summary","late"]},
+  payroll:    {key:"payroll",    subs:["dashboard","run","structure","slip","advance","deductions","bonus","report","ess"]},
+  settings:   {key:"settings",   subs:["company","work","holiday","late","payroll","org","approval","channels","users","phase2"]}
+};
+function applyDeepLink(){
+  const raw = (location.hash||"").replace(/^#\/?/, "").trim();
+  if(!raw) return false;
+  const [page, sub] = raw.split("/");
+  const def = DEEPLINK_PAGES[page];
+  if(!def) return false;
+  if(sub && def.subs.includes(sub)) subTab[def.key] = sub;
+  try{ history.replaceState(null, "", location.pathname + location.search); }catch(_e){ location.hash = ""; }
+  // go() อาจบล็อกเพราะไม่มีสิทธิ์ (แล้ว return ก่อน render) — ถ้าโดนบล็อก ให้ตกกลับไปหน้า landing ปกติ
+  const before = currentPage;
+  currentPage = "__deeplink_probe__";
+  go(page, document.querySelector(`[data-page=${page}]`));
+  if(currentPage === "__deeplink_probe__"){ currentPage = before; return false; }
+  return true;
 }
 function showLogin(msg){
   document.getElementById("appRoot").style.display="none";
@@ -5297,7 +5492,7 @@ function pyAdvance(){
     ${loading?'<div class="hint" style="text-align:center;padding:20px">⏳ กำลังโหลด...</div>':
     myRows.length===0?'<div class="hint" style="text-align:center;padding:20px">ยังไม่เคยยื่นขอเบิก</div>':`
     <table style="margin-top:10px"><tr><th>ยื่นเมื่อ</th><th class="num">จำนวน</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center"></th></tr>
-    ${myRows.map(a=>`<tr>
+    ${myRows.map(a=>`<tr id="advmine-${a.id}">
       <td style="font-size:12px">${new Date(a.requested_at).toLocaleDateString("th-TH")}</td>
       <td class="num"><b>฿${fmt(a.amount)}</b></td>
       <td class="hint" style="font-size:12.5px">${a.reason||"—"}</td>
@@ -5312,7 +5507,7 @@ function pyAdvance(){
     ${loading?'<div class="hint" style="text-align:center;padding:20px">⏳ กำลังโหลด...</div>':
     advanceRows.length===0?'<div class="hint" style="text-align:center;padding:20px">ยังไม่มีคำขอ</div>':`
     <table style="margin-top:10px"><tr><th>ยื่นเมื่อ</th><th>พนักงาน</th><th class="num">จำนวน</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center"></th></tr>
-    ${advanceRows.map(a=>{const e=E(a.employee_id);return `<tr>
+    ${advanceRows.map(a=>{const e=E(a.employee_id);return `<tr id="adv-${a.id}">
       <td style="font-size:12px;white-space:nowrap">${new Date(a.requested_at).toLocaleDateString("th-TH")}</td>
       <td>${e?empCell(e,true):'#'+a.employee_id}</td>
       <td class="num"><b>฿${fmt(a.amount)}</b></td>
@@ -5891,6 +6086,7 @@ function pgSettings(){
   <div class="subtabs-wrap"><button class="subtab-arrow left" onclick="scrollSubtabs(this,-160)">‹</button><div class="subtabs">
     ${tab("company","ข้อมูลบริษัท","🏢")}
     ${tab("work","เวลาทำงาน","🕐")}
+    ${tab("holiday","วันหยุดประจำปี","📅")}
     ${tab("late","นโยบายมาสาย","⏰")}
     ${tab("payroll","ตั้งค่าเงินเดือน","💰")}
     ${tab("org","โครงสร้างองค์กร","🏗️")}
@@ -5899,7 +6095,7 @@ function pgSettings(){
     ${tab("users","สิทธิ์ผู้ใช้","🔐")}
     ${tab("phase2","เฟส 2/3","🗺️")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${t==="company"?stCompany():t==="work"?stWork():t==="late"?stLate():t==="payroll"?stPayroll():t==="org"?stOrg():t==="approval"?stApproval():t==="channels"?stChan():t==="users"?stUsers():stPhase2()}`;
+  ${t==="company"?stCompany():t==="work"?stWork():t==="holiday"?stHolidays():t==="late"?stLate():t==="payroll"?stPayroll():t==="org"?stOrg():t==="approval"?stApproval():t==="channels"?stChan():t==="users"?stUsers():stPhase2()}`;
 }
 function stCompany(){
   return `
@@ -6318,18 +6514,111 @@ function stWork(){
     </div>
   </div>
 
-  <div class="card" style="margin-top:16px;opacity:.75">
+  <div class="card" style="margin-top:16px">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
       <h3 style="margin-bottom:0">📅 วันหยุดประจำปี (Holidays)</h3>
-      <span class="pill gray" style="margin-left:auto">ยังไม่เปิดใช้งาน</span>
-      <button class="btn ghost sm" disabled>Sync Calendar</button>
+      <span class="pill green" style="margin-left:auto">เปิดใช้งานแล้ว</span>
     </div>
-    <div class="hint">รายการวันหยุดตามประเพณีที่ระบบจะไม่นับเป็นวันทำงาน — วางโครงไว้รอเปิดใช้ในเฟสถัดไป (ยังแก้ไข/ซิงค์จริงไม่ได้ตอนนี้)</div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:14px">
-      ${HOLIDAYS.map(h=>`<div style="padding:12px;background:#f8f9fc;border-radius:10px"><b style="font-size:13px">${h.name}</b><div class="hint">${h.date}</div></div>`).join("")}
-    </div>
-    <button class="btn ghost sm" style="margin-top:12px" disabled>+ เพิ่มวันหยุดใหม่</button>
+    <div class="hint">วันหยุดตามประเพณีที่บริษัทประกาศเป็นครั้งๆ — ระบบจะไม่นับวันนั้นเป็นวันทำงานของทุกคน (ไม่ขึ้นว่า "ขาดงาน" และไม่ต้องลงเวลา)</div>
+    <button class="btn primary sm" style="margin-top:12px" onclick="setSub('settings','holiday')">📅 จัดการวันหยุด</button>
   </div>`;
+}
+
+/* ============ ตั้งค่า → วันหยุดประจำปี (ตาราง holidays) ============ */
+let holidayYearFilter = null;   // null = ปีปัจจุบัน (ค.ศ.)
+function stHolidays(){
+  const ready = ensureHolidaysForRender("settings");
+  const canEdit = canAccessAdmin();   // HR + Super Admin
+  const rows = Array.isArray(holidayRows) ? holidayRows : [];
+  const years = Array.from(new Set(rows.map(h=>Number(h.holiday_date.slice(0,4))))).sort((a,b)=>b-a);
+  const curYear = new Date().getFullYear();
+  if(!years.includes(curYear)) years.unshift(curYear);
+  const y = holidayYearFilter || curYear;
+  const groups = groupHolidays(rows.filter(h=>h.holiday_date.slice(0,4)===String(y)));
+  const depts = Array.from(new Set(employees.map(e=>e.dept).filter(Boolean))).sort();
+  const todayISO = todayISODate();
+  const upcoming = rows.filter(h=>h.holiday_date>=todayISO).length;
+
+  const form = !canEdit ? '' : `
+  <div class="card" style="margin-bottom:16px">
+    <h3>➕ เพิ่มวันหยุด (กรอกเป็นช่วงวันได้)</h3>
+    <div class="hint">ใช้ตอนที่ประชุมบริษัทมีมติหยุดเป็นครั้งๆ — กรอกชื่อและช่วงวันที่ ระบบจะสร้างให้ทีละวันตลอดช่วงโดยอัตโนมัติ</div>
+    <div class="grid" style="grid-template-columns:2fr 1fr 1fr 1.2fr;margin-top:14px;gap:12px">
+      <div class="field"><label>ชื่อวันหยุด <span style="color:var(--red)">*</span></label><input id="hName" placeholder="เช่น หยุดสงกรานต์ / หยุดประเพณีถือศีลกินผัก"></div>
+      <div class="field"><label>ตั้งแต่วันที่ <span style="color:var(--red)">*</span></label><input type="date" id="hFrom" value="${todayISO}"></div>
+      <div class="field"><label>ถึงวันที่</label><input type="date" id="hTo" placeholder="ว่าง = วันเดียว"></div>
+      <div class="field"><label>ขอบเขต</label><select id="hDept"><option value="">ทั้งบริษัท (ทุกคน)</option>${depts.map(d=>`<option value="${d}">เฉพาะแผนก ${d}</option>`).join("")}</select></div>
+    </div>
+    <button class="btn primary" style="margin-top:12px" onclick="addHolidayRange()">💾 บันทึกวันหยุด</button>
+  </div>`;
+
+  return `
+  <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#fff7ec,#fff);border:1px solid #ffd9a8">
+    <h3>📅 วันหยุดตามประเพณีของบริษัท</h3>
+    <div class="hint" style="line-height:1.85">
+      • วันที่อยู่ในรายการนี้ <b>ไม่ถูกนับเป็นวันทำงาน</b> ของพนักงาน — ไม่ขึ้นเตือน "ลืมลงเวลา" และไม่ถูกหักเงินว่าขาดงาน<br>
+      • <b>พนักงานรายเดือน</b> — เงินเดือนเท่าเดิม (วันหยุดไม่ถูกหัก)<br>
+      • <b>พนักงานรายวัน</b> — ยึดหลักเดิม คือ <b>ไม่ได้มาทำงาน = ไม่ได้ค่าแรง</b> (แต่ไม่ถือว่าขาดงาน) · ถ้ามาทำงานจริงและลงเวลา ก็ได้ค่าแรงวันนั้นตามปกติ<br>
+      • มีผลกับ <b>ทุกคนทั้งบริษัท</b> เว้นแต่จะเลือกขอบเขตเป็นเฉพาะแผนก
+    </div>
+    <div style="margin-top:10px"><span class="pill amber">วันหยุดที่ยังไม่ถึง ${upcoming} วัน</span></div>
+  </div>
+  ${form}
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <h3 style="margin-bottom:0">🗓️ รายการวันหยุด</h3>
+      <select style="margin-left:auto;max-width:170px" onchange="holidayYearFilter=Number(this.value);render('settings')">
+        ${years.map(yy=>`<option value="${yy}" ${yy===y?'selected':''}>ปี ${yy+543} (${yy})</option>`).join("")}
+      </select>
+    </div>
+    ${!ready?'<div class="hint" style="text-align:center;padding:24px">⏳ กำลังโหลด...</div>':
+      groups.length===0?'<div class="hint" style="text-align:center;padding:24px">ยังไม่มีวันหยุดในปีนี้ — เพิ่มได้จากฟอร์มด้านบน</div>':`
+    <table style="margin-top:12px">
+      <tr><th>ชื่อวันหยุด</th><th>ช่วงวันที่</th><th class="num">จำนวนวัน</th><th>ขอบเขต</th><th style="text-align:center"></th></tr>
+      ${groups.map(g=>`<tr>
+        <td><b>${g.name}</b></td>
+        <td style="white-space:nowrap">${g.from===g.to?isoToThaiDisplay(g.from):isoToThaiDisplay(g.from)+" – "+isoToThaiDisplay(g.to)}</td>
+        <td class="num">${g.days}</td>
+        <td>${g.dept?'<span class="pill blue">เฉพาะ '+g.dept+'</span>':'<span class="pill gray">ทั้งบริษัท</span>'}</td>
+        <td style="text-align:center">${canEdit?`<button class="btn danger xs" onclick="delHolidayGroup('${g.ids.join(",")}','${g.name.replace(/'/g,"\\'")}')">🗑 ลบ</button>`:''}</td>
+      </tr>`).join("")}
+    </table>`}
+  </div>`;
+}
+async function addHolidayRange(){
+  const name = document.getElementById("hName").value.trim();
+  const from = document.getElementById("hFrom").value;
+  const to   = document.getElementById("hTo").value || from;
+  const dept = document.getElementById("hDept").value || null;
+  if(!name){ toast("กรุณากรอกชื่อวันหยุด"); return; }
+  if(!from){ toast("กรุณาเลือกวันที่เริ่ม"); return; }
+  if(to < from){ toast("วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม"); return; }
+  const dates = [];
+  for(let d=new Date(from+"T00:00:00"); isoDate(d)<=to; d.setDate(d.getDate()+1)) dates.push(isoDate(d));
+  if(dates.length>62){ toast("ช่วงวันยาวเกินไป (เกิน 62 วัน) — กรุณาแบ่งเป็นหลายครั้ง"); return; }
+  const existing = new Set((Array.isArray(holidayRows)?holidayRows:[]).map(h=>h.holiday_date+"|"+(h.dept||"")));
+  const rows = dates.filter(d=>!existing.has(d+"|"+(dept||""))).map(d=>({
+    holiday_date: d, name, holiday_type: "traditional", dept, created_by: loggedInEmployeeId || null
+  }));
+  if(rows.length===0){ toast("วันที่เลือกถูกตั้งเป็นวันหยุดไว้อยู่แล้วทั้งหมด"); return; }
+  const { error } = await sb.from("holidays").insert(rows);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  logAudit("settings","เพิ่มวันหยุดตามประเพณี", `${name} · ${isoToThaiDisplay(from)}${from!==to?" – "+isoToThaiDisplay(to):""} · ${rows.length} วัน${dept?" · เฉพาะ "+dept:" · ทั้งบริษัท"}`);
+  await reloadHolidays();
+  holidayYearFilter = Number(from.slice(0,4));
+  render("settings");
+  toast(`เพิ่มวันหยุด "${name}" ${rows.length} วันแล้ว ✓ ระบบจะไม่นับเป็นวันทำงานตั้งแต่นี้`);
+}
+async function delHolidayGroup(idsCsv, name){
+  const ids = idsCsv.split(",").map(Number).filter(Boolean);
+  if(!ids.length) return;
+  if(!confirm(`ยืนยันลบวันหยุด "${name}" (${ids.length} วัน)?\nวันเหล่านั้นจะกลับมานับเป็นวันทำงานตามปกติ`)) return;
+  const { error } = await sb.from("holidays").delete().in("id", ids);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  logAudit("settings","ลบวันหยุดตามประเพณี", `${name} · ${ids.length} วัน`);
+  await reloadHolidays();
+  render("settings");
+  toast(`ลบวันหยุด "${name}" แล้ว ✓`);
 }
 function openLocationModal(id){
   const isNew = !id;
@@ -6445,6 +6734,16 @@ async function setLateRate(v){
 function stChan(){
   const webhookUrl = `${SUPABASE_URL}/functions/v1/line-webhook`;
   return `
+  <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px solid #b9ccf5">
+    <h3>🔔 สรุปรายการรออนุมัติส่งเข้า LINE ของ HR — ทุกวัน 16:00 น.</h3>
+    <div class="hint" style="line-height:1.85;margin-top:4px">
+      ระบบจะรวบรวม<b>ทุกอย่างที่ยังไม่ได้อนุมัติ</b> (ใบลา · คำขอ OT · คำขอแก้เวลา · ขอเบิกเงินล่วงหน้า) แล้วส่งเป็นการ์ดเข้า LINE ของผู้ที่ถือสิทธิ์ <b>HR</b> เท่านั้น วันละ 1 ครั้งเวลา 16:00 น.<br>
+      • ถ้าวันนั้น<b>ไม่มีรายการค้าง จะไม่ส่งอะไรเลย</b><br>
+      • ในการ์ดมีปุ่ม “เปิดดู / กดอนุมัติ” กดแล้วเข้าแอปตรงหน้าที่ต้องอนุมัติทันที<br>
+      • ถ้า HR ยังไม่ได้ผูกบัญชี LINE ระบบจะส่งให้ Super Admin แทน
+    </div>
+    <button class="btn primary sm" style="margin-top:12px" onclick="sendHrDigestNow()">📤 ส่งสรุปทดสอบตอนนี้</button>
+  </div>
   <div class="card">
     <h3>📡 ช่องทางแจ้งเตือน & สื่อสาร</h3>
     <div class="hint">ใช้ในโมดูลข่าวประกาศ, แจ้งเตือนใบลา, ส่งสลิปเงินเดือน ฯลฯ</div>
@@ -6547,6 +6846,23 @@ async function testSendLine(){
   try{
     await callLineFn(empId, `🔔 ทดสอบระบบแจ้งเตือน HRMS CENTER — ถ้าคุณเห็นข้อความนี้แสดงว่าเชื่อมต่อ LINE สำเร็จแล้ว ✓`);
     toast(`ส่งข้อความทดสอบถึง ${e.name} แล้ว ✓ ตรวจสอบที่แอป LINE`);
+  }catch(err){ toast("ส่งไม่สำเร็จ: "+err.message); }
+}
+// สั่งส่งสรุป "รายการรออนุมัติ" เข้า LINE ของ HR ทันที (ปกติ pg_cron ยิงให้เองทุกวัน 16:00 น.)
+async function sendHrDigestNow(){
+  toast("⏳ กำลังรวบรวมรายการที่รออนุมัติ...");
+  try{
+    const { data: sess } = await sb.auth.getSession();
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/hr-pending-digest`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+(sess?.session?.access_token||"") },
+      body: JSON.stringify({})
+    });
+    const j = await res.json().catch(()=>({error:"ตอบกลับไม่ถูกต้อง"}));
+    if(!res.ok || j.error){ toast("ส่งไม่สำเร็จ: "+(j.error||res.status)); return; }
+    if(!j.sent){ toast(j.reason || "ไม่มีรายการค้างอนุมัติ — ไม่ได้ส่ง"); return; }
+    logAudit("settings","ส่งสรุปรายการรออนุมัติเข้า LINE (ทดสอบ)", `${j.pending} รายการ · ผู้รับ ${j.recipients} คน`);
+    toast(`ส่งสรุป ${j.pending} รายการเข้า LINE แล้ว ✓ (ผู้รับ ${j.recipients} คน)`);
   }catch(err){ toast("ส่งไม่สำเร็จ: "+err.message); }
 }
 // ส่งแจ้งเตือน LINE แบบ fire-and-forget (ไม่บล็อก UI, เงียบถ้าพนักงานยังไม่ผูก LINE หรือปิดช่องทางไว้)
