@@ -1119,6 +1119,16 @@ async function loadCycleStats(cy){
     const att = (attRes.data||[]).filter(a=>String(a.employee_id)===String(e.id));
     // วันทำงานที่นับจ่าย: ลงเวลาปกติ/สาย + วันที่ HR ยืนยันย้อนหลังว่ามาทำงาน (manual — กรณีลืมลงเวลา)
     const workDays = att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").length;
+    // #1b รายเดือนกลางรอบ: วันหยุดบริษัทในช่วงที่ทำงานอยู่ ต้องนับเป็น "วันที่จ่ายเงินให้" ด้วย (ไม่ต้องลงเวลา แต่ไม่เสียเงิน)
+    // กันนับซ้ำกรณีมาทำงานจริงในวันหยุด (มีบันทึก attendance อยู่แล้ว → นับจาก workDays ไปแล้ว ไม่ต้องนับซ้ำตรงนี้)
+    const workedDates = new Set(att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").map(a=>a.work_date));
+    const paidHolidayDays = workdates.filter(dISO=>{
+      if(!isHolidayFor(dISO, e)) return false;
+      if(workedDates.has(dISO)) return false;
+      if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
+      return true;
+    }).length;
+    const paidDays = workDays + paidHolidayDays; // ใช้คิดเงินเดือนคนเข้ากลางรอบ (calcPay) — workDays เฉยๆ ยังใช้แสดงผล "มาทำงาน" ตามเดิม
     const lateMin = att.reduce((s,a)=>s+(a.late_minutes||0),0);
     const lateCount = att.filter(a=>(a.late_minutes||0)>0).length;
     // #6 ผ่อนผันมาสาย: หักเฉพาะนาทีที่เกินโควตาฟรี และต้องคิด "แยกรายวัน" (สาย 8 น. สองวัน = ไม่หักเลย ไม่ใช่รวมเป็น 16 แล้วหัก 6)
@@ -1133,7 +1143,7 @@ async function loadCycleStats(cy){
     const absentConfirmed = att.filter(a=>a.status==="absent").length;
     // missing = วันที่ควรมาแต่ไม่มีบันทึกใดๆ เลย → รอ HR ตรวจสอบในแท็บ "ตรวจสอบย้อนหลัง"
     const missing = Math.max(0, expected - workDays - leaveDays - absentConfirmed);
-    e.att = { workDays, lateMin, lateBillableMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected };
+    e.att = { workDays, paidDays, lateMin, lateBillableMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected };
     // OT: ถ้าตั้งค่า "ต้องอนุมัติก่อน" → นับเฉพาะที่อนุมัติแล้ว · ถ้าปิด → นับทุกใบที่ไม่ถูกปฏิเสธ
     const myOt = (otRes.data||[]).filter(o=>String(o.employee_id)===String(e.id));
     const countable = myOt.filter(o=> settings.otRequiresApproval ? o.status==="approved" : o.status!=="rejected");
@@ -1397,7 +1407,8 @@ function openPeriodModal(key){
       <div class="hint">${g.n} คน · รวมสุทธิ ฿${fmt(g.total)} · ${g.paidCount===g.n?'🔒 จ่ายครบทั้งงวด':g.paidCount?'จ่ายแล้ว '+g.paidCount+'/'+g.n:'อนุมัติแล้ว (ยังไม่จ่าย)'}${g.paidAt?' · จ่ายเมื่อ '+new Date(g.paidAt).toLocaleDateString("th-TH"):''}</div></div>
       <button class="mclose" onclick="closeModal()">×</button></div>
     <div class="modal-body">
-      <table>
+      ${periodHolidayHint(g.start, g.end)}
+      <table style="margin-top:10px">
         <tr><th>พนักงาน</th><th class="num">ฐาน</th><th class="num">หักลา</th><th class="num">หักอื่นๆ</th><th class="num">เพิ่ม</th><th class="num">สุทธิ</th><th>สถานะ</th><th style="text-align:center">สลิป</th></tr>
         ${g.rows.map(r=>{const e=E(r.employee_id);return `<tr>
           <td>${e?empCell(e,true):'<span class="hint">พนักงาน #'+r.employee_id+' (พ้นสภาพ/ไม่พบ)</span>'}</td>
@@ -1554,9 +1565,17 @@ function printHistSlip(recId){
 function exportPeriodCsv(key){
   const g = groupPayrollHistory().find(x=>x.key===key); if(!g) return;
   const esc = v => `"${String(v??"").replace(/"/g,'""')}"`;
+  // แถวข้อมูลก่อนตาราง — งวดนี้ + วันหยุดตามประเพณีของบริษัทในงวดนี้ (กี่วัน วันไหนบ้าง) เหมือนการ์ดที่โชว์บนหน้าจอ
+  const { groups: holGroups, totalDays: holDays } = holidaysInPeriod(g.start, g.end);
+  const metaLines = [
+    ["งวด", `${CYCLES[g.cycle]?CYCLES[g.cycle].name:g.cycle} · ${isoToThaiDisplay(g.start)} – ${isoToThaiDisplay(g.end)}`].map(esc).join(","),
+    ["วันหยุดตามประเพณีของบริษัทในงวดนี้", holDays===0?"ไม่มี":`${holDays} วัน`].map(esc).join(","),
+    ...holGroups.map(hg=>["", `${hg.name} · ${hg.from===hg.to?isoToThaiDisplay(hg.from):isoToThaiDisplay(hg.from)+" – "+isoToThaiDisplay(hg.to)} (${hg.days} วัน)${hg.dept?" · เฉพาะ "+hg.dept:" · ทั้งบริษัท"}`].map(esc).join(",")),
+    ["",""].map(esc).join(",")
+  ];
   const head = ["รหัส","ชื่อ","วันทำงาน","ฐานรวม","หักลา","หักอื่นๆ","หมายเหตุหัก","เพิ่ม","หมายเหตุเพิ่ม","สุทธิ","สถานะ"];
   const lines = g.rows.map(r=>{const e=E(r.employee_id);return [e?e.code:r.employee_id, e?e.name:"", r.total_work_days, r.base_total, r.leave_deduction, r.other_deductions, r.deduction_remarks||"", r.addition_amount, r.addition_remarks||"", r.net_pay, r.status].map(esc).join(",");});
-  const blob = new Blob(["\uFEFF"+head.map(esc).join(",")+"\n"+lines.join("\n")], {type:"text/csv;charset=utf-8"});
+  const blob = new Blob(["\uFEFF"+metaLines.join("\n")+"\n"+head.map(esc).join(",")+"\n"+lines.join("\n")], {type:"text/csv;charset=utf-8"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a"); a.href=url; a.download=`payroll-${g.cycle}-${g.start}_${g.end}.csv`; a.click();
   URL.revokeObjectURL(url);
@@ -1636,6 +1655,24 @@ async function reloadHolidays(){ holidayRows = null; holidayLoading = false; awa
 function holidaysOn(dISO){
   return (Array.isArray(holidayRows)?holidayRows:[]).filter(h=>h.holiday_date===dISO);
 }
+// สรุปวันหยุดตามประเพณีที่ตกอยู่ในช่วงวันที่ที่กำหนด (ใช้แสดงในรีพอร์ท/Payroll Preview ของแต่ละงวด) — ไม่กรองแผนก โชว์ทุกช่วง (ทั้งบริษัท + เฉพาะแผนก) แล้วให้ผู้อ่านดูขอบเขตเอง
+function holidaysInPeriod(fromISO, toISO){
+  const rows = (Array.isArray(holidayRows)?holidayRows:[]).filter(h=>h.holiday_date>=fromISO && h.holiday_date<=toISO);
+  const groups = groupHolidays(rows);
+  return { groups, totalDays: groups.reduce((s,g)=>s+g.days,0) };
+}
+// การ์ดสรุปวันหยุดของงวด — ใช้ร่วมกันทั้ง Payroll Preview (งวดปัจจุบัน/ย้อนหลัง) และรีพอร์ทงวดที่ปิดแล้ว
+function periodHolidayHint(fromISO, toISO){
+  const { groups, totalDays } = holidaysInPeriod(fromISO, toISO);
+  if(totalDays===0) return `<div class="hint" style="margin-top:10px;padding:8px 12px;background:#f8f9fc;border-radius:10px">🎌 ไม่มีวันหยุดตามประเพณีของบริษัทในงวดนี้</div>`;
+  return `<div class="hint" style="margin-top:10px;padding:10px 12px;background:#fff6e6;border:1px solid #ffd9a8;border-radius:10px">
+    🎌 <b>วันหยุดตามประเพณีของบริษัทในงวดนี้ — ${totalDays} วัน</b>
+    <div style="margin-top:5px;display:flex;flex-direction:column;gap:3px">
+      ${groups.map(g=>`<div style="font-size:12px">• <b>${g.name}</b> — ${g.from===g.to?isoToThaiDisplay(g.from):isoToThaiDisplay(g.from)+" – "+isoToThaiDisplay(g.to)} (${g.days} วัน)${g.dept?' · <span style="color:var(--muted)">เฉพาะ '+g.dept+'</span>':' · <span style="color:var(--muted)">ทั้งบริษัท</span>'}</div>`).join("")}
+    </div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">พนักงานรายเดือนไม่ถูกหักเงินช่วงวันหยุดนี้ (นับเป็นวันจ่ายปกติ) · รายวัน/รายสัปดาห์ไม่มาไม่ได้ค่าแรงตามหลัก "ไม่มา ไม่จ่าย" แต่ไม่ถูกนับว่าขาดงาน</div>
+  </div>`;
+}
 // รวมวันหยุดที่ติดกัน ชื่อเดียวกัน ขอบเขตเดียวกัน ให้เป็น "ช่วง" เดียว เพื่อแสดงผล/ลบทั้งช่วงทีเดียว
 function groupHolidays(rows){
   const sorted = rows.slice().sort((a,b)=> a.holiday_date<b.holiday_date?-1:a.holiday_date>b.holiday_date?1:0);
@@ -1657,8 +1694,10 @@ function calcPay(e){
   const dayRate = e.type==="monthly" ? e.rate/30 : e.rate;
   const effWorkDays = (ov && ov.work_days!=null && ov.work_days!=="") ? Number(ov.work_days) : e.att.workDays;
   // #1 รายเดือน: ถ้าเข้างานกลางรอบ (prorateFactor<1) คิดจาก (ฐานเงินเดือน ÷ 30 วัน) × จำนวนวันที่ทำงานจริง · คนเต็มรอบ = เงินเดือนเต็ม
+  // "วันที่ทำงานจริง" ของรายเดือน นับรวมวันหยุดบริษัทที่อยู่ในช่วงที่ทำงานด้วย (ไม่ต้องลงเวลาแต่ไม่เสียเงิน) — ต่างจาก effWorkDays เฉยๆ ที่ใช้กับรายวัน/รายสัปดาห์ (ไม่มา = ไม่นับ)
+  const paidWorkDays = (ov && ov.work_days!=null && ov.work_days!=="") ? Number(ov.work_days) : (e.att.paidDays!=null ? e.att.paidDays : e.att.workDays);
   const prorate = (e.type==="monthly" && e.prorateFactor!=null) ? e.prorateFactor : 1;
-  const base = e.type==="monthly" ? (prorate<1 ? Math.round(dayRate*effWorkDays) : e.rate) : e.rate*effWorkDays;
+  const base = e.type==="monthly" ? (prorate<1 ? Math.round(dayRate*paidWorkDays) : e.rate) : e.rate*effWorkDays;
   const overQuota = e.type==="monthly" ? Math.max(0, e.leaveUsed - settings.paidLeaveQuota) : 0;
   const isWfhExempt = e.type==="monthly" && e.wfh;
   const absentDeduct = (e.type==="monthly" && !isWfhExempt) ? Math.round((e.att.absent+overQuota)*dayRate) : 0;
@@ -1676,7 +1715,7 @@ function calcPay(e){
     + (ov ? (Number(ov.extra_deduction)||0) : 0);
   const extra = (e.extra||0) + (e.otPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);
   const net = base + extra - absentDeduct - unpaidLeaveDeduct - lateDeduct - otherDeduct;
-  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, ov, prorate};
+  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, paidWorkDays, ov, prorate};
 }
 function activeDeductions(e){return (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal);}
 const THAI_BANKS = ["KBANK (กสิกรไทย)","SCB (ไทยพาณิชย์)","BBL (กรุงเทพ)","KTB (กรุงไทย)","BAY (กรุงศรีอยุธยา)","TTB (ทหารไทยธนชาต)","GSB (ออมสิน)","BAAC (ธ.ก.ส.)","UOB (ยูโอบี)","CIMB (ซีไอเอ็มบี)"];
@@ -3737,6 +3776,7 @@ function openFixAttendanceModal(id){
 function saveFixAttendance(id){
   const e = E(id);
   e.att.workDays = Number(document.getElementById("fixWorkDays").value)||0;
+  e.att.paidDays = e.att.workDays; // HR แก้มือเป็นยอดรวมสุดท้ายแล้ว — ไม่ต้องบวกวันหยุดบริษัทซ้ำอีก (ถือว่า HR ใส่ตัวเลขจริงมาแล้ว)
   e.att.absent = Number(document.getElementById("fixAbsent").value)||0;
   e.att.lateMin = Number(document.getElementById("fixLate").value)||0;
   // แก้มือเป็น "ยอดรวมทั้งงวด" แยกรายวันไม่ได้ → ล้างค่าที่คำนวณแยกวันไว้ ให้ calcPay ใช้สูตร fallback (หักผ่อนผัน 1 ครั้ง)
@@ -4659,6 +4699,7 @@ function pyCalc(){
   const rows = list.map(e=>({e,p:calcPay(e)}));
   const total = rows.reduce((s,r)=>s+r.p.net,0);
   const locked = st!=="draft"; // อนุมัติ/จ่ายแล้ว = ล็อก แก้ได้เฉพาะ Super Admin ผ่านปุ่มปลดล็อก
+  const period = activePeriod(cy);
   return `
   <div class="card">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -4668,13 +4709,14 @@ function pyCalc(){
         ? (canViewAll()?`<button class="btn danger" style="margin-left:auto" onclick="unlockPayroll('${cy}')">🔓 ปลดล็อกงวด</button>`:'<span class="pill gray" style="margin-left:auto">🔒 งวดถูกล็อก</span>')
         : '<span class="pill amber" style="margin-left:auto">📝 ตรวจสอบแล้วจากขั้น "ตรวจข้อมูลต้นทาง" — Override ได้เฉพาะรายการเงิน</span>'}
     </div>
+    ${periodHolidayHint(period.start, period.end)}
     <div style="overflow-x:auto"><table style="margin-top:14px;min-width:1120px">
       <tr><th>พนักงาน</th><th class="num">วันทำงาน</th><th class="num">ลา / ขาด / สาย</th><th class="num">รายรับพื้นฐาน</th><th class="num">OT/เพิ่ม</th><th class="num">หักขาด/ลาเกิน</th><th class="num">หักมาสาย</th><th class="num">หักอื่นๆ</th><th class="num">สุทธิ</th><th></th></tr>
       ${rows.map(({e,p})=>`<tr style="${p.ov?'background:#fffdf2':''}">
         <td>${empCell(e)}${p.ov?'<div style="margin-top:3px"><span class="pill amber" style="font-size:9.5px">✏️ Override'+(p.ov.note?': '+p.ov.note:'')+'</span></div>':''}</td>
         <td class="num"><b>${e.att.workDays}</b></td>
         <td class="num" style="font-size:12px">${e.att.leaveDays||0} / ${e.att.absent||0} / ${e.att.lateCount||0}${e.att.missing?'<div><span class="pill amber" style="font-size:9.5px">🧐 รอตรวจ '+e.att.missing+'</span></div>':''}</td>
-        <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เข้ากลางรอบ · ฿${fmt(e.rate/30)}/วัน × ${e.att.workDays} วัน</div>`:''}</td>
+        <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เข้ากลางรอบ · ฿${fmt(e.rate/30)}/วัน × ${p.paidWorkDays} วัน${(e.att.paidDays>e.att.workDays)?' (รวมวันหยุดบริษัท '+(e.att.paidDays-e.att.workDays)+' วัน)':''}</div>`:''}</td>
         <td class="num" style="color:${p.extra?'var(--green)':'inherit'}">${p.extra?'+฿'+fmt(p.extra):'—'}</td>
         <td class="num" style="color:${(p.absentDeduct+p.unpaidLeaveDeduct)?'var(--red)':'inherit'}">${(p.absentDeduct+p.unpaidLeaveDeduct)?'-฿'+fmt(p.absentDeduct+p.unpaidLeaveDeduct):'—'}${p.unpaidLeaveDeduct?`<div style="font-size:10px;color:var(--muted)">ลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน</div>`:''}</td>
         <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':payrollOffset<0?'<span style="font-size:11px">งวดเก่า — ไม่หัก</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
