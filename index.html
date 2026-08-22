@@ -1104,9 +1104,20 @@ async function loadCycleStats(cy){
   for(let d=new Date(period.start+"T00:00:00"); isoDate(d)<=effEnd; d.setDate(d.getDate()+1)){
     if(!isWeeklyOff(d)) workdates.push(isoDate(d));
   }
+  // "วันนี้" ยังลงเวลาได้อยู่ทั้งวัน — ห้ามนับเป็น "รอตรวจ/Missing Punch" จนกว่าจะพ้นวันไปแล้ว (นโยบายเดียวกับ loadMissingPunch() ที่ตรวจถึงแค่เมื่อวาน)
+  // ไม่งั้นทุกคนที่ยังไม่ทันกดเข้างานตอนเช้าจะโดนขึ้น "Missing Punch" หลอกในเช็คลิสต์ก่อนอนุมัติเงินเดือน (หน้า ✅ อนุมัติงวดจ่าย) ทั้งที่ไปเปิด "🧐 ตรวจสอบย้อนหลัง" แล้วไม่เจออะไรเลย เพราะหน้านั้นตั้งใจไม่เอาวันนี้มานับ
+  const yesterdayISO = (()=>{ const d=new Date(); d.setDate(d.getDate()-1); return isoDate(d); })();
+  const missingEnd = effEnd < yesterdayISO ? effEnd : yesterdayISO;
   employees.filter(e=>e.cycle===cy).forEach(e=>{
     // ตัดวันก่อนวันเริ่มงานออกด้วย (เหมือนที่ loadMissingPunch ทำ) ไม่งั้นพนักงานที่เพิ่งเข้าใหม่กลางงวดจะโดนนับ "รอตรวจ" ของวันก่อนเข้างานจริงด้วย
     const expected = workdates.filter(dISO=>{
+      if(isHolidayFor(dISO, e)) return false;
+      if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
+      return true;
+    }).length;
+    // ใช้แยกจาก expected ด้านบน — expected/fullExpected ยังคงรวม "วันนี้" ไว้ตามเดิม (มีผลแค่กับตัวหารเฉลี่ยเงินเดือนคนเข้ากลางรอบตอนงวดยังไม่ปิด ซึ่งเขยิบทุกวันอยู่แล้วเป็นเรื่องปกติ) ส่วน missing เท่านั้นที่ต้องตัดวันนี้ออก
+    const expectedForMissing = workdates.filter(dISO=>{
+      if(dISO>missingEnd) return false;
       if(isHolidayFor(dISO, e)) return false;
       if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
       return true;
@@ -1141,8 +1152,8 @@ async function loadCycleStats(cy){
     const unpaidLeave = apprLeaves.filter(l=>LT(l.leave_type)?.paid==="unpaid").length;
     // ขาดงาน = เฉพาะวันที่ HR "ยืนยันขาด" แล้วเท่านั้น (Exception-based) — การลืมลงเวลาไม่ถูกหักอัตโนมัติ
     const absentConfirmed = att.filter(a=>a.status==="absent").length;
-    // missing = วันที่ควรมาแต่ไม่มีบันทึกใดๆ เลย → รอ HR ตรวจสอบในแท็บ "ตรวจสอบย้อนหลัง"
-    const missing = Math.max(0, expected - workDays - leaveDays - absentConfirmed);
+    // missing = วันที่ควรมาแต่ไม่มีบันทึกใดๆ เลย (ไม่รวมวันนี้) → รอ HR ตรวจสอบในแท็บ "ตรวจสอบย้อนหลัง"
+    const missing = Math.max(0, expectedForMissing - workDays - leaveDays - absentConfirmed);
     e.att = { workDays, paidDays, lateMin, lateBillableMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected };
     // OT: ถ้าตั้งค่า "ต้องอนุมัติก่อน" → นับเฉพาะที่อนุมัติแล้ว · ถ้าปิด → นับทุกใบที่ไม่ถูกปฏิเสธ
     const myOt = (otRes.data||[]).filter(o=>String(o.employee_id)===String(e.id));
