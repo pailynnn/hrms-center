@@ -3202,13 +3202,14 @@ function pgAttendance(){
   return `
   <div class="subtabs-wrap"><button class="subtab-arrow left" onclick="scrollSubtabs(this,-160)">‹</button><div class="subtabs">
     ${tab("today","วันนี้","🕐")}
+    ${tab("log","Log บันทึกเวลา","📝")}
     ${tab("ot","ขอ OT","⏱️", canApproveOt()&&otPending>0)}
     ${canEditAttendance()?tab("review","ตรวจสอบย้อนหลัง","🧐", missingCount>0):''}
     ${tab("adjust","แก้เวลา","🛠️", canSeePayroll()&&Array.isArray(adjustRows)&&adjustRows.some(a=>a.status==='pending'&&String(a.employee_id)!==String(loggedInEmployeeId)))}
     ${isPlain?'':tab("summary","สรุปเวลารายคน","📊")}
     ${isPlain?'':tab("late","สถิติมาสาย","⏰")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${t==="ot"?attOt():t==="adjust"?attAdjust():isPlain?attToday():(t==="review"&&canEditAttendance())?attReview():t==="summary"?attSummary():t==="late"?attLate():attToday()}`;
+  ${t==="log"?attLog():t==="ot"?attOt():t==="adjust"?attAdjust():isPlain?attToday():(t==="review"&&canEditAttendance())?attReview():t==="summary"?attSummary():t==="late"?attLate():attToday()}`;
 }
 
 /* ============ Missing Punch Regularization — ตรวจสอบวันที่ไม่มีบันทึกลงเวลา ============ */
@@ -3803,6 +3804,117 @@ function attLate(){
       </tr>`;}).join("")}
     </table>`}
     <div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ มีผลกับงวดร่างปัจจุบันเท่านั้น (งวดเก่าที่ดูย้อนหลังจะไม่ถูกหักย้อนหลัง)</div>
+  </div>`;
+}
+/* ============ ATTENDANCE LOG — log บันทึกเวลาเข้า-ออกงานรายวันของทั้งเดือน (ดูย้อนหลังได้ว่าวันไหนกดกี่โมง ไม่ใช่แค่ยอดรวม) ============ */
+// พนักงานทั่วไป: เห็นได้เฉพาะของตัวเอง (employees[] จาก RLS มีแค่ตัวเองอยู่แล้ว) · ผู้ช่วย HR/HR/Super Admin: เลือกดูของใครก็ได้ทีละคน
+let attLogEmpId = null;   // null = ยังไม่เลือก — จะ default เป็นตัวเอง (พนักงานทั่วไป) หรือคนแรกที่มองเห็น (HR)
+let attLogMonth = null;   // "YYYY-MM" — null = เดือนปัจจุบัน
+let attLogRows = null;    // null=ยังไม่โหลด | "loading" | array ของแถวรายวันที่ประกอบแล้ว
+function attLogMonthValue(){ return attLogMonth || todayISODate().slice(0,7); }
+// ช่วงวันที่ของเดือนที่เลือก — ตัดไม่ให้เกินวันนี้ (ไม่โชว์ "ไม่มีบันทึก" ล่วงหน้าสำหรับวันที่ยังมาไม่ถึง)
+function attLogRange(){
+  const [y,m] = attLogMonthValue().split("-").map(Number);
+  const firstISO = isoDate(new Date(y, m-1, 1));
+  const lastISO = isoDate(new Date(y, m, 0));
+  const toISO = lastISO > todayISODate() ? todayISODate() : lastISO;
+  return { fromISO: firstISO, toISO };
+}
+async function loadAttLog(){
+  const empId = attLogEmpId;
+  if(!empId){ attLogRows = []; return; }
+  const { fromISO, toISO } = attLogRange();
+  if(fromISO > toISO){ attLogRows = []; return; } // เลือกเดือนในอนาคต — ยังไม่มีอะไรให้ดู
+  await ensureHolidaysLoaded();
+  const [attRes, lvRes] = await Promise.all([
+    sb.from("attendances").select("*").eq("employee_id", empId).gte("work_date", fromISO).lte("work_date", toISO).order("work_date"),
+    sb.from("leave_requests").select("leave_date,leave_type,supervisor_status,hr_status").eq("employee_id", empId).gte("leave_date", fromISO).lte("leave_date", toISO)
+  ]);
+  if(attRes.error||lvRes.error){ console.error("loadAttLog", attRes.error||lvRes.error); toastLoadError("Log บันทึกเวลา"); attLogRows=[]; return; }
+  const e = E(empId);
+  const attByDate = {}; (attRes.data||[]).forEach(r=>{ attByDate[r.work_date]=r; });
+  const leaveByDate = {}; (lvRes.data||[]).forEach(l=>{ if(l.supervisor_status!=="rejected" && l.hr_status!=="rejected") leaveByDate[l.leave_date]=l; });
+  const isWeeklyOff = d => settings.weeklyHoliday==="เสาร์-อาทิตย์" ? (d.getDay()===0||d.getDay()===6) : d.getDay()===(THAI_DAYS[settings.weeklyHoliday]??0);
+  const startJs = e && e.start ? thaiDateToJS(e.start) : null;
+  const rows = [];
+  for(let d=new Date(fromISO+"T00:00:00"); isoDate(d)<=toISO; d.setDate(d.getDate()+1)){
+    const dISO = isoDate(d);
+    const beforeStart = !!(startJs && isoDate(startJs) > dISO);
+    rows.push({
+      dateISO: dISO,
+      dow: ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"][d.getDay()],
+      beforeStart,
+      isHoliday: !beforeStart && isHolidayFor(dISO, e),
+      holidayName: holidayNameOn(dISO, e),
+      isWeeklyOff: !beforeStart && isWeeklyOff(d),
+      leave: leaveByDate[dISO] || null,
+      att: attByDate[dISO] || null
+    });
+  }
+  attLogRows = rows.reverse(); // วันล่าสุดขึ้นก่อน
+}
+function setAttLogEmp(id){
+  if(!(canSeePayroll()||isTeamLead())){ return; } // ผู้ช่วย HR/พนักงานทั่วไปสลับไปดูของคนอื่นไม่ได้ — กันไว้ในฟังก์ชันด้วย เผื่อมีคนเรียกตรงๆ ผ่าน console (ปุ่ม/dropdown ในหน้าเว็บก็ไม่โชว์ให้กดอยู่แล้ว)
+  attLogEmpId = Number(id); attLogRows = null; render("attendance");
+}
+function setAttLogMonth(v){ attLogMonth = v || null; attLogRows = null; render("attendance"); }
+function attLogRowHtml(r){
+  const fmtT = ts => ts ? new Date(ts).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",hour12:false}) : "—";
+  let statusHtml;
+  if(r.beforeStart){
+    statusHtml = '<span class="pill gray">ยังไม่เริ่มงาน</span>';
+  } else if(r.isHoliday){
+    statusHtml = `<span class="pill amber">🎌 วันหยุดบริษัท${r.holidayName?' · '+r.holidayName:''}</span>`;
+  } else if(r.leave || (r.att && r.att.status==="leave")){
+    statusHtml = `<span class="pill blue">📝 ลา${r.leave?.leave_type?' · '+(LT(r.leave.leave_type)?.name||r.leave.leave_type):''}</span>`;
+  } else if(r.isWeeklyOff){
+    statusHtml = '<span class="pill gray">วันหยุดประจำสัปดาห์</span>';
+  } else if(r.att){
+    const st = r.att.status;
+    statusHtml = st==="absent" ? '<span class="pill red">ขาดงาน</span>'
+      : st==="manual" ? '<span class="pill blue">✓ ยืนยันย้อนหลัง (มาทำงาน)</span>'
+      : (r.att.late_minutes>0) ? `<span class="pill amber">สาย ${r.att.late_minutes} นาที</span>`
+      : '<span class="pill green">ปกติ</span>';
+    if(r.att.check_in_time && !r.att.check_out_time) statusHtml += '<div style="margin-top:3px"><span class="pill red" style="font-size:9.5px">ยังไม่ได้ลงเวลาออก</span></div>';
+  } else {
+    statusHtml = '<span class="pill red">ไม่มีบันทึก</span>';
+  }
+  return `<tr>
+    <td style="white-space:nowrap"><b>${isoToThaiDisplay(r.dateISO)}</b></td>
+    <td>${r.dow}</td>
+    <td class="num">${r.att?fmtT(r.att.check_in_time):'—'}</td>
+    <td class="num">${r.att?fmtT(r.att.check_out_time):'—'}</td>
+    <td class="hint" style="font-size:11.5px">${r.att?(r.att.location_lat_long||'—'):'—'}${r.att&&r.att.remark?'<div style="margin-top:2px">'+r.att.remark+'</div>':''}</td>
+    <td>${statusHtml}</td>
+  </tr>`;
+}
+function attLog(){
+  // HR/Super Admin เลือกดูของใครก็ได้ทั้งบริษัท · หัวหน้างานเลือกดูได้เฉพาะลูกทีมตัวเอง (RLS ตาราง attendances เพิ่ม policy supervisor_reads_team_attendance ให้แล้ว)
+  // ผู้ช่วย HR ตัดสิทธิ์เลือกดูคนอื่นออกตามที่ผู้ใช้ระบุ — เห็นได้แค่ของตัวเองเหมือนพนักงานทั่วไป (แม้ RLS ฝั่ง read จะยังเปิดกว้างกว่านี้ก็ตาม — กันไว้ที่ชั้น UI)
+  const canPickAny = canSeePayroll() || isTeamLead();
+  const pickList = visibleEmployees().filter(e=>e.status!=="terminated");
+  // คำนวณ "id ที่ควรเห็น" ใหม่ทุกครั้งที่ render (ไม่ใช่แค่ตอน attLogEmpId ยังว่าง) — กันกรณี state เก่าค้างมาจากตอนที่ยังมีสิทธิ์เลือกคนอื่น
+  // (เช่น ผู้ช่วย HR เคยเลือกดูของคนอื่นไว้ก่อนรอบนี้ตัดสิทธิ์ หรือมีคนเรียก setAttLogEmp ตรงๆ ผ่าน console) ต้องบังคับกลับมาเป็นของตัวเองเสมอถ้าไม่มีสิทธิ์เลือกคนอื่นแล้ว
+  const wantId = canPickAny ? (attLogEmpId || pickList[0]?.id || loggedInEmployeeId) : loggedInEmployeeId;
+  if(wantId !== attLogEmpId){ attLogEmpId = wantId; attLogRows = null; }
+  const e = E(attLogEmpId);
+  if(attLogRows===null){ attLogRows="loading"; loadAttLog().then(()=>{ if(currentPage==="attendance") render("attendance"); }); }
+  const loading = !Array.isArray(attLogRows);
+  return `
+  <div class="card">
+    <h3>📝 Log บันทึกเวลา${canPickAny?' — '+(e?e.name:'—'):''}</h3>
+    <div class="hint">ดูย้อนหลังได้ว่าแต่ละวันกดเข้า-ออกงานตอนกี่โมง (ไม่ใช่แค่ยอดรวม) — วันที่เป็นวันหยุดบริษัทจะแจ้งไว้ให้ชัดเจนว่าไม่ต้องลงเวลา${canPickAny?' · เลือกพนักงานที่ต้องการดูได้ด้านล่าง':''}</div>
+    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:12px">
+      ${canPickAny?`<div class="field"><label>พนักงาน</label><select onchange="setAttLogEmp(this.value)">${pickList.map(x=>`<option value="${x.id}" ${String(x.id)===String(attLogEmpId)?'selected':''}>${x.name} (${x.code})</option>`).join("")}</select></div>`:''}
+      <div class="field"><label>เดือน</label><input type="month" value="${attLogMonthValue()}" max="${todayISODate().slice(0,7)}" onchange="setAttLogMonth(this.value)"></div>
+    </div>
+    ${loading?'<div class="hint" style="text-align:center;padding:24px">⏳ กำลังโหลด...</div>':
+    !e?'<div class="hint" style="text-align:center;padding:24px">ไม่พบข้อมูลพนักงาน</div>':
+    attLogRows.length===0?'<div class="hint" style="text-align:center;padding:24px">ยังไม่ถึงเดือนนี้ — เลือกเดือนอื่น</div>':`
+    <table style="margin-top:12px">
+      <tr><th>วันที่</th><th>วัน</th><th class="num">เข้างาน</th><th class="num">ออกงาน</th><th>พิกัด/หมายเหตุ</th><th>สถานะ</th></tr>
+      ${attLogRows.map(r=>attLogRowHtml(r)).join("")}
+    </table>`}
   </div>`;
 }
 function attLoc(){
@@ -5369,6 +5481,7 @@ function resetAppState(){
   holidayRows = null; empFilesCache = {}; empModalCtx = null;
   missingRows = null; adjustRows = null; payCategories = null;
   advanceRows = null; ytdRows = null; orgUnits = null; userRolesRows = null;
+  attLogEmpId = null; attLogMonth = null; attLogRows = null;
   orgChartRows = null;
   assetRecords = []; assetsLoaded = false; assetsLoading = false;
   signatures = {};
