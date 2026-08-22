@@ -795,7 +795,7 @@ async function actOt(id, status){
 }
 async function delOt(id){
   const o = otRequests.find(x=>String(x.id)===String(id)); if(!o) return;
-  if(o.status!=="pending" && !canViewAll()){ toast("ยกเลิกได้เฉพาะรายการที่ยังรออนุมัติ"); return; }
+  if(o.status!=="pending" && !canSeePayroll()){ toast("ยกเลิกได้เฉพาะรายการที่ยังรออนุมัติ"); return; }
   if(!confirm(`ยืนยันยกเลิกคำขอ OT ${o.hours} ชม. วันที่ ${o.date}?`)) return;
   const { data: del, error } = await sb.from("ot_requests").delete().eq("id", id).select("id");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
@@ -1656,9 +1656,9 @@ function calcPay(e){
   const ov = e.override || null; // Override จากหน้า Payroll Preview
   const dayRate = e.type==="monthly" ? e.rate/30 : e.rate;
   const effWorkDays = (ov && ov.work_days!=null && ov.work_days!=="") ? Number(ov.work_days) : e.att.workDays;
-  // #1 รายเดือน: ถ้าเข้างานกลางรอบ เฉลี่ยเงินเดือนตามสัดส่วนวันทำงาน (prorateFactor<1) · คนเต็มรอบ = 1 (เต็มเดือน)
+  // #1 รายเดือน: ถ้าเข้างานกลางรอบ (prorateFactor<1) คิดจาก (ฐานเงินเดือน ÷ 30 วัน) × จำนวนวันที่ทำงานจริง · คนเต็มรอบ = เงินเดือนเต็ม
   const prorate = (e.type==="monthly" && e.prorateFactor!=null) ? e.prorateFactor : 1;
-  const base = e.type==="monthly" ? Math.round(e.rate * prorate) : e.rate*effWorkDays;
+  const base = e.type==="monthly" ? (prorate<1 ? Math.round(dayRate*effWorkDays) : e.rate) : e.rate*effWorkDays;
   const overQuota = e.type==="monthly" ? Math.max(0, e.leaveUsed - settings.paidLeaveQuota) : 0;
   const isWfhExempt = e.type==="monthly" && e.wfh;
   const absentDeduct = (e.type==="monthly" && !isWfhExempt) ? Math.round((e.att.absent+overQuota)*dayRate) : 0;
@@ -1726,7 +1726,7 @@ function beToISO(str){
 function tenureText(e){
   const start = thaiDateToJS(e.start);
   if(!start) return "—";
-  const end = (e.status==="terminated" && e.end) ? thaiDateToJS(e.end) : new Date(2026,6,4);
+  const end = (e.status==="terminated" && e.end) ? thaiDateToJS(e.end) : new Date();
   if(!end) return "—";
   let months = (end.getFullYear()-start.getFullYear())*12 + (end.getMonth()-start.getMonth());
   if(end.getDate()<start.getDate()) months--;
@@ -1849,7 +1849,7 @@ function computeNotifications(){
       });
     });
   }
-  if(canEditAttendance()){
+  if(canSeePayroll()){   // ผู้ช่วย HR อนุมัติไม่ได้ จึงไม่ต้องเด้งแจ้งเตือน "รออนุมัติ" ให้ (กันแจ้งเตือนที่กดแล้วทำอะไรไม่ได้)
     adj.filter(a=>a.status==="pending" && String(a.employee_id)!==String(loggedInEmployeeId)).forEach(a=>{
       const emp = E(a.employee_id);
       items.push({
@@ -2847,7 +2847,7 @@ function renderEmpModal(e, isNew){
       <button class="subtabs-btn" style="border:none;background:none;padding:12px 14px;font-weight:600;font-size:13.5px;color:${tab==='info'?'var(--accent)':'var(--muted)'};border-bottom:2.5px solid ${tab==='info'?'var(--accent)':'transparent'}" onclick="empModalTab='info';renderEmpModal(${JSON.stringify(e).replace(/"/g,'&quot;').split("'").join("\\'")}, ${isNew})">📋 ข้อมูลพนักงาน</button>
       <button style="border:none;background:none;padding:12px 14px;font-weight:600;font-size:13.5px;color:${tab==='files'?'var(--accent)':'var(--muted)'};border-bottom:2.5px solid ${tab==='files'?'var(--accent)':'transparent'}" onclick="empModalTab='files';renderEmpModal(${JSON.stringify(e).replace(/"/g,'&quot;').split("'").join("\\'")}, ${isNew})">📎 เอกสารแนบ (${fileCount})</button>
     </div>
-    <div class="modal-body">${tab==='info'?(canViewAll()?empInfoForm(e):empSelfEditForm(e)):empFilesForm(e)}</div>
+    <div class="modal-body">${tab==='info'?(canSeePayroll()?empInfoForm(e):empSelfEditForm(e)):empFilesForm(e)}</div>
     <div class="modal-foot">
       <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
       <button class="btn primary" onclick="saveEmp('${e.id}',${isNew})">💾 บันทึก</button>
@@ -2985,8 +2985,8 @@ async function saveEmp(id,isNew){
   const btn = document.querySelector("#modalBox .modal-foot .btn.primary");
   const setBusy = (b)=>{ if(btn){ btn.disabled=b; btn.textContent = b?"กำลังบันทึก...":"💾 บันทึก"; } };
 
-  // พนักงานทั่วไปแก้ไขได้เฉพาะเบอร์โทร/อีเมลของตัวเอง (บังคับโดย trigger ฝั่ง DB ด้วย ไม่ใช่แค่ UI)
-  if(!canViewAll() && !isNew){
+  // พนักงานทั่วไป + ผู้ช่วย HR แก้ไขได้เฉพาะเบอร์โทร/อีเมลของตัวเอง/คนอื่น (ผู้ช่วย HR ไม่เห็น/ไม่แก้เงินเดือน-บัญชีธนาคาร) — บังคับโดย RLS ฝั่ง DB ด้วย ไม่ใช่แค่ UI (self_update_contact_info ต้องเป็นเจ้าของ record เท่านั้น)
+  if(!canSeePayroll() && !isNew){
     const p = document.getElementById("selfPhone"), em = document.getElementById("selfEmail");
     const payload = { phone: p?p.value:undefined, email: em?em.value:undefined };
     setBusy(true);
@@ -3163,9 +3163,9 @@ function pgAttendance(){
   return `
   <div class="subtabs-wrap"><button class="subtab-arrow left" onclick="scrollSubtabs(this,-160)">‹</button><div class="subtabs">
     ${tab("today","วันนี้","🕐")}
-    ${tab("ot","ขอ OT","⏱️", canApproveLeave()&&otPending>0)}
+    ${tab("ot","ขอ OT","⏱️", canApproveOt()&&otPending>0)}
     ${canEditAttendance()?tab("review","ตรวจสอบย้อนหลัง","🧐", missingCount>0):''}
-    ${tab("adjust","แก้เวลา","🛠️", canEditAttendance()&&adjustRows!==null&&Array.isArray(adjustRows)&&adjustRows.some(a=>a.status==='pending'&&String(a.employee_id)!==String(loggedInEmployeeId)))}
+    ${tab("adjust","แก้เวลา","🛠️", canSeePayroll()&&Array.isArray(adjustRows)&&adjustRows.some(a=>a.status==='pending'&&String(a.employee_id)!==String(loggedInEmployeeId)))}
     ${isPlain?'':tab("summary","สรุปเวลารายคน","📊")}
     ${isPlain?'':tab("late","สถิติมาสาย","⏰")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
@@ -3300,14 +3300,17 @@ function fmtHM(ts){ return ts ? new Date(ts).toLocaleTimeString("th-TH",{hour:"2
 function attAdjust(){
   if(adjustRows===null){ adjustRows="loading"; loadAdjustments().then(()=>{ if(currentPage==="attendance") render("attendance"); }); }
   const loading = !Array.isArray(adjustRows);
-  const canReview = canEditAttendance(); // ตาม Workflow: ยื่นคำขอ → HR อนุมัติ (ไม่ผ่านหัวหน้างาน)
+  // ตาม Workflow: ยื่นคำขอ → HR อนุมัติ (ไม่ผ่านหัวหน้างาน)
+  // ⚠️ ผู้ช่วย HR "ยื่นแทนพนักงานคนอื่นได้ แต่กดอนุมัติเองไม่ได้" — ต้องให้ HR/Super Admin อนุมัติเท่านั้น
+  // (กฎเดียวกับ OT · ฝั่ง DB ก็ถอด policy hr_assistant_update_att_adjust ออกแล้ว)
+  const canReview = canSeePayroll();
   const rows = loading?[]:adjustRows.filter(a=> canViewAll() ? true :
     (String(a.employee_id)===String(loggedInEmployeeId) || (E(a.employee_id)?.supervisorId===loggedInEmployeeId)));
   const stPill = st => st==='approved'?'<span class="pill green">✓ อนุมัติแล้ว</span>':st==='rejected'?'<span class="pill red">✗ ปฏิเสธ</span>':'<span class="pill amber">⏳ รออนุมัติ</span>';
   return `
   <div class="card" style="margin-bottom:16px">
     <h3>🛠️ ยื่นคำขอแก้ไขเวลาทำงานย้อนหลัง</h3>
-    <div class="hint">Workflow: ยื่นคำขอ → HR อนุมัติ → ระบบแก้ Attendance ให้ + Payroll คำนวณใหม่อัตโนมัติ · ทุกการแก้ไขเข้า Audit Log</div>
+    <div class="hint">Workflow: ยื่นคำขอ → HR อนุมัติ → ระบบแก้ Attendance ให้ + Payroll คำนวณใหม่อัตโนมัติ · ทุกการแก้ไขเข้า Audit Log${isHrAssistant()?' · <b>ผู้ช่วย HR ยื่นคำขอแทนพนักงานได้ แต่การอนุมัติต้องเป็น HR หรือ Super Admin เท่านั้น</b>':''}</div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:14px;gap:12px">
       ${canViewAll()?`<div class="field"><label>พนักงาน</label><select id="adjEmp">${employees.filter(e=>e.status!=="terminated").map(e=>`<option value="${e.id}" ${String(e.id)===String(loggedInEmployeeId)?'selected':''}>${e.name} (${e.code})</option>`).join("")}</select></div>`:''}
       <div class="field"><label>วันที่</label><input type="date" id="adjDate" value="${todayISODate()}" max="${todayISODate()}"></div>
@@ -3374,6 +3377,7 @@ async function submitAdjustment(){
   toast("ส่งคำขอแก้เวลาแล้ว ✓ รอ HR อนุมัติ");
 }
 async function reviewAdjustment(id, decision){
+  if(!canSeePayroll()){ toast("🔒 ผู้ช่วย HR ยื่นคำขอแก้เวลาแทนพนักงานได้ แต่อนุมัติไม่ได้ — ต้องให้ HR หรือ Super Admin เป็นผู้อนุมัติ"); return; }
   const a = (Array.isArray(adjustRows)?adjustRows:[]).find(x=>String(x.id)===String(id)); if(!a) return;
   const e = E(a.employee_id);
   const { data: upd, error } = await sb.from("attendance_adjustments").update({ status: decision, reviewed_by: loggedInEmployeeId, reviewed_at: new Date().toISOString() }).eq("id", id).eq("status","pending").select("id");
@@ -3514,8 +3518,8 @@ function attOt(){
         <td style="text-align:center;white-space:nowrap">
           ${showApprove?`<button class="btn green xs" onclick="actOt(${o.id},'approved')">✓ อนุมัติ</button>
           <button class="btn danger xs" onclick="actOt(${o.id},'rejected')">✕</button>`:''}
-          ${(isMine && o.status==="pending")||canViewAll()?`<button class="btn ghost xs" onclick="delOt(${o.id})">🗑</button>`:''}
-          ${!showApprove && !((isMine && o.status==="pending")||canViewAll())?'<span class="hint" style="font-size:11px">—</span>':''}
+          ${(isMine && o.status==="pending")||canSeePayroll()?`<button class="btn ghost xs" onclick="delOt(${o.id})">🗑</button>`:''}
+          ${!showApprove && !((isMine && o.status==="pending")||canSeePayroll())?'<span class="hint" style="font-size:11px">—</span>':''}
         </td>
       </tr>`;}).join("")}
     </table>
@@ -3661,7 +3665,7 @@ function exportAttSummaryExcel(){
       "ขาด (วัน)": r.absent||0,
       "ลา ใช้โควตา (วัน)": useRange ? (r.leaveUsed||0) : (e.type==="monthly"?e.leaveUsed:0),
       "มาสาย (นาที)": r.lateMin||0,
-      "OT เหมา (บาท)": e.extra||0
+      ...(canSeePayroll() ? {"OT เหมา (บาท)": e.extra||0} : {})
     };
   });
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -3691,7 +3695,7 @@ function attSummary(){
     </div>
     ${loadingRange?'<div class="hint" style="margin-top:12px;text-align:center">⏳ กำลังดึงข้อมูล...</div>':`
     <table style="margin-top:12px">
-      <tr><th>พนักงาน</th><th>ประเภท</th><th class="num">มาทำงาน</th><th class="num">ขาด</th><th class="num">ลา (ใช้โควตา)</th><th class="num">มาสาย (นาที)</th><th class="num">OT เหมา</th>${canEditAttendance()&&!useRange?'<th style="text-align:center">แก้ไข</th>':''}</tr>
+      <tr><th>พนักงาน</th><th>ประเภท</th><th class="num">มาทำงาน</th><th class="num">ขาด</th><th class="num">ลา (ใช้โควตา)</th><th class="num">มาสาย (นาที)</th>${canSeePayroll()?'<th class="num">OT เหมา</th>':''}${canEditAttendance()&&!useRange?'<th style="text-align:center">แก้ไข</th>':''}</tr>
       ${visibleEmployees().map(e=>{
         const r = useRange ? (attSummaryRangeData[e.id]||{workDays:0,absent:0,lateMin:0,leaveUsed:0}) : e.att;
         return `<tr>
@@ -3701,7 +3705,7 @@ function attSummary(){
         <td class="num">${r.absent?'<span class="pill red">'+r.absent+' วัน</span>':'—'}${!useRange&&e.att.missing?'<div style="margin-top:3px"><span class="pill amber" style="font-size:9.5px">🧐 รอตรวจ '+e.att.missing+' วัน</span></div>':''}${e.wfh?'<div class="hint" style="font-size:10px">ไม่หัก (WFH)</div>':''}</td>
         <td class="num">${useRange?r.leaveUsed:(e.type==="monthly"?e.leaveUsed+" / "+settings.paidLeaveQuota:'—')}</td>
         <td class="num">${r.lateMin?'<span class="pill amber">'+r.lateMin+'</span>':'—'}</td>
-        <td class="num">${e.extra?'฿'+fmt(e.extra):'—'}</td>
+        ${canSeePayroll()?`<td class="num">${e.extra?'฿'+fmt(e.extra):'—'}</td>`:''}
         ${canEditAttendance()&&!useRange?`<td style="text-align:center"><button class="btn ghost xs" onclick="openFixAttendanceModal('${e.id}')">✏️ แก้ไข</button></td>`:''}
       </tr>`;}).join("")}
     </table>
@@ -3841,7 +3845,7 @@ function leaveReport(){
     </div>
     <div class="card" style="text-align:center"><div style="font-size:22px">📋</div><div class="display" style="font-size:22px;font-weight:700">${totalDays}</div><div class="hint">วันลาสะสมในช่วงนี้</div></div>
     <div class="card" style="text-align:center"><div style="font-size:22px">🏢</div><div class="display" style="font-size:18px;font-weight:700">${topDept?topDept[0]:"—"}</div><div class="hint">แผนกที่ลาบ่อยสุด ${topDept?`(${topDept[1]} ครั้ง)`:''}</div></div>
-    <div class="card" style="text-align:center"><div style="font-size:22px">📅</div><div class="display" style="font-size:18px;font-weight:700">${new Date().getFullYear()+543}</div><div class="hint">สะสมปีนี้: ${leaves.filter(l=>{const d=parseThaiDate(l.date);return d&&d.getFullYear()===new Date(2026,6,4).getFullYear();}).length} รายการ</div></div>
+    <div class="card" style="text-align:center"><div style="font-size:22px">📅</div><div class="display" style="font-size:18px;font-weight:700">${new Date().getFullYear()+543}</div><div class="hint">สะสมปีนี้: ${leaves.filter(l=>{const d=parseThaiDate(l.date);return d&&d.getFullYear()===new Date().getFullYear();}).length} รายการ</div></div>
   </div>
 
   <div class="grid" style="grid-template-columns:1fr 1fr">
@@ -3886,7 +3890,7 @@ function filteredLeaves(){
   });
 }
 function setLeaveQuickRange(range){
-  const today = new Date(2026,6,4);
+  const today = new Date();
   const p=n=>String(n).padStart(2,"0");
   const iso=d=>`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
   if(range==="month"){leaveFilter.from=iso(new Date(today.getFullYear(),today.getMonth(),1));leaveFilter.to=iso(today);}
@@ -4670,7 +4674,7 @@ function pyCalc(){
         <td>${empCell(e)}${p.ov?'<div style="margin-top:3px"><span class="pill amber" style="font-size:9.5px">✏️ Override'+(p.ov.note?': '+p.ov.note:'')+'</span></div>':''}</td>
         <td class="num"><b>${e.att.workDays}</b></td>
         <td class="num" style="font-size:12px">${e.att.leaveDays||0} / ${e.att.absent||0} / ${e.att.lateCount||0}${e.att.missing?'<div><span class="pill amber" style="font-size:9.5px">🧐 รอตรวจ '+e.att.missing+'</span></div>':''}</td>
-        <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เฉลี่ยเข้ากลางรอบ ${Math.round(p.prorate*100)}%</div>`:''}</td>
+        <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เข้ากลางรอบ · ฿${fmt(e.rate/30)}/วัน × ${e.att.workDays} วัน</div>`:''}</td>
         <td class="num" style="color:${p.extra?'var(--green)':'inherit'}">${p.extra?'+฿'+fmt(p.extra):'—'}</td>
         <td class="num" style="color:${(p.absentDeduct+p.unpaidLeaveDeduct)?'var(--red)':'inherit'}">${(p.absentDeduct+p.unpaidLeaveDeduct)?'-฿'+fmt(p.absentDeduct+p.unpaidLeaveDeduct):'—'}${p.unpaidLeaveDeduct?`<div style="font-size:10px;color:var(--muted)">ลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน</div>`:''}</td>
         <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':payrollOffset<0?'<span style="font-size:11px">งวดเก่า — ไม่หัก</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
@@ -5581,7 +5585,7 @@ async function loadAdvances(){
 function pyAdvance(){
   if(advanceRows===null){ advanceRows="loading"; loadAdvances().then(()=>{ if(currentPage==="payroll") render("payroll"); }); }
   const loading = !Array.isArray(advanceRows);
-  const isHR = canViewAll();
+  const isHR = canSeePayroll();
   const me = myEmp();
   const myRows = loading?[]:advanceRows.filter(a=>String(a.employee_id)===String(loggedInEmployeeId));
   const pendAll = loading?[]:advanceRows.filter(a=>a.status==="pending");
@@ -5662,6 +5666,7 @@ async function submitAdvance(){
   toast(`ส่งคำขอเบิกเงินล่วงหน้าแล้ว ✓ รอ HR อนุมัติ (จะหักจากเงินเดือนงวด ${periodLabel(p)})`);
 }
 async function reviewAdvance(id, decision){
+  if(!canSeePayroll()){ toast("🔒 เฉพาะ HR หรือ Super Admin เท่านั้นที่อนุมัติคำขอเบิกเงินล่วงหน้าได้"); return; }
   const a = (Array.isArray(advanceRows)?advanceRows:[]).find(x=>String(x.id)===String(id)); if(!a) return;
   const e = E(a.employee_id);
   let targetStart = a.target_cycle_start, targetEnd = a.target_cycle_end, rolled = false;
@@ -6725,6 +6730,9 @@ async function addHolidayRange(){
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   logAudit("settings","เพิ่มวันหยุดตามประเพณี", `${name} · ${isoToThaiDisplay(from)}${from!==to?" – "+isoToThaiDisplay(to):""} · ${rows.length} วัน${dept?" · เฉพาะ "+dept:" · ทั้งบริษัท"}`);
   await reloadHolidays();
+  // วันหยุดกระทบตัวเลขงวดเงินเดือนที่แคชไว้แล้ว (e.att/prorateFactor) และคิวตรวจสอบย้อนหลัง — บังคับให้คำนวณใหม่ทันที ไม่ต้องรอผู้ใช้กดโหลดใหม่เอง
+  missingRows = null;
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
   holidayYearFilter = Number(from.slice(0,4));
   render("settings");
   toast(`เพิ่มวันหยุด "${name}" ${rows.length} วันแล้ว ✓ ระบบจะไม่นับเป็นวันทำงานตั้งแต่นี้`);
@@ -6737,6 +6745,9 @@ async function delHolidayGroup(idsCsv, name){
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   logAudit("settings","ลบวันหยุดตามประเพณี", `${name} · ${ids.length} วัน`);
   await reloadHolidays();
+  // เช่นเดียวกับตอนเพิ่มวันหยุด — ต้องคำนวณงวดเงินเดือน/คิวตรวจสอบย้อนหลังใหม่ทันที
+  missingRows = null;
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
   render("settings");
   toast(`ลบวันหยุด "${name}" แล้ว ✓`);
 }
@@ -8337,9 +8348,15 @@ function tick(){const d=new Date();const t=d.toLocaleTimeString("th-TH",{hour12:
     _lastDayLabel = lbl;
     const el = document.getElementById("todayLabel");
     if(el) el.textContent = lbl;
-    // ข้ามวันแล้ว → โหลดข้อมูลลงเวลาของวันใหม่ + รีเฟรชหน้าที่เปิดอยู่
+    // ข้ามวันแล้ว → โหลดข้อมูลลงเวลาของวันใหม่ + รีเฟรชหน้าที่เปิดอยู่ (เว้นแต่กำลังพิมพ์ฟอร์ม/เปิดโมดัล/เปิดพาเนลแจ้งเตือนอยู่ — กันข้อมูลที่ผู้ใช้กำลังกรอกหายตอนเที่ยงคืน)
     if(!first && loggedInEmployeeId && typeof loadAttendanceToday==="function"){
-      loadAttendanceToday().then(()=>{ if(currentPage) render(currentPage); }).catch(()=>{});
+      loadAttendanceToday().then(()=>{
+        if(currentPage && typeof canRerenderNow==="function" && canRerenderNow()){
+          const y = window.scrollY;
+          render(currentPage);
+          window.scrollTo({top:y});
+        }
+      }).catch(()=>{});
     }
   }
 }
