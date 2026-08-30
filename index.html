@@ -1714,12 +1714,15 @@ function calcPay(e){
   const absentDeduct = (e.type==="monthly" && !isWfhExempt) ? Math.round((e.att.absent+overQuota)*dayRate) : 0;
   // #3 ลาไม่รับค่าจ้าง: หักตามวันสำหรับรายเดือนเสมอ (แม้เป็น WFH ก็หัก เพราะเลือกลาไม่รับค่าจ้างเอง)
   const unpaidLeaveDeduct = e.type==="monthly" ? Math.round((e.att.unpaidLeave||0)*dayRate) : 0;
-  // หักมาสายเริ่มมีผลจาก "งวดปัจจุบัน" เป็นต้นไปเท่านั้น — งวดเก่าที่ดูย้อนหลัง (payrollOffset<0) ไม่เคยถูกหักจริง จึงไม่คำนวณ/แสดงย้อนหลัง กันสับสน
+  // หักมาสายคำนวณแบบเดียวกับหักขาดงาน/ลาไม่รับค่าจ้างทุกประการ — คำนวณสดจาก e.att/settings ปัจจุบันเสมอ ไม่มีเงื่อนไขพิเศษตามสถานะงวด (draft/approved/paid) เลย
+  // เหตุผล: งวดที่ "อนุมัติ" ไปแล้ว ตัวเลขหักมาสายจริงถูก snapshot ลง payroll_records ตอนกด "อนุมัติ" ไปแล้ว (ดู approvePayroll() → dedItems/other_deductions) — คงค่าที่ถูกต้อง ณ ตอนนั้นไว้ถาวรในสลิป/ประวัติงวดจ่าย (openPeriodModal อ่านจากตรงนั้น ไม่เรียก calcPay())
+  // ส่วนหน้านี้ (Payroll Preview) เป็นแค่จอ "คำนวณสด" ตรวจสอบก่อนอนุมัติ — ต้องไม่มีจุดใดที่ทำให้ตัวเลขงวดที่อนุมัติไปแล้วหายไป/เปลี่ยนจากที่เคยอนุมัติ จึงคำนวณด้วยสูตรเดียวกันเสมอไม่ว่าจะดูตอนไหน (เหมือนหักขาดงาน/ลาไม่รับค่าจ้าง/หักอื่นๆ ที่ไม่เคยมีเงื่อนไขตามสถานะงวดอยู่แล้ว)
+  // (เดิมเช็คจาก payrollOffset<0 ผิด — บริษัทที่ตัดรอบก่อนวันจ่าย เช่น ตัดวันที่ 28 แล้วจ่ายสิ้นเดือน จะต้องทำจ่ายที่ payrollOffset=-1 เป็นปกติ ซึ่งเป็นงวดที่ยัง "draft" อยู่จริง ไม่ใช่งวดเก่าที่ปิดจบไปแล้ว — เลยเคยข้ามการหักไปทั้งที่ควรหัก ก่อนจะแก้เป็น "ไม่หักถ้าไม่ draft" ซึ่งก็ผิดอีกทาง เพราะทำให้งวดที่อนุมัติไปแล้วพร้อมยอดหักที่ถูกต้อง กลับแสดงว่าไม่หักทันทีที่กดอนุมัติ — จึงตัดเงื่อนไขสถานะงวดออกทั้งหมด)
   // #6 หักเฉพาะนาทีที่เกินโควตาผ่อนผัน (lateBillableMin คิดแยกรายวันมาแล้วจาก loadCycleStats)
   const lateBillable = e.att.lateBillableMin!=null
     ? e.att.lateBillableMin
     : Math.max(0, (e.att.lateMin||0) - (Number(settings.lateGraceMinutes)||0)); // fallback กรณี e.att ถูกแก้มือ (saveFixAttendance)
-  const lateDeduct = (settings.latePolicy==="deduct" && payrollOffset>=0) ? lateBillable*settings.latePerMin : 0;
+  const lateDeduct = settings.latePolicy==="deduct" ? lateBillable*settings.latePerMin : 0;
   const advanceDeduct = (e.advances||[]).reduce((s,a)=>s+(Number(a.amount)||0),0); // เบิกล่วงหน้าที่อนุมัติแล้ว รอหักงวดนี้
   const otherDeduct = (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal).reduce((s,d)=>s+d.amount,0)
     + advanceDeduct
@@ -3811,10 +3814,10 @@ function attLate(){
         <td class="num"><b>${e.att.lateMin}</b> นาที</td>
         <td class="num">${billable>0?'<b style="color:var(--red)">'+billable+'</b> นาที':'<span class="pill green" style="font-size:10px">อยู่ในเกณฑ์ผ่อนผัน</span>'}</td>
         <td>${e.att.lateMin>60?'<span class="pill red">สายบ่อย</span>':'<span class="pill amber">สายบางวัน</span>'}</td>
-        <td class="num">${payrollOffset<0?'<span class="hint" style="font-size:11px">งวดเก่า — ไม่หัก</span>':'฿'+fmt(billable*settings.latePerMin)}</td>
+        <td class="num">฿${fmt(billable*settings.latePerMin)}</td>
       </tr>`;}).join("")}
     </table>`}
-    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ มีผลกับงวดร่างปัจจุบันเท่านั้น (งวดเก่าที่ดูย้อนหลังจะไม่ถูกหักย้อนหลัง)</div>
+    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ ตัวเลขที่เห็นในหน้านี้เป็นค่าที่คำนวณสด ณ ตอนดู · งวดที่กด "อนุมัติ" ไปแล้วยอดหักมาสายจะถูกบันทึกลงสลิป/ประวัติงวดจ่ายตายตัวตามที่อนุมัติไว้ ไม่เปลี่ยนตามการตั้งค่าที่แก้ทีหลัง</div>
   </div>`;
 }
 /* ============ ATTENDANCE LOG — log บันทึกเวลาเข้า-ออกงานรายวันของทั้งเดือน (ดูย้อนหลังได้ว่าวันไหนกดกี่โมง ไม่ใช่แค่ยอดรวม) ============ */
@@ -4842,7 +4845,7 @@ function pyCalc(){
         <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เข้ากลางรอบ · ฿${fmt(e.rate/30)}/วัน × ${p.paidWorkDays} วัน${(e.att.paidDays>e.att.workDays)?' (รวมวันหยุดบริษัท '+(e.att.paidDays-e.att.workDays)+' วัน)':''}</div>`:''}</td>
         <td class="num" style="color:${p.extra?'var(--green)':'inherit'}">${p.extra?'+฿'+fmt(p.extra):'—'}</td>
         <td class="num" style="color:${(p.absentDeduct+p.unpaidLeaveDeduct)?'var(--red)':'inherit'}">${(p.absentDeduct+p.unpaidLeaveDeduct)?'-฿'+fmt(p.absentDeduct+p.unpaidLeaveDeduct):'—'}${p.unpaidLeaveDeduct?`<div style="font-size:10px;color:var(--muted)">ลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน</div>`:''}</td>
-        <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':payrollOffset<0?'<span style="font-size:11px">งวดเก่า — ไม่หัก</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
+        <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
         <td class="num" style="color:${p.otherDeduct?'var(--red)':'var(--muted)'}">${p.otherDeduct?'-฿'+fmt(p.otherDeduct):'—'}${activeDeductions(e).length?`<div style="font-size:10.5px;color:var(--muted)">${activeDeductions(e).map(d=>d.label+' ('+d.monthsPaid+'/'+d.monthsTotal+')').join(', ')}</div>`:''}</td>
         <td class="num"><b style="font-size:15px">฿${fmt(p.net)}</b></td>
         <td style="white-space:nowrap">${locked?'🔒':`<button class="btn ghost xs" onclick="openOverrideModal('${e.id}')">💵 Override เงิน</button>`}</td>
