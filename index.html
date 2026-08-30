@@ -3221,9 +3221,9 @@ function pgAttendance(){
     ${canEditAttendance()?tab("review","ตรวจสอบย้อนหลัง","🧐", missingCount>0):''}
     ${tab("adjust","แก้เวลา","🛠️", canSeePayroll()&&Array.isArray(adjustRows)&&adjustRows.some(a=>a.status==='pending'&&String(a.employee_id)!==String(loggedInEmployeeId)))}
     ${isPlain?'':tab("summary","สรุปเวลารายคน","📊")}
-    ${isPlain?'':tab("late","สถิติมาสาย","⏰")}
+    ${tab("late","สถิติมาสาย","⏰")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${t==="log"?attLog():t==="ot"?attOt():t==="adjust"?attAdjust():isPlain?attToday():(t==="review"&&canEditAttendance())?attReview():t==="summary"?attSummary():t==="late"?attLate():attToday()}`;
+  ${t==="log"?attLog():t==="ot"?attOt():t==="adjust"?attAdjust():t==="late"?attLate():isPlain?attToday():(t==="review"&&canEditAttendance())?attReview():t==="summary"?attSummary():attToday()}`;
 }
 
 /* ============ Missing Punch Regularization — ตรวจสอบวันที่ไม่มีบันทึกลงเวลา ============ */
@@ -3798,26 +3798,202 @@ function saveFixAttendance(id){
   e.att.lateBillableMin = null;
   closeModal(); render("attendance"); toast(`แก้ไขข้อมูลเข้างานของ ${e.name} แล้ว ✓ จะถูกใช้ในงวดร่างจนกว่าจะกด "↻ คำนวณงวดนี้" ใหม่`);
 }
+// ===== สถิติมาสาย — ดูย้อนหลังได้สูงสุด 6 งวด (ตัดไม่ให้ย้อนไปก่อนเดือนที่เริ่มใช้งานเว็บแอปนี้จริงๆ) =====
+// เดือนที่เริ่มใช้งานจริง: ยืนยันจากข้อมูลจริงใน attendances — มิ.ย. 2569 มีแค่ 18 แถว (9 คน ไม่กี่วันท้ายเดือน = ทดสอบระบบ/ตั้งค่า)
+// เทียบกับ ก.ค. 2569 ที่มี 262 แถว (11 คน เกือบเต็มเดือน = เริ่มใช้งานจริงสม่ำเสมอแล้ว) → งวดที่เริ่ม 29 มิ.ย. 2569 (ครอบคลุม ก.ค. เต็มๆ ตามรอบตัดวันที่ 28) เป็นงวดแรกสุดที่เปิดให้เลือกย้อนหลังได้
+const ATT_LATE_FLOOR_START = "2026-06-29";
+const ATT_LATE_MAX_BACK = 6; // ให้เลือกย้อนหลังได้สูงสุด 6 งวด (รวมงวดปัจจุบันเป็น 0) — ถ้าข้อมูลจริงยังไม่ครบ 6 งวด จะเหลือแค่เท่าที่มีจริง (ตัดที่ ATT_LATE_FLOOR_START)
+let attLateOffset = 0;         // 0=งวดปัจจุบัน, ลบ=ย้อนหลัง — แยกจาก payrollOffset โดยตั้งใจ กันชนกับ workflow ทำจ่ายเงินเดือนที่ใช้ payrollOffset อยู่แล้ว
+let attLateHistRows = null;    // null=ยังไม่โหลด (หรืองวดปัจจุบัน ไม่ต้องโหลดซ้ำ) | "loading" | {[employeeId]: {lateMin,lateBillableMin,lateCount}} — ใช้เฉพาะตาราง "ภาพรวมทั้งหมด" เท่านั้น
+let attLateDetailEmpId = null; // id ของพนักงานที่กำลังดูรายละเอียดรายวัน (เฉพาะ role ที่เลือกดูคนอื่นได้) — null = ยังไม่เลือก (โชว์หน้าภาพรวม)
+let attLateDetailRows = null;  // null=ยังไม่โหลด | "loading" | array รายวันของ attLateDetailEmpId (หรือของตัวเองถ้าเป็น role ที่เห็นได้แค่ของตัวเอง) ในงวด attLateOffset
+// รายการงวดย้อนหลังที่เลือกได้จริง (ใช้ "monthly" เป็นตัวอ้างอิงช่วงวันที่/ป้ายกำกับ — งวดของ weekly/daily คำนวณแยกตาม cycle ของแต่ละคนเองตอนโหลดข้อมูลจริง)
+function attLateAvailableOffsets(){
+  const offsets = [];
+  for(let o=0; o>-ATT_LATE_MAX_BACK; o--){
+    const p = periodByOffset("monthly", o);
+    if(p.start < ATT_LATE_FLOOR_START) break;
+    offsets.push(o);
+  }
+  return offsets;
+}
+async function setAttLateOffset(off){
+  attLateOffset = Number(off)||0;
+  attLateHistRows = null;
+  attLateDetailRows = null; // งวดเปลี่ยน → แคชรายวันของงวดเก่าใช้ต่อไม่ได้ (attLateDetailEmpId คงค่าเดิมไว้ได้ปกติ ไม่ต้องเลือกคนใหม่)
+  render("attendance");
+}
+async function loadAttLateHistory(){
+  if(attLateOffset===0){ attLateHistRows = null; return; } // งวดปัจจุบันใช้ e.att ที่โหลดไว้อยู่แล้วตามปกติ ไม่ต้อง query ซ้ำ
+  const targets = visibleEmployees().filter(e=>e.status!=="terminated");
+  if(!targets.length){ attLateHistRows = {}; return; }
+  // แต่ละ cycle (monthly/weekly/daily) มีช่วงงวดต่างกันที่ offset เดียวกัน — จัดกลุ่ม id ตาม cycle แล้ว query แยก
+  const idsByCycle = {};
+  targets.forEach(e=>{
+    if(!idsByCycle[e.cycle]) idsByCycle[e.cycle] = [];
+    idsByCycle[e.cycle].push(e.id);
+  });
+  const cyKeys = Object.keys(idsByCycle);
+  const results = await Promise.all(cyKeys.map(cy=>{
+    const p = periodByOffset(cy, attLateOffset);
+    return sb.from("attendances").select("employee_id,late_minutes").in("employee_id", idsByCycle[cy]).gte("work_date", p.start).lte("work_date", p.end);
+  }));
+  const errRes = results.find(r=>r.error);
+  if(errRes){ console.error("loadAttLateHistory", errRes.error); toastLoadError("สถิติมาสายย้อนหลัง"); attLateHistRows = {}; return; }
+  const graceMin = Number(settings.lateGraceMinutes)||0;
+  const out = {};
+  results.forEach(r=>{
+    (r.data||[]).forEach(a=>{
+      const id = a.employee_id;
+      if(!out[id]) out[id] = {lateMin:0, lateBillableMin:0, lateCount:0};
+      const lm = a.late_minutes||0;
+      out[id].lateMin += lm;
+      out[id].lateBillableMin += Math.max(0, lm-graceMin);
+      if(lm>0) out[id].lateCount++;
+    });
+  });
+  attLateHistRows = out;
+}
+// พนักงานรหัส T000 (นาย วิธวัฒน์ — CEO) ได้รับสิทธิ์ "เห็นเหมือน HR" เฉพาะหน้ารายงานเวลา/มาสาย โดยไม่เปลี่ยน role จริง (ยังเป็น supervisor เหมือนเดิม สิทธิ์อนุมัติอื่นๆ ไม่กระทบ)
+// ฝั่ง DB มี RLS policy แยกต่างหาก (is_ceo_t000()) ให้ query ตาราง employees/attendances เห็นทั้งบริษัทแล้ว — เช็คโค้ดฝั่ง JS แค่กำหนดว่า "หน้านี้จะโชว์แบบไหน" เท่านั้น
+function isCeoT000(){ const e = E(loggedInEmployeeId); return !!e && e.code==="T000"; }
+// เห็นภาพรวมทั้งบริษัท + เลือกดูรายคนได้: HR/ผู้ช่วย HR/Super Admin ทุกคน + T000 โดยเฉพาะ (ทั้งที่ role จริงเป็น supervisor)
+// ส่วนหัวหน้างานคนอื่น (supervisor ทั่วไป) และพนักงานทั่วไป เห็นได้แค่ของตัวเองเท่านั้น (isPlain เดิม + supervisor ทั่วไปที่ไม่ใช่ T000)
+function attLateCanDrill(){ return canViewAll() || isCeoT000(); }
+function setAttLateDetailEmp(id){
+  if(!attLateCanDrill()) return; // กันไว้อีกชั้น เผื่อมีคนเรียกตรงๆ ผ่าน console — ปุ่ม/dropdown ในหน้าเว็บก็ไม่โชว์ให้กดอยู่แล้วถ้าไม่มีสิทธิ์
+  attLateDetailEmpId = id ? Number(id) : null;
+  attLateDetailRows = null;
+  render("attendance");
+}
+// โหลดรายละเอียด "รายวันทั้งงวด" ของพนักงานคนเดียว (ใช้ทั้งมุมมอง "ของตัวเอง" และมุมมอง "เลือกดูรายคน" ของ HR/T000) — โครงเดียวกับ loadAttLog() แต่โฟกัสที่สถิติมาสาย
+async function loadAttLateDetail(empId){
+  const e = E(empId);
+  if(!e){ attLateDetailRows = []; return; }
+  const p = periodByOffset(e.cycle, attLateOffset);
+  const toISO = p.end > todayISODate() ? todayISODate() : p.end; // ไม่โชว์วันในอนาคตที่ยังมาไม่ถึง
+  if(p.start > toISO){ attLateDetailRows = []; return; }
+  await ensureHolidaysLoaded();
+  const [attRes, lvRes] = await Promise.all([
+    sb.from("attendances").select("work_date,late_minutes,status").eq("employee_id", empId).gte("work_date", p.start).lte("work_date", toISO),
+    sb.from("leave_requests").select("leave_date,leave_type,supervisor_status,hr_status").eq("employee_id", empId).gte("leave_date", p.start).lte("leave_date", toISO)
+  ]);
+  if(attRes.error||lvRes.error){ console.error("loadAttLateDetail", attRes.error||lvRes.error); toastLoadError("รายละเอียดมาสายรายวัน"); attLateDetailRows = []; return; }
+  const attByDate = {}; (attRes.data||[]).forEach(r=>{ attByDate[r.work_date]=r; });
+  const leaveByDate = {}; (lvRes.data||[]).forEach(l=>{ if(l.supervisor_status!=="rejected" && l.hr_status!=="rejected") leaveByDate[l.leave_date]=l; });
+  const isWeeklyOff = d => settings.weeklyHoliday==="เสาร์-อาทิตย์" ? (d.getDay()===0||d.getDay()===6) : d.getDay()===(THAI_DAYS[settings.weeklyHoliday]??0);
+  const startJs = e.start ? thaiDateToJS(e.start) : null;
+  const rows = [];
+  for(let d=new Date(p.start+"T00:00:00"); isoDate(d)<=toISO; d.setDate(d.getDate()+1)){
+    const dISO = isoDate(d);
+    const beforeStart = !!(startJs && isoDate(startJs) > dISO);
+    rows.push({
+      dateISO: dISO,
+      dow: ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"][d.getDay()],
+      beforeStart,
+      isHoliday: !beforeStart && isHolidayFor(dISO, e),
+      holidayName: holidayNameOn(dISO, e),
+      isWeeklyOff: !beforeStart && isWeeklyOff(d),
+      leave: leaveByDate[dISO] || null,
+      att: attByDate[dISO] || null
+    });
+  }
+  attLateDetailRows = rows.reverse(); // วันล่าสุดขึ้นก่อน
+}
+function attLateDetailRowHtml(r, graceMin){
+  const lm = r.att ? (r.att.late_minutes||0) : 0;
+  const billable = Math.max(0, lm-graceMin);
+  let statusHtml;
+  if(r.beforeStart){ statusHtml = '<span class="pill gray">ยังไม่เริ่มงาน</span>'; }
+  else if(r.isHoliday){ statusHtml = `<span class="pill amber">🎌 วันหยุดบริษัท${r.holidayName?' · '+r.holidayName:''}</span>`; }
+  else if(r.leave){ statusHtml = `<span class="pill blue">📝 ลา${r.leave.leave_type?' · '+(LT(r.leave.leave_type)?.name||r.leave.leave_type):''}</span>`; }
+  else if(r.isWeeklyOff){ statusHtml = '<span class="pill gray">วันหยุดประจำสัปดาห์</span>'; }
+  else if(r.att){
+    statusHtml = r.att.status==="absent" ? '<span class="pill red">ขาดงาน</span>'
+      : lm>0 ? (billable>0?`<span class="pill red">สาย ${lm} นาที</span>`:`<span class="pill amber">สาย ${lm} นาที (อยู่ในเกณฑ์ผ่อนผัน)</span>`)
+      : '<span class="pill green">ตรงเวลา</span>';
+  } else {
+    statusHtml = '<span class="pill red">ไม่มีบันทึก</span>';
+  }
+  return `<tr>
+    <td style="white-space:nowrap">${isoToThaiDisplay(r.dateISO)}</td>
+    <td>${r.dow}</td>
+    <td class="num">${lm>0?'<b'+(billable>0?' style="color:var(--red)"':'')+'>'+lm+'</b>':'—'}</td>
+    <td class="num">${lm>0?(billable>0?'<b style="color:var(--red)">'+billable+'</b>':'<span class="pill green" style="font-size:10px">อยู่ในเกณฑ์ผ่อนผัน</span>'):'—'}</td>
+    <td>${statusHtml}</td>
+  </tr>`;
+}
+// การ์ดรายละเอียด "ทุกวันในงวด" ของพนักงานคนเดียว + สรุปยอดรวมไว้ด้านบน — ใช้ทั้งกับมุมมอง "ของตัวเอง" (พนักงานทั่วไป/หัวหน้างานทั่วไป) และมุมมอง "เลือกดูรายคน" (HR/ผู้ช่วย HR/Super Admin/T000)
+function attLateDetailCard(empId){
+  const e = E(empId);
+  if(!e) return '<div class="hint" style="margin-top:12px">ไม่พบข้อมูลพนักงาน</div>';
+  if(attLateDetailRows===null){ attLateDetailRows="loading"; loadAttLateDetail(empId).then(()=>{ if(currentPage==="attendance") render("attendance"); }); }
+  const loading = !Array.isArray(attLateDetailRows);
+  const graceMin = Number(settings.lateGraceMinutes)||0;
+  const lateDays = loading ? [] : attLateDetailRows.filter(r=>r.att && (r.att.late_minutes||0)>0);
+  const totalLateMin = lateDays.reduce((s,r)=>s+(r.att.late_minutes||0),0);
+  const totalBillable = lateDays.reduce((s,r)=>s+Math.max(0,(r.att.late_minutes||0)-graceMin),0);
+  return `
+  ${attLateCanDrill()?`<div style="margin-top:10px;display:flex;align-items:center;gap:10px"><button class="btn xs" onclick="setAttLateDetailEmp('')">‹ กลับไปภาพรวมทั้งหมด</button> ${empCell(e)}</div>`:''}
+  <div class="hint" style="margin:12px 0;padding:12px 14px;background:#f8f9fc;border-radius:10px;display:flex;gap:22px;flex-wrap:wrap">
+    <div>รวมสาย <b style="font-size:15px">${loading?'…':totalLateMin}</b> นาที${loading?'':' ('+lateDays.length+' วัน)'}</div>
+    <div>นาทีที่เกินผ่อนผัน <b style="font-size:15px;color:${!loading&&totalBillable>0?'var(--red)':'inherit'}">${loading?'…':totalBillable}</b> นาที</div>
+    <div>หักเงิน (ถ้าเปิดโหมด) <b style="font-size:15px;color:${!loading&&totalBillable>0?'var(--red)':'inherit'}">${loading?'…':'฿'+fmt(totalBillable*settings.latePerMin)}</b></div>
+  </div>
+  ${loading?'<div class="hint" style="text-align:center;padding:24px">⏳ กำลังโหลด...</div>':
+  attLateDetailRows.length===0?'<div class="hint" style="margin-top:8px">ไม่มีข้อมูลในช่วงนี้</div>':
+  `<table style="margin-top:6px">
+    <tr><th>วันที่</th><th>วัน</th><th class="num">สายรวมกี่นาที</th><th class="num">เกินผ่อนผันกี่นาที</th><th>สถานะ</th></tr>
+    ${attLateDetailRows.map(r=>attLateDetailRowHtml(r, graceMin)).join("")}
+  </table>`}`;
+}
 function attLate(){
-  const withLate = visibleEmployees().filter(e=>e.att.lateMin>0);
+  const canDrill = attLateCanDrill();
+  const isCurrent = attLateOffset===0;
+  if(!isCurrent && attLateHistRows===null){ attLateHistRows="loading"; loadAttLateHistory().then(()=>{ if(currentPage==="attendance") render("attendance"); }); }
+  const offsets = attLateAvailableOffsets();
+  const periodText = isCurrent ? "งวดปัจจุบัน" : periodLabel(periodByOffset("monthly", attLateOffset));
+  const headerHtml = `
+    <h3>⏰ สถิติมาสาย <span class="pill ${settings.latePolicy==='deduct'?'red':'gray'}" style="margin-left:auto">${settings.latePolicy==='deduct'?'โหมด: หัก '+settings.latePerMin+' บ./นาที':'โหมด: บันทึกอย่างเดียว'}</span></h3>
+    <div class="hint" style="margin-top:4px">🕒 ผ่อนผัน <b>${settings.lateGraceMinutes} นาทีแรกของแต่ละวัน</b> — สายไม่เกินนี้ยังขึ้นสถิติว่าสาย แต่ไม่ถูกหักเงิน</div>
+    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:12px">
+      <div class="field"><label>งวด</label><select onchange="setAttLateOffset(this.value)">${offsets.map(o=>`<option value="${o}" ${o===attLateOffset?'selected':''}>${o===0?'งวดปัจจุบัน':'ย้อนหลัง '+Math.abs(o)+' งวด'} (${periodLabel(periodByOffset("monthly",o))})</option>`).join("")}</select></div>
+      ${canDrill?`<div class="field"><label>พนักงาน</label><select onchange="setAttLateDetailEmp(this.value)"><option value="">— ภาพรวมทั้งหมด —</option>${visibleEmployees().filter(e=>e.status!=="terminated").map(e=>`<option value="${e.id}" ${String(e.id)===String(attLateDetailEmpId)?'selected':''}>${e.name} (${e.code})</option>`).join("")}</select></div>`:''}
+    </div>
+    <div class="hint" style="margin-top:8px">แสดงข้อมูล: <b>${periodText}</b>${offsets.length<ATT_LATE_MAX_BACK?' · ดูย้อนหลังได้ถึงเดือนที่เริ่มใช้งานเว็บแอปนี้จริงเท่านั้น (ก่อนหน้านั้นเป็นข้อมูลทดสอบระบบตอนติดตั้ง)':''}</div>`;
+  const footerHtml = `<div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ ตัวเลขที่เห็นในหน้านี้เป็นค่าที่คำนวณสด ณ ตอนดู · งวดที่กด "อนุมัติ" ไปแล้วยอดหักมาสายจะถูกบันทึกลงสลิป/ประวัติงวดจ่ายตายตัวตามที่อนุมัติไว้ ไม่เปลี่ยนตามการตั้งค่าที่แก้ทีหลัง</div>`;
+
+  // พนักงานทั่วไป/หัวหน้างานทั่วไป (ไม่ใช่ T000): เห็นได้แค่ของตัวเองเสมอ ไม่มีตัวเลือก "ภาพรวมทั้งหมด"
+  const targetEmpId = canDrill ? attLateDetailEmpId : loggedInEmployeeId;
+  if(targetEmpId){
+    return `<div class="card">${headerHtml}${attLateDetailCard(targetEmpId)}${footerHtml}</div>`;
+  }
+
+  // มาถึงจุดนี้ได้เฉพาะ role ที่ canDrill=true และยังไม่ได้เลือกดูรายคน → โชว์ตารางภาพรวมทั้งบริษัท (เดิม)
+  const statFor = e => isCurrent ? {lateMin:e.att.lateMin||0, lateBillableMin:e.att.lateBillableMin, lateCount:e.att.lateCount||0}
+    : (attLateHistRows && typeof attLateHistRows==="object" && attLateHistRows[e.id]) || {lateMin:0, lateBillableMin:0, lateCount:0};
+  const loading = !isCurrent && !(attLateHistRows && typeof attLateHistRows==="object");
+  const withLate = loading ? [] : visibleEmployees().filter(e=>e.status!=="terminated" && statFor(e).lateMin>0);
   return `
   <div class="card">
-    <h3>⏰ สถิติมาสาย เดือนนี้ <span class="pill ${settings.latePolicy==='deduct'?'red':'gray'}" style="margin-left:auto">${settings.latePolicy==='deduct'?'โหมด: หัก '+settings.latePerMin+' บ./นาที':'โหมด: บันทึกอย่างเดียว'}</span></h3>
-    <div class="hint" style="margin-top:4px">🕒 ผ่อนผัน <b>${settings.lateGraceMinutes} นาทีแรกของแต่ละวัน</b> — สายไม่เกินนี้ยังขึ้นสถิติว่าสาย แต่ไม่ถูกหักเงิน</div>
-    ${withLate.length===0?'<div class="hint" style="margin-top:12px">ไม่มีพนักงานมาสายเดือนนี้ 🎉</div>':
+    ${headerHtml}
+    ${loading?'<div class="hint" style="text-align:center;padding:24px">⏳ กำลังโหลด...</div>':
+    withLate.length===0?'<div class="hint" style="margin-top:12px">ไม่มีพนักงานมาสายในงวดนี้ 🎉</div>':
     `<table style="margin-top:14px">
-      <tr><th>พนักงาน</th><th class="num">รวมนาที</th><th class="num">นาทีที่เกินผ่อนผัน</th><th>สถานะ</th><th class="num">หักเงิน (ถ้าเปิดโหมด)</th></tr>
+      <tr><th>พนักงาน</th><th class="num">รวมนาที</th><th class="num">นาทีที่เกินผ่อนผัน</th><th>สถานะ</th><th class="num">หักเงิน (ถ้าเปิดโหมด)</th><th></th></tr>
       ${withLate.map(e=>{
-        const billable = e.att.lateBillableMin!=null ? e.att.lateBillableMin : Math.max(0,(e.att.lateMin||0)-(Number(settings.lateGraceMinutes)||0));
+        const s = statFor(e);
+        const billable = s.lateBillableMin!=null ? s.lateBillableMin : Math.max(0,(s.lateMin||0)-(Number(settings.lateGraceMinutes)||0));
         return `<tr>
         <td>${empCell(e)}</td>
-        <td class="num"><b>${e.att.lateMin}</b> นาที</td>
+        <td class="num"><b>${s.lateMin}</b> นาที</td>
         <td class="num">${billable>0?'<b style="color:var(--red)">'+billable+'</b> นาที':'<span class="pill green" style="font-size:10px">อยู่ในเกณฑ์ผ่อนผัน</span>'}</td>
-        <td>${e.att.lateMin>60?'<span class="pill red">สายบ่อย</span>':'<span class="pill amber">สายบางวัน</span>'}</td>
+        <td>${s.lateMin>60?'<span class="pill red">สายบ่อย</span>':'<span class="pill amber">สายบางวัน</span>'}</td>
         <td class="num">฿${fmt(billable*settings.latePerMin)}</td>
+        <td style="text-align:center"><button class="btn xs" onclick="setAttLateDetailEmp(${e.id})">ดูรายวัน</button></td>
       </tr>`;}).join("")}
     </table>`}
-    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#f8f9fc;border-radius:10px">💡 เปลี่ยนโหมดมาสายได้ที่ <b>ตั้งค่าระบบ</b> — เปิด/ปิดได้ทันทีโดยไม่ต้องแก้ระบบ ตัวเลขที่เห็นในหน้านี้เป็นค่าที่คำนวณสด ณ ตอนดู · งวดที่กด "อนุมัติ" ไปแล้วยอดหักมาสายจะถูกบันทึกลงสลิป/ประวัติงวดจ่ายตายตัวตามที่อนุมัติไว้ ไม่เปลี่ยนตามการตั้งค่าที่แก้ทีหลัง</div>
+    ${footerHtml}
   </div>`;
 }
 /* ============ ATTENDANCE LOG — log บันทึกเวลาเข้า-ออกงานรายวันของทั้งเดือน (ดูย้อนหลังได้ว่าวันไหนกดกี่โมง ไม่ใช่แค่ยอดรวม) ============ */
@@ -5496,6 +5672,7 @@ function resetAppState(){
   missingRows = null; adjustRows = null; payCategories = null;
   advanceRows = null; ytdRows = null; orgUnits = null; userRolesRows = null;
   attLogEmpId = null; attLogMonth = null; attLogRows = null;
+  attLateOffset = 0; attLateHistRows = null; attLateDetailEmpId = null; attLateDetailRows = null;
   orgChartRows = null;
   assetRecords = []; assetsLoaded = false; assetsLoading = false;
   signatures = {};
