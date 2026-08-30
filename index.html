@@ -388,7 +388,10 @@ const LEAVE_TYPES = [
 /* ================== EMPLOYEES ================== */
 // โหลดจริงจาก Supabase (ตาราง employees) หลังล็อกอินสำเร็จ ผ่าน loadEmployees()
 // ดู mapEmployeeRow() ด้านล่างสำหรับการแปลง field จาก DB → รูปแบบที่ UI ใช้
+// [สำคัญ] employees = เฉพาะพนักงานที่ "ยังทำงานอยู่" (active/probation) เท่านั้น — ทุกหน้า/ทุก dropdown/ทุกการคำนวณในระบบ (รวมเงินเดือน) ใช้ตัวแปรนี้
+// พนักงานที่พ้นสภาพ (terminated) จะไม่อยู่ใน array นี้เลย ไม่โผล่ในหน้าไหนอีก ไม่ถูกคำนวณเงินเดือนอีก — ให้อยู่แค่ใน terminatedEmployees (หน้า "จัดการพนักงาน" เท่านั้น) จนกว่าจะ Rehire
 let employees = [];
+let terminatedEmployees = []; // เฉพาะพนักงานพ้นสภาพ — ใช้ที่หน้า "จัดการพนักงาน" (ผ่าน filteredEmployees()) เท่านั้น ห้ามใช้ที่อื่น
 
 // โหลดจริงจาก Supabase (ตาราง leave_requests) หลังล็อกอินสำเร็จ ผ่าน loadLeaves()
 let leaves = [];
@@ -518,11 +521,14 @@ function mapEmployeeRow(row){
 async function loadEmployees(){
   const { data, error } = await sb.from("employees").select("*").order("id");
   if(error){ console.error("loadEmployees error", error); toastLoadError("รายชื่อพนักงาน"); return; }
-  employees = (data||[]).map(mapEmployeeRow)
+  const all = (data||[]).map(mapEmployeeRow)
     // ซ่อนบัญชีทดสอบระบบ (is_system_test) ออกจากทุกรายชื่อ/รายงาน — ยกเว้นตอนที่บัญชีนั้นล็อกอินอยู่เอง (ใช้ทดสอบได้ปกติ)
     .filter(e=>!e.isSystemTest || String(e.id)===String(loggedInEmployeeId));
-  // เติมชื่อหัวหน้างาน (แสดงผล) จาก supervisorId หลังจากมีรายชื่อครบทุกคนแล้ว
-  employees.forEach(e=>{ e.supervisor = e.supervisorId ? (employees.find(x=>x.id===e.supervisorId)?.name || "—") : "—"; });
+  // เติมชื่อหัวหน้างาน (แสดงผล) จาก supervisorId — ใช้ all (รวมพ้นสภาพ) ตอนหาชื่อ กันกรณีหัวหน้าเดิมพ้นสภาพไปแล้วแต่ยังต้องโชว์ชื่อถูกต้องในข้อมูลเก่า
+  all.forEach(e=>{ e.supervisor = e.supervisorId ? (all.find(x=>x.id===e.supervisorId)?.name || "—") : "—"; });
+  // แยกพนักงานพ้นสภาพออกจาก employees หลัก — ให้อยู่แค่หน้า "จัดการพนักงาน" เท่านั้น ไม่โผล่/เลือกไม่ได้ในหน้าอื่นของแอปอีก (รวมเงินเดือน) จนกว่าจะ Rehire กลับมา
+  terminatedEmployees = all.filter(e=>e.status==="terminated");
+  employees = all.filter(e=>e.status!=="terminated");
 }
 
 // แปลงวันที่ ISO (จาก Supabase date column) ให้เป็นข้อความไทย พ.ศ. แบบเดียวกับที่หน้า UI เดิมใช้แสดงผล
@@ -1602,7 +1608,9 @@ const DEDUCTION_TYPES = [
 let subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work", projects:"board" };
 
 /* ================== HELPERS ================== */
-const E = id => employees.find(e=>String(e.id)===String(id));
+// หา employee ตาม id — เช็ค employees (ทำงานอยู่) ก่อนเสมอ แล้วค่อย fallback ไป terminatedEmployees
+// (จำเป็นสำหรับหน้า "จัดการพนักงาน" ที่ต้องแก้ไข/Rehire คนพ้นสภาพได้ และสำหรับข้อมูลย้อนหลัง/ประวัติที่อ้างชื่อคนที่ลาออกไปแล้ว เช่น Audit Log — ไม่ถือว่าเป็นการ "อินเทอร์แอคทีฟ" เพราะเป็นแค่การแสดงชื่อ ไม่ใช่การเลือก/คำนวณใหม่)
+const E = id => employees.find(e=>String(e.id)===String(id)) || terminatedEmployees.find(e=>String(e.id)===String(id));
 const LT = code => LEAVE_TYPES.find(l=>l.code===code) || {code:code||"unknown", name:code||"ไม่ระบุประเภท", paid:"unpaid", color:"#8a92a6", desc:"ประเภทลานี้ไม่อยู่ในรายการที่ตั้งค่าไว้ (ข้อมูลเก่า/ยังไม่ได้กำหนด)"};
 const fmt = n => Math.round(n).toLocaleString("th-TH");
 const initials = n => n.replace(/\(.*\)/,"").trim().split(" ").map(w=>w[0]).slice(0,2).join("");
@@ -2536,8 +2544,13 @@ function applyEmpFilter(){
   const inp = document.getElementById("empSearch");
   if(inp){ inp.focus(); const v=inp.value; inp.value=""; inp.value=v; }
 }
+// เฉพาะหน้า "จัดการพนักงาน" (pgEmployees/filteredEmployees) เท่านั้นที่ใช้ฟังก์ชันนี้ — รวมพนักงานพ้นสภาพกลับเข้ามาให้ดู/ค้นหา/แก้ไข/Rehire ได้
+// ห้ามเรียกใช้ที่หน้าอื่นเด็ดขาด (หน้าอื่นทั้งหมดใช้ visibleEmployees()/employees ตรงๆ ซึ่งไม่มีพนักงานพ้นสภาพอยู่แล้วโดยธรรมชาติ)
+function allEmployeesForManagement(){
+  return [...visibleEmployees(), ...terminatedEmployees];
+}
 function filteredEmployees(){
-  return visibleEmployees().filter(e=>{
+  return allEmployeesForManagement().filter(e=>{
     if(empFilter.status!=="all" && e.status!==empFilter.status) return false;
     if(empFilter.dept!=="all" && e.dept!==empFilter.dept) return false;
     if(empFilter.q){
@@ -2549,11 +2562,12 @@ function filteredEmployees(){
 }
 function pgEmployees(){
   if(!canSeePayroll()) return pgMyProfile(); // ผู้ช่วย HR ไม่เห็นรายชื่อ+ฐานเงินเดือน (กันเห็นเงินเดือน)
-  const total = employees.length;
-  const active = employees.filter(e=>e.status==="active").length;
-  const probation = employees.filter(e=>e.status==="probation").length;
-  const terminated = employees.filter(e=>e.status==="terminated").length;
-  const depts = [...new Set(employees.map(e=>e.dept))];
+  const allEmp = allEmployeesForManagement();
+  const total = allEmp.length;
+  const active = allEmp.filter(e=>e.status==="active").length;
+  const probation = allEmp.filter(e=>e.status==="probation").length;
+  const terminated = allEmp.filter(e=>e.status==="terminated").length;
+  const depts = [...new Set(allEmp.map(e=>e.dept))];
   const list = filteredEmployees();
   const stat=(icon,label,val,color)=>`<div class="card" style="text-align:center;padding:16px"><div style="font-size:22px">${icon}</div><div class="display" style="font-size:24px;font-weight:700;color:${color}">${val}</div><div class="hint">${label}</div></div>`;
   const NAT_META = { TH:{flag:"🇹🇭", name:"ไทย"}, MM:{flag:"🇲🇲", name:"เมียนมา"}, LA:{flag:"🇱🇦", name:"ลาว"}, KH:{flag:"🇰🇭", name:"กัมพูชา"} };
@@ -2955,7 +2969,13 @@ function empInfoForm(e){
   <div class="grid" style="grid-template-columns:1fr 1fr">
     <div class="field"><label>แผนก *</label><select id="empDept">${!Array.isArray(orgUnits)?`<option value="${e.dept||''}">${e.dept||'— กำลังโหลด... —'}</option>`:orgUnitsOf("department").length===0?`<option value="${e.dept||''}">${e.dept||'— ยังไม่มีแผนก ไปเพิ่มที่ตั้งค่า → โครงสร้างองค์กร —'}</option>`:orgUnitsOf("department").map(u=>`<option value="${u.name}" ${e.dept===u.name?'selected':''}>${u.name}</option>`).join("")}</select></div>
     <div class="field"><label>ตำแหน่ง *</label><select id="empPos">${!Array.isArray(orgUnits)?`<option value="${e.pos||''}">${e.pos||'— กำลังโหลด... —'}</option>`:orgUnitsOf("position").length===0?`<option value="${e.pos||''}">${e.pos||'— ยังไม่มีตำแหน่ง ไปเพิ่มที่ตั้งค่า → โครงสร้างองค์กร —'}</option>`:orgUnitsOf("position").map(u=>`<option value="${u.name}" ${e.pos===u.name?'selected':''}>${u.name}</option>`).join("")}</select></div>
-    <div class="field"><label>หัวหน้างาน</label><select id="empSupervisor"><option value="">-- ไม่มี --</option>${employees.filter(x=>x.id!==e.id).map(x=>`<option value="${x.id}" ${e.supervisorId===x.id?'selected':''}>${x.name}</option>`).join("")}</select></div>
+    <div class="field"><label>หัวหน้างาน</label><select id="empSupervisor"><option value="">-- ไม่มี --</option>${employees.filter(x=>x.id!==e.id).map(x=>`<option value="${x.id}" ${e.supervisorId===x.id?'selected':''}>${x.name}</option>`).join("")}${(()=>{
+      // ถ้าหัวหน้างานปัจจุบันของคนนี้พ้นสภาพไปแล้ว (ไม่อยู่ใน employees ที่ทำงานอยู่) ต้องยังคงแสดง option นี้ไว้และ selected ไว้
+      // ไม่งั้น <select> จะ fallback ไป option แรก ("-- ไม่มี --") โดยอัตโนมัติ แล้วตอนกด "บันทึก" (แม้จะแก้แค่เบอร์โทร) จะไปลบความสัมพันธ์หัวหน้างาน-ลูกน้องทิ้งแบบเงียบๆ โดยไม่ตั้งใจ
+      if(!e.supervisorId || employees.some(x=>x.id===e.supervisorId)) return '';
+      const t = E(e.supervisorId);
+      return t?`<option value="${t.id}" selected>${t.name} (พ้นสภาพ)</option>`:'';
+    })()}</select></div>
     <div class="field"><label>ประเภทพนักงาน *</label><select id="empType" onchange="document.getElementById('wfhWrap').style.display=this.value==='monthly'?'flex':'none'"><option value="monthly" ${e.type==='monthly'?'selected':''}>รายเดือน</option><option value="daily" ${e.type==='daily'?'selected':''}>รายวัน</option></select></div>
     <div class="field" style="grid-column:span 2"><label>วิธีการจ่ายเงิน</label><select id="empPayMethod" onchange="togglePayMethod(this.value)">
       <option value="bank" ${(e.payMethod||'bank')==='bank'?'selected':''}>โอนเข้าบัญชีธนาคาร</option>
@@ -5661,7 +5681,7 @@ function showLogin(msg){
 function resetAppState(){
   loggedInEmployeeId = null;
   currentRoleCode = null;
-  employees = []; leaves = []; attendanceToday = []; bonusRecords = []; otRequests = []; announcements = [];
+  employees = []; terminatedEmployees = []; leaves = []; attendanceToday = []; bonusRecords = []; otRequests = []; announcements = [];
   // แคชที่โหลดแบบ lazy — รีเซ็ตเป็น null/ค่าเริ่มต้น เพื่อบังคับโหลดใหม่ให้บัญชีถัดไป
   auditRows = []; auditLoaded = false; auditLoading = false;
   projects = []; projectGroups = []; groupMembers = []; teamTransfers = []; dailyAssignments = []; projectPlans = [];
@@ -6677,7 +6697,12 @@ function stOrg(){
         <td style="text-align:center">
           <select onchange="setSupervisor('${e.id}',this.value)" style="padding:6px 8px;border:1.5px solid var(--line);border-radius:8px">
             <option value="">-- ไม่มี (ระดับบนสุด) --</option>
-            ${employees.filter(x=>x.id!==e.id && x.status!=="terminated").map(x=>`<option value="${x.id}" ${e.supervisorId===x.id?'selected':''}>${x.name}</option>`).join("")}
+            ${employees.filter(x=>x.id!==e.id).map(x=>`<option value="${x.id}" ${e.supervisorId===x.id?'selected':''}>${x.name}</option>`).join("")}${(()=>{
+              // หัวหน้างานปัจจุบันพ้นสภาพไปแล้ว (ไม่อยู่ใน employees) — ใส่ option ไว้เพื่อให้ dropdown แสดงค่าปัจจุบันถูกต้อง ไม่ใช่ default ไปที่ "ไม่มี" เฉยๆ
+              if(!e.supervisorId || employees.some(x=>x.id===e.supervisorId)) return '';
+              const t = E(e.supervisorId);
+              return t?`<option value="${t.id}" selected>${t.name} (พ้นสภาพ)</option>`:'';
+            })()}
           </select>
         </td>
       </tr>`).join("")}
