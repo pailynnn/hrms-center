@@ -649,7 +649,7 @@ async function init(){
     const cfg = await (await fetch(CONFIG_URL)).json();
     if(cfg.companyName) document.getElementById("companyName").textContent = cfg.companyName;
     if(!cfg.liffId) throw new Error(t("noCfg"));
-    await liff.init({ liffId: https://liff.line.me/2010634360-YHEKkN47 });
+    await liff.init({ liffId: cfg.liffId });
     if(!liff.isLoggedIn()){ showStatus("⏳ "+t("login"), "info"); liff.login(); return; }
     const idToken = liff.getIDToken();
     if(!idToken) throw new Error(t("idErr"));
