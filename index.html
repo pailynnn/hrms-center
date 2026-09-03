@@ -222,6 +222,19 @@ th.num{text-align:right}
   #loginScreen > div{padding:26px 18px !important}
 }
 </style>
+<style id="drReportStyles">
+#drCard{padding:22px 24px}
+#drReportsTbl thead th{text-align:left;border-bottom:2px solid #e6e9f0;padding:8px;font-size:12px;color:#6b7280;white-space:nowrap}
+#drReportsTbl tbody td{border-bottom:1px solid #f0f2f6;padding:9px 8px;vertical-align:middle}
+#drReportsTbl tbody tr:hover{background:#f8fafc}
+@media print{
+  body.dr-printing *{visibility:hidden!important}
+  body.dr-printing #modalBg,body.dr-printing #modalBg *{visibility:visible!important}
+  body.dr-printing #modalBg{position:absolute!important;inset:0!important;background:#fff!important;display:block!important;padding:0!important}
+  body.dr-printing #modalBox{max-width:100%!important;width:100%!important;max-height:none!important;overflow:visible!important;box-shadow:none!important}
+  body.dr-printing .no-print{display:none!important}
+}
+</style>
 </head>
 <body>
 
@@ -7648,13 +7661,14 @@ let projectsLoaded = false, projectsLoading = false;
 let prjFilter = { status:"active" };
 let dispatchDate = todayISODate();
 async function loadProjectsModule(){
-  const [pRes, gRes, mRes, tRes, dRes, plRes] = await Promise.all([
+  const [pRes, gRes, mRes, tRes, dRes, plRes, drRes] = await Promise.all([
     sb.from("projects").select("*").order("start_date",{ascending:false}),
     sb.from("project_groups").select("*"),
     sb.from("project_group_members").select("*"),
     sb.from("team_transfers").select("*").order("created_at",{ascending:false}).limit(200),
     sb.from("daily_assignments").select("*"),
-    sb.from("project_plans").select("*").order("start_date",{ascending:true})
+    sb.from("project_plans").select("*").order("start_date",{ascending:true}),
+    sb.from("daily_reports").select("*").order("work_date",{ascending:false}).limit(500)
   ]);
   if(pRes.error){ console.error("loadProjectsModule projects", pRes.error); toast("โหลดข้อมูลโครงการไม่สำเร็จ — ตรวจสอบว่าสร้างตารางใน Supabase แล้วหรือยัง"); return; }
   projects = pRes.data||[];
@@ -7663,6 +7677,7 @@ async function loadProjectsModule(){
   teamTransfers = tRes.error?[]:(tRes.data||[]);
   dailyAssignments = dRes.error?[]:(dRes.data||[]);
   projectPlans = plRes.error?[]:(plRes.data||[]);
+  dailyReports = drRes.error?[]:(drRes.data||[]);
 }
 function ensureProjectsLoaded(){
   if(projectsLoaded || projectsLoading) return;
@@ -7691,7 +7706,7 @@ function pgProjects(){
   const canManage = canManageProjects();
   const isPlainEmp = !canManage;
   // พนักงานทั่วไปไม่เห็นภาพรวมทั้งบริษัท/โยกย้ายกำลังคน — ถ้าแท็บปัจจุบันเป็นอันที่ถูกซ่อน เด้งไปแท็บมอบหมายงานรายวัน
-  if(isPlainEmp && (subTab.projects==="board"||subTab.projects==="transfer"||!subTab.projects)){ subTab.projects="dispatch"; }
+  if(isPlainEmp && (subTab.projects==="board"||subTab.projects==="transfer"||subTab.projects==="reports"||!subTab.projects)){ subTab.projects="dispatch"; }
   const t = subTab.projects || (isPlainEmp?"dispatch":"board");
   const tab=(k,label,icon)=>`<button class="${t===k?'on':''}" onclick="setSub('projects','${k}')">${icon} ${label}</button>`;
   return `
@@ -7700,12 +7715,292 @@ function pgProjects(){
     ${tab("teams","ทีมงาน","👥")}
     ${canManage?tab("transfer","โยกย้ายกำลังคน","🔁"):''}
     ${tab("dispatch","มอบหมายงานรายวัน","📋")}
+    ${canManage?tab("reports","รายงานประจำวัน","📊"):''}
     ${tab("plan","แผนระยะยาว","🗓️")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
   ${isPlainEmp
     ? ({teams:prjMyTeam, dispatch:prjMyDispatch, plan:prjMyPlan})[t]()
-    : ({board:prjBoard, teams:prjTeams, transfer:prjTransfer, dispatch:prjDispatch, plan:prjPlan})[t]()}`;
+    : ({board:prjBoard, teams:prjTeams, transfer:prjTransfer, dispatch:prjDispatch, reports:prjReports, plan:prjPlan})[t]()}`;
 }
+
+/* ================== PROJECTS SUB-TAB: รายงานประจำวันหน้างาน (Daily Site Reports) ==================
+   อ่านจากตาราง daily_reports (+ members/photos/next_tasks ตอนเปิดดูรายละเอียด)
+   บันทึกจากหน้างานผ่าน LIFF (liff-report-submit) — หน้านี้สำหรับ HR/ผู้จัดการ ดู/ค้น/พิมพ์/แชร์ */
+let dailyReports = [];
+let drFilter = { date_from:"", date_to:"", project_id:"", group_id:"", q:"", problem:"all" };
+let drPageSize = 20, drPage = 1;
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+const DR_STATUS = {
+  submitted:{ label:"ส่งแล้ว", color:"green", icon:"✓" },
+  follow_up:{ label:"ต้องติดตาม", color:"amber", icon:"⚠" },
+  completed:{ label:"เสร็จสิ้น", color:"gray", icon:"✓" },
+  draft:{ label:"ร่าง", color:"gray", icon:"…" },
+};
+const DR_WEATHER = { sun:"☀️ แดด", cloudy:"⛅ มีเมฆ", rainy:"🌧️ ฝน", heavy_rain:"⛈️ ฝนหนัก", storm:"🌪️ พายุ" };
+const DR_PROBLEM = {
+  material_not_ready:"วัสดุไม่พร้อม", material_incomplete:"วัสดุไม่ครบ", drawing_change:"แบบก่อสร้างแก้ไข",
+  site_not_ready:"หน้างานไม่พร้อม", owner_absent:"เจ้าของไม่อยู่", other_delay:"งานอื่นล่าช้า",
+  tools_not_ready:"เครื่องมือไม่พร้อม", weather:"สภาพอากาศ", manpower_short:"บุคลากรไม่พอ", other:"อื่น ๆ",
+};
+function drLeaderName(r){ const e = E(r.leader_employee_id); return r.signed_name || (e?e.full_name:"") || "-"; }
+function drProjName(r){ const p = PJ(r.project_id); return p?p.name:"-"; }
+function drGroupName(r){ const g = PG(r.group_id); return g?g.name:"-"; }
+
+function drFiltered(){
+  let list = dailyReports.slice();
+  const f = drFilter;
+  if(f.date_from) list = list.filter(r=>r.work_date >= f.date_from);
+  if(f.date_to)   list = list.filter(r=>r.work_date <= f.date_to);
+  if(f.project_id) list = list.filter(r=>String(r.project_id)===String(f.project_id));
+  if(f.group_id)  list = list.filter(r=>String(r.group_id)===String(f.group_id));
+  if(f.problem==="has")  list = list.filter(r=>r.has_problem);
+  if(f.problem==="none") list = list.filter(r=>!r.has_problem);
+  if(f.q){
+    const q = f.q.trim().toLowerCase();
+    list = list.filter(r=>
+      (r.report_no||"").toLowerCase().includes(q) ||
+      drLeaderName(r).toLowerCase().includes(q) ||
+      drProjName(r).toLowerCase().includes(q) ||
+      drGroupName(r).toLowerCase().includes(q));
+  }
+  list.sort((a,b)=> (a.work_date<b.work_date?1:a.work_date>b.work_date?-1: (String(b.report_no||"").localeCompare(String(a.report_no||"")))));
+  return list;
+}
+function drSetFilter(k,v){ drFilter[k]=v; drPage=1; if(k==="project_id") drFilter.group_id=""; render("projects"); }
+function drSetPageSize(v){ drPageSize=Number(v)||20; drPage=1; render("projects"); }
+function drGoPage(p){ drPage=p; render("projects"); }
+
+function prjReports(){
+  const today = todayISODate();
+  const todays = dailyReports.filter(r=>r.work_date===today);
+  const withProblem = todays.filter(r=>r.has_problem).length;
+  const avgProg = todays.length ? Math.round(todays.reduce((s,r)=>s+(Number(r.progress_percent)||0),0)/todays.length) : 0;
+
+  const all = drFiltered();
+  const total = all.length;
+  const pages = Math.max(1, Math.ceil(total/drPageSize));
+  if(drPage>pages) drPage=pages;
+  const start = (drPage-1)*drPageSize;
+  const rows = all.slice(start, start+drPageSize);
+
+  const projOpts = ['<option value="">ทุกโครงการ</option>'].concat(
+    projects.map(p=>`<option value="${p.id}" ${String(drFilter.project_id)===String(p.id)?'selected':''}>${esc(p.name)}</option>`)).join("");
+  const grpList = drFilter.project_id ? groupsOf(drFilter.project_id) : projectGroups;
+  const grpOpts = ['<option value="">ทุกทีม</option>'].concat(
+    grpList.map(g=>`<option value="${g.id}" ${String(drFilter.group_id)===String(g.id)?'selected':''}>${esc(g.name)}</option>`)).join("");
+
+  const kpi = (label,val,color)=>`<div class="card" style="flex:1;min-width:110px;text-align:center;padding:12px 8px">
+    <div style="font-size:24px;font-weight:800;color:${color||'#111'}">${val}</div>
+    <div class="hint" style="margin-top:2px">${label}</div></div>`;
+
+  const tableRows = rows.length ? rows.map(r=>{
+    const st = DR_STATUS[r.status] || DR_STATUS.submitted;
+    return `<tr style="cursor:pointer" onclick="openReportDetail(${r.id})">
+      <td>${isoToThaiDisplay(r.work_date)}</td>
+      <td>${esc(drProjName(r))}</td>
+      <td>${esc(drGroupName(r))}</td>
+      <td>${esc(drLeaderName(r))}</td>
+      <td style="text-align:center">${r.manpower_count||0}</td>
+      <td style="min-width:96px">${drBar(r.progress_percent)}</td>
+      <td style="text-align:center">${r.has_problem?'<span class="pill amber">มี</span>':'<span class="hint">–</span>'}</td>
+      <td style="text-align:center"><span class="pill ${st.color}">${st.icon} ${st.label}</span></td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="8" style="text-align:center;padding:24px" class="hint">ไม่พบรายงานตามเงื่อนไข</td></tr>`;
+
+  let pager = "";
+  if(pages>1){
+    const btn = (p,txt,dis)=>`<button class="btn sm ${p===drPage?'primary':''}" ${dis?'disabled':''} onclick="drGoPage(${p})">${txt}</button>`;
+    const nums = [];
+    for(let p=Math.max(1,drPage-2); p<=Math.min(pages,drPage+2); p++) nums.push(btn(p,p));
+    pager = `<div style="display:flex;gap:6px;justify-content:center;align-items:center;margin-top:14px;flex-wrap:wrap">
+      ${btn(drPage-1,'‹ ก่อนหน้า',drPage<=1)} ${nums.join("")} ${btn(drPage+1,'ถัดไป ›',drPage>=pages)}</div>`;
+  }
+
+  return `
+  <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+    ${kpi("รายงานวันนี้", todays.length)}
+    ${kpi("มีปัญหา (วันนี้)", withProblem, withProblem?'var(--red)':'')}
+    ${kpi("คืบหน้าเฉลี่ยวันนี้", avgProg+"%")}
+    ${kpi("ทั้งหมด", dailyReports.length)}
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <h3 style="margin-bottom:10px">📊 รายงานประจำวันหน้างาน</h3>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+      <div class="field" style="margin:0"><label>ตั้งแต่วันที่</label><input type="date" value="${drFilter.date_from}" onchange="drSetFilter('date_from',this.value)"></div>
+      <div class="field" style="margin:0"><label>ถึงวันที่</label><input type="date" value="${drFilter.date_to}" onchange="drSetFilter('date_to',this.value)"></div>
+      <div class="field" style="margin:0"><label>โครงการ</label><select onchange="drSetFilter('project_id',this.value)">${projOpts}</select></div>
+      <div class="field" style="margin:0"><label>ทีม</label><select onchange="drSetFilter('group_id',this.value)">${grpOpts}</select></div>
+      <div class="field" style="margin:0"><label>ปัญหา</label><select onchange="drSetFilter('problem',this.value)">
+        <option value="all" ${drFilter.problem==='all'?'selected':''}>ทั้งหมด</option>
+        <option value="has" ${drFilter.problem==='has'?'selected':''}>มีปัญหา</option>
+        <option value="none" ${drFilter.problem==='none'?'selected':''}>ไม่มีปัญหา</option>
+      </select></div>
+      <div class="field" style="margin:0;flex:1;min-width:150px"><label>ค้นหา (เลขที่/ผู้จัดทำ/โครงการ/ทีม)</label>
+        <input type="text" value="${esc(drFilter.q)}" oninput="drFilter.q=this.value" onkeydown="if(event.key==='Enter'){drPage=1;render('projects')}" placeholder="🔎 พิมพ์แล้วกด Enter"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <div class="hint">พบ ${total} รายการ · แสดงหน้า ${drPage}/${pages}</div>
+      <div style="display:flex;align-items:center;gap:6px"><span class="hint">แสดง</span>
+        <select onchange="drSetPageSize(this.value)" style="width:auto">
+          ${[20,30,40,50].map(n=>`<option value="${n}" ${drPageSize===n?'selected':''}>${n}</option>`).join("")}
+        </select><span class="hint">แถว</span></div>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse" id="drReportsTbl"><thead><tr>
+        <th>วันที่</th><th>โครงการ</th><th>ทีม</th><th>ผู้จัดทำ</th><th>คน</th><th>Progress</th><th>ปัญหา</th><th>สถานะ</th>
+      </tr></thead><tbody>${tableRows}</tbody></table>
+    </div>
+    ${pager}
+  </div>`;
+}
+
+function drBar(pct){
+  const p = Math.max(0, Math.min(100, Number(pct)||0));
+  return `<div style="display:flex;align-items:center;gap:6px">
+    <div style="flex:1;height:8px;border-radius:99px;background:#e6e9f0;overflow:hidden"><div style="width:${p}%;height:100%;background:linear-gradient(90deg,#f7941d,#ffc169)"></div></div>
+    <span style="font-size:11px;font-weight:700;min-width:30px;text-align:right">${p}%</span></div>`;
+}
+
+/* ---------- Detail modal ---------- */
+async function openReportDetail(id){
+  const r = dailyReports.find(x=>String(x.id)===String(id));
+  if(!r){ toast("ไม่พบรายงาน"); return; }
+  document.getElementById("modalBox").innerHTML = `<div id="drCard"><div class="hint" style="padding:30px;text-align:center">⏳ กำลังโหลดรายละเอียด...</div></div>`;
+  document.getElementById("modalBg").classList.add("show");
+  // fetch children
+  const [mRes, pRes, nRes] = await Promise.all([
+    sb.from("daily_report_members").select("*").eq("daily_report_id", id),
+    sb.from("daily_report_photos").select("*").eq("daily_report_id", id).order("sort_order"),
+    sb.from("daily_report_next_tasks").select("*").eq("daily_report_id", id),
+  ]);
+  const members = mRes.data||[], photoRows = pRes.data||[], nexts = nRes.data||[];
+  // signed URLs for photos
+  const photos = [];
+  for(const ph of photoRows){
+    try{
+      const { data } = await sb.storage.from("daily-report-photos").createSignedUrl(ph.storage_path, 3600);
+      if(data && data.signedUrl) photos.push({ ...ph, url:data.signedUrl });
+    }catch(e){}
+  }
+  renderReportDetail(r, members, photos, nexts);
+}
+
+const DR_PHOTOTYPE = { before:"ก่อนเริ่มงาน", progress:"ระหว่างทำงาน", after:"หลังเสร็จงาน", other:"อื่น ๆ" };
+function renderReportDetail(r, members, photos, nexts){
+  const st = DR_STATUS[r.status] || DR_STATUS.submitted;
+  const info = (k,v)=>`<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid #eef0f4"><div class="hint" style="min-width:96px">${k}</div><div style="font-weight:600;flex:1">${v}</div></div>`;
+  const sec = (t)=>`<div style="font-size:12px;letter-spacing:.5px;color:#8b94a7;font-weight:700;margin:16px 0 6px;text-transform:uppercase">${t}</div>`;
+  const memHtml = members.length ? members.map(m=>{
+    const nm = m.member_name || (E(m.employee_id)?E(m.employee_id).full_name:"") || "-";
+    const tag = m.role==="leader"?'<span class="pill amber" style="margin-left:6px">หัวหน้า</span>':(m.role==="temp"?'<span class="pill gray" style="margin-left:6px">ยืมตัว</span>':'');
+    return `<span style="display:inline-block;background:#f3f5f9;border-radius:8px;padding:4px 10px;margin:2px;font-size:13px">${esc(nm)}${tag}</span>`;
+  }).join("") : '<span class="hint">–</span>';
+  const problemHtml = r.has_problem
+    ? `<div>${(r.problem_types||[]).map(k=>`<span class="pill amber" style="margin:2px">${DR_PROBLEM[k]||k}</span>`).join("")}</div>
+       ${r.problem_detail?`<div style="margin-top:6px">${esc(r.problem_detail)}</div>`:''}`
+    : '<span class="pill green">ไม่มีปัญหา</span>';
+  const nextHtml = nexts.length ? nexts.map(n=>`<div style="padding:4px 0">• ${n.zone?`<b>[${esc(n.zone)}]</b> `:''}${esc(n.task_note||'')}</div>`).join("")
+    : (r.next_day_plan?esc(r.next_day_plan).replace(/\n/g,"<br>"):'<span class="hint">–</span>');
+  const photoHtml = photos.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px">
+      ${photos.map(p=>`<a href="${p.url}" target="_blank" style="display:block"><div style="aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid #e6e9f0;position:relative">
+        <img src="${p.url}" style="width:100%;height:100%;object-fit:cover"><span style="position:absolute;left:0;right:0;bottom:0;font-size:9px;text-align:center;background:rgba(0,0,0,.5);color:#fff;padding:2px">${DR_PHOTOTYPE[p.photo_type]||''}</span>
+      </div></a>`).join("")}</div>` : '<span class="hint">ไม่มีรูป</span>';
+  const signMeta = (r.signed_position?esc(r.signed_position)+" · ":"") + isoToThaiDisplay(r.work_date) + (r.signed_at?" "+new Date(r.signed_at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})+" น.":"");
+
+  document.getElementById("modalBox").innerHTML = `
+  <div id="drCard">
+    <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+      <div><h2 style="margin:0;font-size:18px">รายงานประจำวันหน้างาน</h2>
+        <div class="hint">${esc(r.report_no||'')} · <span class="pill ${st.color}">${st.icon} ${st.label}</span></div></div>
+      <button class="btn sm no-print" onclick="closeModal()">✕</button>
+    </div>
+
+    ${sec("ข้อมูลหน้างาน")}
+    ${info("วันที่", isoToThaiDisplay(r.work_date))}
+    ${info("โครงการ", esc(drProjName(r)))}
+    ${info("ทีม", esc(drGroupName(r)))}
+    ${info("ผู้จัดทำ", esc(drLeaderName(r)))}
+    ${r.weather?info("สภาพอากาศ", (DR_WEATHER[r.weather]||r.weather)+(r.weather_impact?" · "+esc(r.weather_impact):"")):""}
+
+    ${sec("กำลังคน ("+(r.manpower_count||0)+" คน)")}
+    <div>${memHtml}</div>
+
+    ${sec("แผนงานวันนี้")}<div>${r.work_plan?esc(r.work_plan).replace(/\n/g,"<br>"):'<span class="hint">–</span>'}</div>
+    ${sec("ผลการทำงาน")}<div>${r.work_result?esc(r.work_result).replace(/\n/g,"<br>"):'<span class="hint">–</span>'}</div>
+    ${sec("ความคืบหน้า")}${drBar(r.progress_percent)}
+
+    ${sec("ปัญหา & การแก้ไข")}${problemHtml}
+    ${r.solution?`<div style="margin-top:6px"><div class="hint">วิธีการแก้ไข</div>${esc(r.solution).replace(/\n/g,"<br>")}</div>`:''}
+
+    ${sec("แผนงานวันถัดไป")}<div>${nextHtml}</div>
+
+    ${sec("รูปหน้างาน")}${photoHtml}
+
+    <div style="margin-top:18px;border-top:2px solid #111;padding-top:10px">
+      <div class="hint">ผู้จัดทำรายงาน (หัวหน้าทีม)</div>
+      <div style="font-size:15px;font-weight:800">${esc(r.signed_name||drLeaderName(r))}</div>
+      <div class="hint">${signMeta}</div>
+      <div style="font-size:11px;color:#2fa36b;margin-top:4px">🔒 ลงชื่อดิจิทัลผ่านระบบ LINE เมื่อบันทึกรายงาน</div>
+    </div>
+
+    <div class="no-print" style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+      <button class="btn sm" onclick="drPrint()">🖨️ พิมพ์ / PDF</button>
+      <button class="btn sm" onclick="drSavePng(${r.id})">🖼️ บันทึกรูป (PNG)</button>
+      <button class="btn sm" onclick="drShare(${r.id})">📤 แชร์</button>
+    </div>
+  </div>`;
+}
+
+function drPrint(){ document.body.classList.add("dr-printing"); window.print(); setTimeout(()=>document.body.classList.remove("dr-printing"), 500); }
+
+function ensureHtml2canvas(){
+  return new Promise((resolve,reject)=>{
+    if(window.html2canvas) return resolve(window.html2canvas);
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    s.onload = ()=>resolve(window.html2canvas);
+    s.onerror = ()=>reject(new Error("โหลดไลบรารีรูปไม่สำเร็จ"));
+    document.head.appendChild(s);
+  });
+}
+async function drRenderCanvas(){
+  const el = document.getElementById("drCard");
+  if(!el) throw new Error("ไม่พบรายงาน");
+  const h2c = await ensureHtml2canvas();
+  return await h2c(el, { backgroundColor:"#ffffff", scale:2, useCORS:true });
+}
+async function drSavePng(id){
+  try{
+    toast("กำลังสร้างรูป...");
+    const canvas = await drRenderCanvas();
+    const a = document.createElement("a");
+    a.href = canvas.toDataURL("image/png");
+    const r = dailyReports.find(x=>String(x.id)===String(id));
+    a.download = (r&&r.report_no?r.report_no:"daily-report")+".png";
+    a.click();
+  }catch(e){ toast(e.message||"สร้างรูปไม่สำเร็จ"); }
+}
+async function drShare(id){
+  const r = dailyReports.find(x=>String(x.id)===String(id));
+  try{
+    const canvas = await drRenderCanvas();
+    const blob = await new Promise(res=>canvas.toBlob(res,"image/png"));
+    const file = new File([blob], (r&&r.report_no?r.report_no:"report")+".png", { type:"image/png" });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      await navigator.share({ files:[file], title:"รายงานประจำวันหน้างาน", text:(r?r.report_no:"") });
+      return;
+    }
+  }catch(e){ /* fall through */ }
+  // fallback: copy report_no
+  try{ await navigator.clipboard.writeText((r?r.report_no:"")+" — รายงานประจำวันหน้างาน"); toast("คัดลอกเลขที่รายงานแล้ว"); }
+  catch(e){ toast("อุปกรณ์นี้ไม่รองรับการแชร์โดยตรง"); }
+}
+
 
 /* ---------- 1) ภาพรวมโครงการ (Project Board) ---------- */
 function prjBoard(){
