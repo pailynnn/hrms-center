@@ -186,6 +186,52 @@
   .okcheck{width:64px;height:64px;border-radius:50%;background:var(--ok-bg);color:var(--ok);display:grid;place-items:center;font-size:34px;margin:6px auto 12px}
   .okbar{height:12px;border-radius:999px;background:var(--ink);border:1px solid var(--line);overflow:hidden;margin:12px 0 4px}
   .okbar > span{display:block;height:100%;background:linear-gradient(90deg,var(--amber),#ffc169)}
+
+  /* ===== compact mode (step 2-4): ซ่อนหัวกระดาษเพื่อให้พื้นที่พิมพ์/อ่านมากที่สุด ===== */
+  body.compact{padding:10px}
+  body.compact .card{padding:14px 16px 16px;border-radius:18px}
+  body.compact .langbar,
+  body.compact .brand,
+  body.compact #infoBox,
+  body.compact #groupSel{display:none!important}
+  body.compact .stepper{margin:0 0 2px}
+  body.compact .steptitle{font-size:14.5px;margin:9px 0 12px}
+  body.compact .steptitle small{display:none}
+  body.compact .section{margin-bottom:14px}
+
+  /* ===== paper form (ใช้สร้าง PDF / พรีวิวรายงาน) ===== */
+  .offscreen{position:fixed;left:-99999px;top:0;z-index:-1}
+  .paper{width:760px;background:#fff;color:#14181f;padding:26px 28px 30px;
+    font-family:"Noto Sans Thai","Sora",sans-serif;font-size:12.5px;line-height:1.55}
+  .paper .ph{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #f7941d;padding-bottom:9px;margin-bottom:12px}
+  .paper .ph h2{margin:0;font-size:19px;letter-spacing:.3px}
+  .paper .ph .co{font-size:12px;color:#5b6472;margin-top:2px}
+  .paper .ph .no{text-align:right;font-size:11.5px;color:#5b6472}
+  .paper .ph .no b{display:block;font-size:14px;color:#14181f;letter-spacing:.4px}
+  .paper table{width:100%;border-collapse:collapse;margin-bottom:4px}
+  .paper td,.paper th{border:1px solid #d3d9e2;padding:6px 9px;vertical-align:top;text-align:left}
+  .paper td.k{background:#f4f6f9;font-weight:600;width:22%;color:#41495a}
+  .paper .sec{margin:14px 0 7px;font-weight:700;font-size:13.5px;border-left:4px solid #f7941d;padding-left:8px}
+  .paper .box{border:1px solid #d3d9e2;border-radius:4px;padding:8px 10px;white-space:pre-wrap;min-height:34px}
+  .paper .pbar{height:13px;border:1px solid #d3d9e2;border-radius:99px;overflow:hidden;background:#eef1f6;margin-top:5px}
+  .paper .pbar span{display:block;height:100%;background:#f7941d}
+  .paper .tags span{display:inline-block;border:1px solid #f0b26a;background:#fff5e8;color:#8a5a12;border-radius:99px;padding:2px 9px;margin:2px 4px 2px 0;font-size:11.5px}
+  .paper .imgs{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
+  .paper .imgs img{width:174px;height:130px;object-fit:cover;border:1px solid #d3d9e2;border-radius:4px}
+  .paper .sign{margin-top:20px;display:flex;justify-content:flex-end}
+  .paper .signbx{min-width:250px;text-align:center;border-top:1px dashed #9aa3b2;padding-top:8px}
+  .paper .signbx .nm{font-weight:700;font-size:14px}
+  .paper .signbx .mt{font-size:11px;color:#5b6472;margin-top:2px}
+  .paper .ft{margin-top:14px;font-size:10.5px;color:#77808f;text-align:center;border-top:1px solid #e3e7ee;padding-top:8px}
+
+  /* preview modal */
+  .modal{position:fixed;inset:0;background:rgba(5,8,14,.86);z-index:60;display:flex;flex-direction:column;padding:12px}
+  .modal .mtop{display:flex;gap:8px;margin-bottom:10px}
+  .modal .mtop button{flex:1;border:none;border-radius:12px;padding:12px 8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+  .modal .mtop .mclose{flex:0 0 30%;background:transparent;border:1px solid var(--line-2);color:var(--txt)}
+  .modal .mtop .mpdf{background:linear-gradient(145deg,#ffb04a,var(--amber-lo));color:#1a1206}
+  .modal .mbody{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;border-radius:12px;background:#fff}
+  .modal .mscale{transform-origin:top left}
 </style>
 </head>
 <body>
@@ -301,8 +347,11 @@
           <button class="addbtn" onclick="addTask()">+ <span id="lblAddTask">เพิ่มงาน</span></button>
         </div>
         <div class="section">
-          <div class="label" id="lblPhotos">รูปหน้างาน</div>
-          <div class="hint" id="hintPhotos">ถ่ายรูปหรือเลือกจากคลังภาพ (ย่อขนาดอัตโนมัติ)</div>
+          <div class="label" style="display:flex;justify-content:space-between;align-items:center">
+            <span id="lblPhotos">รูปหน้างาน</span>
+            <span class="countpill"><span id="photoCount">0</span> <span id="lblImgs">รูป</span></span>
+          </div>
+          <div class="hint" id="hintPhotos">เลือกได้หลายรูปพร้อมกัน ครั้งละไม่เกิน 10 รูป (ย่อขนาดอัตโนมัติ)</div>
           <div class="photobtns">
             <button type="button" class="pbtn" onclick="pickPhoto()"><span class="ic">📷</span><span id="lblAddPhoto">เพิ่มรูป / ถ่ายรูป</span></button>
           </div>
@@ -346,7 +395,8 @@ const CONFIG_URL = BASE + "/liff-report-config";
 const CONTEXT_URL = BASE + "/liff-report-context";
 const SUBMIT_URL = BASE + "/liff-report-submit";
 const SET_LANG_URL = BASE + "/liff-set-lang";
-const CHECKIN_PAGE = "liff-checkin.html";
+// หน้าลงเวลาเป็น LIFF app คนละตัวกับหน้ารายงาน -> ต้องกลับด้วย LIFF URL เต็ม ไม่ใช่ relative path
+const CHECKIN_PAGE = "https://liff.line.me/2010634360-Lh7upfPt";
 
 function syncLangToServer(x){
   try{
@@ -369,7 +419,13 @@ const L = {
     progress:"ความคืบหน้าของงานวันนี้", progToday:"คืบหน้าวันนี้",
     problem:"ปัญหาหน้างาน", noProb:"ไม่มีปัญหา", probDetail:"รายละเอียดปัญหา", solution:"วิธีการแก้ไข *",
     next:"แผนงานวันถัดไป *", nextDate:"วันที่", addTask:"เพิ่มงาน", zonePh:"โซน/ชั้น", taskPh:"งานที่จะทำ",
-    photos:"รูปหน้างาน", hintPhotos:"ถ่ายรูปหรือเลือกจากคลังภาพ (ย่อขนาดอัตโนมัติ)", addPhoto:"เพิ่มรูป / ถ่ายรูป",
+    photos:"รูปหน้างาน", hintPhotos:"เลือกได้หลายรูปพร้อมกัน ครั้งละไม่เกิน 10 รูป (ย่อขนาดอัตโนมัติ)", addPhoto:"เพิ่มรูป / ถ่ายรูป",
+    maxPick:"เลือกได้ครั้งละไม่เกิน 10 รูป — ระบบเลือกให้ 10 รูปแรก", maxTotal:"แนบรูปได้สูงสุด 30 รูปต่อรายงาน",
+    photoBusy:"กำลังเตรียมรูป", photoAdded:"เพิ่มรูปแล้ว",
+    pdfBtn:"บันทึก / แชร์ PDF", pdfOpen:"เปิดดู PDF", pdfBusy:"กำลังสร้างไฟล์ PDF...", pdfErr:"สร้างไฟล์ PDF ไม่สำเร็จ",
+    docTitle:"รายงานประจำวันหน้างาน", docNo:"เลขที่รายงาน", docMan:"กำลังคน", docPresent:"ผู้ปฏิบัติงานวันนี้",
+    docPlan:"แผนงานวันนี้", docResult:"ผลการทำงาน", docProgress:"ความคืบหน้า", docProblem:"ปัญหา & การแก้ไข",
+    docNext:"แผนงานวันถัดไป", docPhotos:"รูปหน้างาน", docFooter:"เอกสารนี้ออกโดยระบบ HRMS CENTER — ลงชื่อดิจิทัลผ่าน LINE",
     sign:"ผู้จัดทำรายงาน (ลงชื่ออัตโนมัติ)", signLock:"ลงชื่อดิจิทัลผ่านระบบ LINE เมื่อกดบันทึก",
     submit:"บันทึก & ลงเวลาออก", footer:"การบันทึกรายงานถือเป็นการลงเวลาออกงานของหัวหน้าทีม",
     date:"วันที่", project:"โครงการ", site:"สถานที่", team:"ทีม", leader:"หัวหน้าทีม",
@@ -385,7 +441,7 @@ const L = {
     idErr:"ยืนยันตัวตนกับ LINE ไม่สำเร็จ", srvErr:"เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr:"เกิดข้อผิดพลาด",
     noCfg:"ยังไม่ได้ตั้งค่า LIFF ID สำหรับรายงานประจำวัน", login:"กำลังเข้าสู่ระบบผ่าน LINE...",
     okTitle:"บันทึกรายงานเรียบร้อย", okCheckout:"ลงเวลาออกงานแล้ว", viewLater:"ดูรายงานย้อนหลังได้ในแอป HRMS", back:"กลับหน้าลงเวลา",
-    savedNext:"สร้างงานวันพรุ่งนี้ให้แล้ว", photosSaved:"รูปที่บันทึก",
+    savedNext:"สร้างงานวันพรุ่งนี้ให้แล้ว", photosSaved:"รูปที่บันทึก", dTemp:"ยืมตัว",
     nextBtn:"ถัดไป", backBtn:"ย้อนกลับ", stepOf:"ขั้นที่",
     stTitle:{1:"กำลังคนวันนี้",2:"สภาพอากาศ & แผนงาน",3:"ความคืบหน้า & ปัญหา",4:"แผนวันถัดไป & รูปหน้างาน",5:"ตรวจทาน & ลงชื่อ"},
     stCap:{1:"กำลังคน",2:"แผนงาน",3:"ปัญหา",4:"วันถัดไป",5:"ยืนยัน"},
@@ -402,7 +458,13 @@ const L = {
     progress:"ယနေ့တိုးတက်မှု", progToday:"ယနေ့တိုးတက်မှု",
     problem:"လုပ်ငန်းခွင်ပြဿနာ", noProb:"ပြဿနာမရှိ", probDetail:"ပြဿနာအသေးစိတ်", solution:"ဖြေရှင်းနည်း *",
     next:"နောက်ရက်အစီအစဉ် *", nextDate:"ရက်စွဲ", addTask:"အလုပ်ထည့်", zonePh:"ဇုန်/ထပ်", taskPh:"လုပ်မည့်အလုပ်",
-    photos:"လုပ်ငန်းခွင်ဓာတ်ပုံ", hintPhotos:"ဓာတ်ပုံရိုက် သို့မဟုတ် ပြခန်းမှ ရွေးပါ (အရွယ်အစား အလိုအလျောက်လျှော့)", addPhoto:"ပုံထည့် / ဓာတ်ပုံရိုက်",
+    photos:"လုပ်ငန်းခွင်ဓာတ်ပုံ", hintPhotos:"တစ်ကြိမ်လျှင် ပုံ ၁၀ ပုံအထိ ရွေးနိုင်သည် (အရွယ်အစား အလိုအလျောက်လျှော့)", addPhoto:"ပုံထည့် / ဓာတ်ပုံရိုက်",
+    maxPick:"တစ်ကြိမ်လျှင် ၁၀ ပုံသာ — ပထမ ၁၀ ပုံကို ယူပါမည်", maxTotal:"အစီရင်ခံစာတစ်ခုလျှင် ၃၀ ပုံအထိသာ",
+    photoBusy:"ပုံပြင်ဆင်နေသည်", photoAdded:"ပုံထည့်ပြီး",
+    pdfBtn:"PDF သိမ်း / မျှဝေ", pdfOpen:"PDF ဖွင့်ကြည့်", pdfBusy:"PDF ဖိုင် ဖန်တီးနေသည်...", pdfErr:"PDF မဖန်တီးနိုင်ပါ",
+    docTitle:"နေ့စဉ်လုပ်ငန်းခွင် အစီရင်ခံစာ", docNo:"အစီရင်ခံစာနံပါတ်", docMan:"လူအင်အား", docPresent:"ယနေ့လုပ်သားများ",
+    docPlan:"ယနေ့အစီအစဉ်", docResult:"လုပ်ဆောင်ချက်", docProgress:"တိုးတက်မှု", docProblem:"ပြဿနာ & ဖြေရှင်းနည်း",
+    docNext:"နောက်ရက်အစီအစဉ်", docPhotos:"လုပ်ငန်းခွင်ဓာတ်ပုံ", docFooter:"HRMS CENTER မှ ထုတ်ပေးသည် — LINE ဖြင့် ဒစ်ဂျစ်တယ်လက်မှတ်",
     sign:"အစီရင်ခံသူ (အလိုအလျောက်လက်မှတ်)", signLock:"သိမ်းသည့်အခါ LINE မှ ဒစ်ဂျစ်တယ်လက်မှတ်",
     submit:"သိမ်း & ထွက်ချိန်မှတ်", footer:"အစီရင်ခံစာသိမ်းခြင်း = အကြီးအကဲ ထွက်ချိန်မှတ်ခြင်း",
     date:"ရက်စွဲ", project:"စီမံကိန်း", site:"နေရာ", team:"အဖွဲ့", leader:"အကြီးအကဲ",
@@ -418,7 +480,7 @@ const L = {
     idErr:"LINE အတည်မပြုနိုင်ပါ", srvErr:"ဆာဗာတုံ့ပြန်မှုမှား", genErr:"အမှားဖြစ်ပွား",
     noCfg:"အစီရင်ခံရန် LIFF ID မသတ်မှတ်ရသေးပါ", login:"LINE ဖြင့် ဝင်နေသည်...",
     okTitle:"အစီရင်ခံစာ သိမ်းပြီးပါပြီ", okCheckout:"ထွက်ချိန်မှတ်ပြီး", viewLater:"HRMS app တွင် ပြန်ကြည့်နိုင်သည်", back:"ချိန်မှတ်သို့ပြန်",
-    savedNext:"မနက်ဖြန်အလုပ် ဖန်တီးပြီး", photosSaved:"သိမ်းသောပုံ",
+    savedNext:"မနက်ဖြန်အလုပ် ဖန်တီးပြီး", photosSaved:"သိမ်းသောပုံ", dTemp:"ငှား",
     nextBtn:"ရှေ့သို့", backBtn:"နောက်သို့", stepOf:"အဆင့်",
     stTitle:{1:"ယနေ့လူအင်အား",2:"ရာသီဥတု & အစီအစဉ်",3:"တိုးတက်မှု & ပြဿနာ",4:"နောက်ရက် & ဓာတ်ပုံ",5:"စစ်ဆေး & လက်မှတ်"},
     stCap:{1:"လူအင်အား",2:"အစီအစဉ်",3:"ပြဿနာ",4:"နောက်ရက်",5:"အတည်ပြု"},
@@ -464,7 +526,7 @@ function applyStaticText(){
   setTxt("lblProgress","progress"); setTxt("lblProgToday","progToday");
   setTxt("lblProblem","problem"); setTxt("lblNoProb","noProb"); setTxt("lblProbDetail","probDetail"); setTxt("lblSolution","solution");
   setTxt("lblNext","next"); setTxt("lblNextDate","nextDate"); setTxt("lblAddTask","addTask");
-  setTxt("lblPhotos","photos"); setTxt("hintPhotos","hintPhotos"); setTxt("lblAddPhoto","addPhoto");
+  setTxt("lblPhotos","photos"); setTxt("hintPhotos","hintPhotos"); setTxt("lblAddPhoto","addPhoto"); setTxt("lblImgs","rvImgs");
   setTxt("lblSign","sign"); setTxt("lblSignLock","signLock");
   setTxt("txtFooter","footer");
   setTxt("lblReview","review");
@@ -521,6 +583,8 @@ function goStep(n){
   });
   renderStepper();
   updateNav();
+  // step 2-4 = โหมดกรอกข้อมูล: ซ่อนหัวกระดาษ (โลโก้/ชื่อบริษัท/กล่องข้อมูลงาน) ให้เห็นช่องกรอกเต็มจอ
+  document.body.classList.toggle("compact", n>=2 && n<=4);
   if(n===TOTAL_STEPS) renderReview();
   hideStatus();
   try{ document.querySelector(".card").scrollIntoView({block:"start",behavior:"smooth"}); }catch(e){ window.scrollTo(0,0); }
@@ -593,11 +657,27 @@ function addTask(prefZone, prefNote){
 
 /* ===== photos ===== */
 let pendingType = "site";
+const MAX_PER_PICK = 10;   // ผู้ใช้กำหนด: เลือกได้ครั้งละไม่เกิน 10 รูป
+const MAX_PHOTOS   = 30;   // เพดานรวมต่อรายงาน (กัน payload ใหญ่เกินไป)
 document.getElementById("photoInput").addEventListener("change", async function(e){
-  const files = [...(e.target.files||[])];
-  for(const f of files){ try{ const d = await compress(f); photos.push({type:pendingType, dataUrl:d}); }catch(err){} }
+  let files = [...(e.target.files||[])];
   e.target.value = "";
-  renderPhotos();
+  if(!files.length) return;
+  let warn = "";
+  if(files.length > MAX_PER_PICK){ files = files.slice(0, MAX_PER_PICK); warn = t("maxPick"); }
+  const room = MAX_PHOTOS - photos.length;
+  if(files.length > room){ files = files.slice(0, Math.max(0, room)); warn = t("maxTotal"); }
+  if(!files.length){ showStatus("⚠️ "+t("maxTotal"), "err"); return; }
+  let done = 0;
+  for(const f of files){
+    showStatus("⏳ "+t("photoBusy")+" "+(done+1)+"/"+files.length, "info");
+    try{ const d = await compress(f); photos.push({type:pendingType, dataUrl:d}); }catch(err){}
+    done++;
+    renderPhotos();
+  }
+  if(warn) showStatus("⚠️ "+warn, "err");
+  else showStatus("✅ "+t("photoAdded")+" "+done+" "+t("rvImgs"), "ok");
+  setTimeout(()=>{ if(statusBox.className.indexOf("err")===-1) hideStatus(); }, 2200);
 });
 function pickPhoto(type){ pendingType = type||"site"; document.getElementById("photoInput").click(); }
 function autoGrow(el){ if(!el) return; el.style.height="auto"; el.style.height=(el.scrollHeight+2)+"px"; }
@@ -625,6 +705,7 @@ function renderPhotos(){
     d.innerHTML = '<img src="'+p.dataUrl+'"><button class="rm" onclick="rmPhoto('+i+')">✕</button>';
     g.appendChild(d);
   });
+  const c = document.getElementById("photoCount"); if(c) c.textContent = photos.length;
 }
 function rmPhoto(i){ photos.splice(i,1); renderPhotos(); }
 
@@ -651,10 +732,12 @@ function renderGroup(){
   // members
   const ml = document.getElementById("memberList"); ml.innerHTML = "";
   (curGroup.members||[]).forEach(m=>{
-    const div = document.createElement("div"); div.className="memrow"+(m.checked?"":" off");
+    // context ส่งมาเป็น checked_in (คนที่ลงเวลาเข้าแล้ววันนี้) -> ต้องติ๊กให้อัตโนมัติตามที่ hint บอกไว้
+    const pre = !!(m.checked_in || m.checked) || m.role==="leader";
+    const div = document.createElement("div"); div.className="memrow"+(pre?"":" off");
     const isLead = m.role==="leader";
     div.innerHTML =
-      '<input type="checkbox" class="chk" '+(m.checked||isLead?"checked":"")+' onchange="this.closest(\'.memrow\').classList.toggle(\'off\',!this.checked);recount()">'+
+      '<input type="checkbox" class="chk" '+(pre?"checked":"")+' onchange="this.closest(\'.memrow\').classList.toggle(\'off\',!this.checked);recount()">'+
       '<div style="flex:1"><div class="nm">'+esc(m.name)+'</div>'+(m.position?'<div class="ps">'+esc(m.position)+'</div>':'')+'</div>'+
       (isLead?'<span class="badge">'+t("leader")+'</span>':'');
     ml.appendChild(div);
@@ -692,7 +775,10 @@ function onGroupChange(){
 /* ===== gates ===== */
 function showAlready(g){
   document.getElementById("formWrap").classList.add("hide");
+  document.body.classList.remove("compact");
   showStatus("✅ "+t("already")+" ("+(g.existing_report?g.existing_report.report_no:"")+")", "ok");
+  const ok = document.getElementById("okWrap"); ok.classList.remove("hide");
+  ok.innerHTML = '<button class="btn-ghost" onclick="location.href=\''+CHECKIN_PAGE+'\'">← '+t("goCheckin")+'</button>';
 }
 
 /* ===== submit ===== */
@@ -760,9 +846,181 @@ async function doSubmit(){
     updateNav();
   }
 }
+/* ===== เอกสารรายงาน (ฟอร์มกระดาษ) + PDF ===== */
+let RPT = null;   // ข้อมูลรายงานที่บันทึกสำเร็จ ใช้สร้าง PDF
+
+function buildRptData(json, p){
+  const memNames = [];
+  document.querySelectorAll("#memberList .memrow").forEach((rowEl,idx)=>{
+    const cb = rowEl.querySelector(".chk");
+    const m = (curGroup.members||[])[idx];
+    if(cb && cb.checked && m) memNames.push({name:m.name, position:m.position||"", temp:false});
+  });
+  document.querySelectorAll("#tempList input[type=text]").forEach(i=>{
+    if(i.value.trim()) memNames.push({name:i.value.trim(), position:"", temp:true});
+  });
+  const emp = CTX.employee;
+  return {
+    company: document.getElementById("companyName").textContent || "HRMS CENTER",
+    report_no: json.report_no || "",
+    work_date: CTX.work_date,
+    project: curGroup.project_name || "",
+    customer: curGroup.project_customer || "",
+    site: curGroup.project_site || "",
+    team: curGroup.group_name || "",
+    manpower: p.manpower_count,
+    members: memNames,
+    weather_label: p.weather ? t("wl")[p.weather] : "-",
+    weather_impact: !!document.getElementById("weatherImpact").checked,
+    work_plan: p.work_plan, work_result: p.work_result, progress: p.progress_percent,
+    has_problem: p.has_problem,
+    problem_labels: (p.problem_types||[]).map(k=>t("problems")[k]||k),
+    problem_detail: p.problem_detail, solution: p.solution,
+    next_date: p.next_work_date, next_tasks: p.next_tasks || [],
+    photos: (p.photos||[]).map(x=>x.dataUrl),
+    signed_name: emp.name, signed_position: emp.position || "",
+    checked_out: !!json.checked_out
+  };
+}
+function paperHtml(r){
+  const rows = (k,v)=>'<tr><td class="k">'+esc(k)+'</td><td>'+(v||"-")+'</td></tr>';
+  const memHtml = (r.members||[]).length
+    ? (r.members||[]).map(m=>'<span>'+esc(m.name)+(m.temp?" ("+esc(t("dTemp"))+")":"")+'</span>').join(" · ")
+    : "-";
+  const tasksHtml = (r.next_tasks||[]).length
+    ? '<ol style="margin:4px 0 0 18px;padding:0">'+(r.next_tasks||[]).map(x=>'<li>'+(x.zone?'<b>['+esc(x.zone)+']</b> ':'')+esc(x.task_note)+'</li>').join("")+'</ol>'
+    : "-";
+  const probHtml = r.has_problem
+    ? '<div class="tags">'+(r.problem_labels||[]).map(l=>'<span>'+esc(l)+'</span>').join("")+'</div>'+
+      (r.problem_detail?'<div class="box" style="margin-top:6px">'+esc(r.problem_detail)+'</div>':'')+
+      (r.solution?'<div class="sec" style="margin:9px 0 5px">'+esc(t("solution")).replace(" *","")+'</div><div class="box">'+esc(r.solution)+'</div>':'')
+    : '<div class="box" style="border-color:#8ed7b4;background:#f0fbf6;color:#1f6f4d">✓ '+esc(t("rvNoProblem"))+'</div>';
+  const imgsHtml = (r.photos||[]).length
+    ? '<div class="imgs">'+(r.photos||[]).map(u=>'<img src="'+u+'">').join("")+'</div>' : "";
+  const signAt = r.signed_at_text || fmtDate(r.work_date);
+  return ''+
+  '<div class="paper">'+
+    '<div class="ph"><div><h2>'+esc(t("docTitle"))+'</h2><div class="co">'+esc(r.company)+'</div></div>'+
+      '<div class="no">'+esc(t("docNo"))+'<b>'+esc(r.report_no||"-")+'</b>'+esc(fmtDate(r.work_date))+'</div></div>'+
+    '<table>'+
+      rows(t("project"), esc(r.project)+(r.customer?' · '+esc(r.customer):''))+
+      (r.site?rows(t("site"), esc(r.site)):'')+
+      rows(t("team"), esc(r.team))+
+      rows(t("leader"), esc(r.signed_name)+(r.signed_position?' · '+esc(r.signed_position):''))+
+      rows(t("weather"), esc(r.weather_label)+(r.weather_impact?' <b style="color:#b4600f">⚠ '+esc(t("weatherImpact"))+'</b>':''))+
+      rows(t("docMan"), '<b>'+r.manpower+'</b> '+esc(t("ppl"))+' — <span style="color:#41495a">'+memHtml+'</span>')+
+    '</table>'+
+    '<div class="sec">'+esc(t("docPlan"))+'</div><div class="box">'+esc(r.work_plan||"-")+'</div>'+
+    '<div class="sec">'+esc(t("docResult"))+'</div><div class="box">'+esc(r.work_result||"-")+'</div>'+
+    '<div class="sec">'+esc(t("docProgress"))+'</div>'+
+      '<div><b style="font-size:16px">'+r.progress+'%</b><div class="pbar"><span style="width:'+r.progress+'%"></span></div></div>'+
+    '<div class="sec">'+esc(t("docProblem"))+'</div>'+probHtml+
+    '<div class="sec">'+esc(t("docNext"))+(r.next_date?' · '+esc(fmtDate(r.next_date)):'')+'</div>'+tasksHtml+
+    (imgsHtml?'<div class="sec">'+esc(t("docPhotos"))+' ('+(r.photos||[]).length+')</div>'+imgsHtml:'')+
+    '<div class="sign"><div class="signbx"><div class="nm">'+esc(r.signed_name)+'</div>'+
+      '<div class="mt">'+esc(r.signed_position||"")+'</div>'+
+      '<div class="mt">🔒 '+esc(signAt)+'</div></div></div>'+
+    '<div class="ft">'+esc(t("docFooter"))+'</div>'+
+  '</div>';
+}
+function loadScriptOnce(src){
+  return new Promise((ok,bad)=>{
+    const s = document.createElement("script");
+    s.src = src; s.onload = ()=>ok(); s.onerror = ()=>bad(new Error("script"));
+    document.head.appendChild(s);
+  });
+}
+async function ensurePdfLibs(){
+  if(!window.html2canvas) await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+  if(!window.jspdf) await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+}
+async function makePdfBlob(r){
+  await ensurePdfLibs();
+  const host = document.createElement("div");
+  host.className = "offscreen";
+  host.innerHTML = paperHtml(r);
+  document.body.appendChild(host);
+  try{
+    const canvas = await window.html2canvas(host.firstChild, { scale:2, backgroundColor:"#ffffff", useCORS:true, logging:false });
+    const img = canvas.toDataURL("image/jpeg", 0.92);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF("p","mm","a4");
+    const PW = 210, PH = 297, M = 8;
+    const iw = PW - M*2;
+    const ih = canvas.height * iw / canvas.width;
+    const usable = PH - M*2;
+    let left = ih, pos = M;
+    pdf.addImage(img,"JPEG",M,pos,iw,ih);
+    left -= usable;
+    while(left > 0){
+      pos = M - (ih - left);
+      pdf.addPage();
+      pdf.addImage(img,"JPEG",M,pos,iw,ih);
+      left -= usable;
+    }
+    return pdf.output("blob");
+  } finally { host.remove(); }
+}
+function pdfFileName(r){ return (r.report_no || "daily-report-"+(r.work_date||"")) + ".pdf"; }
+// สำรอง: ถ้าโหลดไลบรารี PDF ไม่ได้ (เน็ตล่ม/โดนบล็อก) ให้เปิดหน้าเอกสารแล้วใช้ "พิมพ์ -> บันทึกเป็น PDF" แทน
+function printFallback(r){
+  const w = window.open("", "_blank");
+  if(!w) return false;
+  const css = [...document.querySelectorAll("style")].map(s=>s.textContent).join("\n");
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+
+    (r.report_no||t("docTitle"))+'</title><style>'+css+
+    'body{margin:0;background:#fff}.paper{width:auto;max-width:820px;margin:0 auto}</style></head><body>'+
+    paperHtml(r)+'<script>setTimeout(function(){window.print()},600);<\/script></body></html>');
+  w.document.close();
+  return true;
+}
+async function sharePdf(){
+  if(!RPT) return;
+  const btns = document.querySelectorAll("#okWrap button"); btns.forEach(b=>b.disabled=true);
+  showStatus("⏳ "+t("pdfBusy"), "info");
+  try{
+    const blob = await makePdfBlob(RPT);
+    const name = pdfFileName(RPT);
+    const file = new File([blob], name, { type:"application/pdf" });
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({ files:[file], title:name, text:t("docTitle")+" "+(RPT.report_no||"") });
+    }else{
+      const url = URL.createObjectURL(blob);
+      // เบราว์เซอร์ใน LINE มักบล็อกการดาวน์โหลดตรง -> เปิดไฟล์ในแท็บใหม่ให้แทน
+      if(/Line\//i.test(navigator.userAgent)){ window.open(url, "_blank"); }
+      else{
+        const a = document.createElement("a"); a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+      setTimeout(()=>URL.revokeObjectURL(url), 120000);
+    }
+    hideStatus();
+  }catch(e){
+    if(printFallback(RPT)) hideStatus();
+    else showStatus("⚠️ "+t("pdfErr"), "err");
+  }
+  finally{ document.querySelectorAll("#okWrap button").forEach(b=>b.disabled=false); }
+}
+async function openPdf(){
+  if(!RPT) return;
+  showStatus("⏳ "+t("pdfBusy"), "info");
+  try{
+    const blob = await makePdfBlob(RPT);
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    setTimeout(()=>URL.revokeObjectURL(url), 120000);
+    hideStatus();
+  }catch(e){
+    if(printFallback(RPT)) hideStatus();
+    else showStatus("⚠️ "+t("pdfErr"), "err");
+  }
+}
+
 function showSuccess(json, p){
   document.getElementById("formWrap").classList.add("hide");
+  document.body.classList.remove("compact");
   hideStatus();
+  try{ RPT = buildRptData(json, p); }catch(e){ RPT = null; }
   const ok = document.getElementById("okWrap");
   ok.classList.remove("hide");
   const nextTxt = p.next_tasks.map(x=>(x.zone?"["+x.zone+"] ":"")+x.task_note).join(" · ");
@@ -775,7 +1033,9 @@ function showSuccess(json, p){
     (json.checked_out?'<div class="signlock" style="justify-content:center;margin-bottom:10px">🔒 '+t("okCheckout")+'</div>':'')+
     (nextTxt?'<div class="infobox" style="text-align:left"><div class="inforow"><span class="k">'+t("next")+'</span></div><div style="font-size:12.5px">'+esc(nextTxt)+'</div></div>':'')+
     (json.photos_uploaded?'<div style="font-size:11.5px;color:var(--muted)">'+t("photosSaved")+': '+json.photos_uploaded+'</div>':'')+
-    '<div style="font-size:11.5px;color:var(--muted);margin:8px 0 4px">'+t("viewLater")+'</div>'+
+    (RPT?'<button class="submit" style="margin-top:12px" onclick="sharePdf()">📤 '+t("pdfBtn")+'</button>'+
+         '<button class="btn-ghost" onclick="openPdf()">👁 '+t("pdfOpen")+'</button>':'')+
+    '<div style="font-size:11.5px;color:var(--muted);margin:10px 0 4px">'+t("viewLater")+'</div>'+
     '<button class="btn-ghost" onclick="location.href=\''+CHECKIN_PAGE+'\'">← '+t("back")+'</button>';
   window.scrollTo(0,0);
 }
@@ -827,6 +1087,7 @@ async function init(){
 }
 function gateMsg(msg, isErr){
   document.getElementById("formWrap").classList.add("hide");
+  document.body.classList.remove("compact");
   showStatus((isErr?"":"ℹ️ ")+msg, isErr?"err":"info");
   const ok = document.getElementById("okWrap"); ok.classList.remove("hide");
   ok.innerHTML = '<button class="btn-ghost" onclick="location.href=\''+CHECKIN_PAGE+'\'">← '+t("goCheckin")+'</button>';

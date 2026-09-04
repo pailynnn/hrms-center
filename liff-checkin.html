@@ -102,6 +102,51 @@
     display:inline-block;vertical-align:-3px;margin-right:6px;animation:spin .7s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   @media (prefers-reduced-motion: reduce){ .spinner{animation:none} button.act{transition:none} }
+
+  /* ปุ่มดูรายงานประจำวันของวันนี้ (แสดงเฉพาะหัวหน้าทีมที่บันทึกรายงานแล้ว) */
+  .btn-report{
+    width:100%;margin-bottom:11px;border:1px solid rgba(52,211,153,.35);background:var(--ok-bg);color:var(--ok);
+    border-radius:14px;padding:13px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer;display:none;
+  }
+  .btn-report:active{transform:translateY(1px)}
+
+  /* ===== paper form (พรีวิวรายงาน + สร้าง PDF) ===== */
+  .offscreen{position:fixed;left:-99999px;top:0;z-index:-1}
+  .paper{width:760px;background:#fff;color:#14181f;padding:26px 28px 30px;
+    font-family:"Noto Sans Thai","Sora",sans-serif;font-size:12.5px;line-height:1.55}
+  .paper .ph{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #f7941d;padding-bottom:9px;margin-bottom:12px}
+  .paper .ph h2{margin:0;font-size:19px;letter-spacing:.3px}
+  .paper .ph .co{font-size:12px;color:#5b6472;margin-top:2px}
+  .paper .ph .no{text-align:right;font-size:11.5px;color:#5b6472}
+  .paper .ph .no b{display:block;font-size:14px;color:#14181f;letter-spacing:.4px}
+  .paper table{width:100%;border-collapse:collapse;margin-bottom:4px}
+  .paper td,.paper th{border:1px solid #d3d9e2;padding:6px 9px;vertical-align:top;text-align:left}
+  .paper td.k{background:#f4f6f9;font-weight:600;width:22%;color:#41495a}
+  .paper .sec{margin:14px 0 7px;font-weight:700;font-size:13.5px;border-left:4px solid #f7941d;padding-left:8px}
+  .paper .box{border:1px solid #d3d9e2;border-radius:4px;padding:8px 10px;white-space:pre-wrap;min-height:34px}
+  .paper .pbar{height:13px;border:1px solid #d3d9e2;border-radius:99px;overflow:hidden;background:#eef1f6;margin-top:5px}
+  .paper .pbar span{display:block;height:100%;background:#f7941d}
+  .paper .tags span{display:inline-block;border:1px solid #f0b26a;background:#fff5e8;color:#8a5a12;border-radius:99px;padding:2px 9px;margin:2px 4px 2px 0;font-size:11.5px}
+  .paper .imgs{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
+  .paper .imgs img{width:174px;height:130px;object-fit:cover;border:1px solid #d3d9e2;border-radius:4px}
+  .paper .sign{margin-top:20px;display:flex;justify-content:flex-end}
+  .paper .signbx{min-width:250px;text-align:center;border-top:1px dashed #9aa3b2;padding-top:8px}
+  .paper .signbx .nm{font-weight:700;font-size:14px}
+  .paper .signbx .mt{font-size:11px;color:#5b6472;margin-top:2px}
+  .paper .ft{margin-top:14px;font-size:10.5px;color:#77808f;text-align:center;border-top:1px solid #e3e7ee;padding-top:8px}
+
+  /* modal พรีวิวรายงาน */
+  .modal{position:fixed;inset:0;background:rgba(5,8,14,.9);z-index:60;display:none;flex-direction:column;padding:12px}
+  .modal.on{display:flex}
+  .modal .mtop{display:flex;gap:8px;margin-bottom:10px}
+  .modal .mtop button{border:none;border-radius:12px;padding:12px 8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+  .modal .mtop .mclose{flex:0 0 28%;background:transparent;border:1px solid var(--line-2);color:var(--txt)}
+  .modal .mtop .mzoom{flex:0 0 46px;background:transparent;border:1px solid var(--line-2);color:var(--txt);font-size:15px}
+  .modal .mtop .mpdf{flex:1;background:linear-gradient(145deg,#ffb04a,var(--amber-lo));color:#1a1206}
+  .modal .mtop button:disabled{opacity:.5}
+  .modal .mtitle{font-size:12px;color:var(--muted);margin-bottom:8px;text-align:center}
+  .modal .mbody{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;border-radius:12px;background:#fff}
+  .modal .mscale{transform-origin:top left}
 </style>
 </head>
 <body>
@@ -141,15 +186,32 @@
       <button id="btnOut" class="act btn-out" onclick="doAction('out')">🚪 <span id="txtBtnOut">ลงเวลาออก</span></button>
     </div>
 
+    <button class="btn-report" id="btnReport" onclick="openReport()">📄 <span id="txtBtnReport">ดูรายงานประจำวันวันนี้</span></button>
+
     <button class="btn-leave" id="btnLeave" onclick="openLeave()">📝 <span id="txtBtnLeave">ยื่นใบลา</span></button>
 
     <div class="footer" id="txtFooter">อนุญาตให้เข้าถึงตำแหน่ง (GPS) เพื่อยืนยันว่าคุณอยู่ในพื้นที่บริษัท</div>
+  </div>
+
+  <!-- พรีวิวรายงานประจำวัน (ภาพฟอร์ม) -->
+  <div class="modal" id="reportModal">
+    <div class="mtop">
+      <button class="mclose" onclick="closeReport()" id="txtBtnClose">ปิด</button>
+      <button class="mzoom" onclick="toggleZoom()" id="btnZoom">🔍</button>
+      <button class="mpdf" id="btnPdf" onclick="shareReportPdf()">📤 <span id="txtBtnPdf">บันทึก / แชร์ PDF</span></button>
+    </div>
+    <div class="mtitle" id="reportPick"></div>
+    <div class="mbody" id="reportBody"></div>
   </div>
 
 <script>
 const CONFIG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-config";
 const CHECKIN_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-checkin";
 const SET_LANG_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-set-lang";
+// หัวหน้าทีมกด "ลงเวลาออก" -> เด้งไปทำรายงานประจำวัน (รายงาน = ลงเวลาออก) ถ้าตรวจไม่ได้ให้ออกงานตามปกติ
+const REPORT_CONTEXT_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-report-context";
+// ดึงรายงานที่บันทึกไปแล้วของวันนี้ มาแสดงเป็นภาพฟอร์ม + สร้าง PDF
+const REPORT_VIEW_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-report-view";
 // ส่งภาษาที่เลือกไปบันทึกไว้กับพนักงาน + ผูก Rich Menu ให้ตรงภาษาทันที — best effort เงียบๆ ถ้ายังไม่ได้ login
 function syncLangToServer(x){
   try{
@@ -173,7 +235,18 @@ const L = {
     srvErr: "เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr: "เกิดข้อผิดพลาด",
     noCfg: "ยังไม่ได้ตั้งค่า LIFF ID — แจ้งผู้ดูแลระบบตั้งค่าที่ ตั้งค่าระบบ → ช่องทางแจ้งเตือน",
     loginLine: "กำลังเข้าสู่ระบบผ่าน LINE...",
-    leaveSoon: "ยื่นใบลาผ่าน LINE จะเปิดใช้เร็วๆ นี้ — ระหว่างนี้ยื่นผ่านแอป HRMS ได้"
+    leaveSoon: "ยื่นใบลาผ่าน LINE จะเปิดใช้เร็วๆ นี้ — ระหว่างนี้ยื่นผ่านแอป HRMS ได้",
+    btnReport: "ดูรายงานประจำวันวันนี้", btnClose: "ปิด", btnPdf: "บันทึก / แชร์ PDF",
+    rptLoading: "กำลังเปิดรายงาน...", rptErr: "เปิดรายงานไม่สำเร็จ",
+    pdfBusy: "กำลังสร้างไฟล์ PDF...", pdfErr: "สร้างไฟล์ PDF ไม่สำเร็จ",
+    docTitle: "รายงานประจำวันหน้างาน", docNo: "เลขที่รายงาน", docMan: "กำลังคน",
+    docPlan: "แผนงานวันนี้", docResult: "ผลการทำงาน", docProgress: "ความคืบหน้า",
+    docProblem: "ปัญหา & การแก้ไข", docSolution: "วิธีการแก้ไข", docNext: "แผนงานวันถัดไป", docPhotos: "รูปหน้างาน",
+    docFooter: "เอกสารนี้ออกโดยระบบ HRMS CENTER — ลงชื่อดิจิทัลผ่าน LINE",
+    dProject: "โครงการ", dSite: "สถานที่", dTeam: "ทีม", dLeader: "หัวหน้าทีม", dWeather: "สภาพอากาศ",
+    dPpl: "คน", dNoProblem: "ไม่มีปัญหา", dImpact: "มีผลกระทบต่อการทำงาน", dTemp: "ยืมตัว",
+    wl: { sun:"แดด", cloudy:"มีเมฆ", rainy:"ฝน", heavy_rain:"ฝนหนัก", storm:"พายุ" },
+    problems: { material_not_ready:"วัสดุไม่พร้อม", material_incomplete:"วัสดุไม่ครบ", drawing_change:"แบบแก้ไข", site_not_ready:"หน้างานไม่พร้อม", owner_absent:"เจ้าของไม่อยู่", other_delay:"งานอื่นล่าช้า", tools_not_ready:"เครื่องมือไม่พร้อม", weather:"สภาพอากาศ", manpower_short:"คนไม่พอ", other:"อื่น ๆ" }
   },
   mm: {
     subtitle: "LINE မှ အလုပ်ဝင်/ထွက် ချိန်မှတ်ခြင်း · GPS ဖြင့် တည်နေရာအတည်ပြု",
@@ -186,7 +259,18 @@ const L = {
     srvErr: "ဆာဗာ တုံ့ပြန်မှု မှားယွင်းနေသည်", genErr: "အမှားဖြစ်ပွားခဲ့သည်",
     noCfg: "LIFF ID မသတ်မှတ်ရသေးပါ — စီမံခန့်ခွဲသူကို အသိပေးပါ",
     loginLine: "LINE မှတစ်ဆင့် ဝင်ရောက်နေသည်...",
-    leaveSoon: "LINE မှ ခွင့်တင်ခြင်းကို မကြာမီ ဖွင့်ပါမည် — ယခုအတွက် HRMS app မှ တင်ပါ"
+    leaveSoon: "LINE မှ ခွင့်တင်ခြင်းကို မကြာမီ ဖွင့်ပါမည် — ယခုအတွက် HRMS app မှ တင်ပါ",
+    btnReport: "ယနေ့အစီရင်ခံစာ ကြည့်ရန်", btnClose: "ပိတ်", btnPdf: "PDF သိမ်း / မျှဝေ",
+    rptLoading: "အစီရင်ခံစာ ဖွင့်နေသည်...", rptErr: "အစီရင်ခံစာ မဖွင့်နိုင်ပါ",
+    pdfBusy: "PDF ဖိုင် ဖန်တီးနေသည်...", pdfErr: "PDF မဖန်တီးနိုင်ပါ",
+    docTitle: "နေ့စဉ်လုပ်ငန်းခွင် အစီရင်ခံစာ", docNo: "အစီရင်ခံစာနံပါတ်", docMan: "လူအင်အား",
+    docPlan: "ယနေ့အစီအစဉ်", docResult: "လုပ်ဆောင်ချက်", docProgress: "တိုးတက်မှု",
+    docProblem: "ပြဿနာ & ဖြေရှင်းနည်း", docSolution: "ဖြေရှင်းနည်း", docNext: "နောက်ရက်အစီအစဉ်", docPhotos: "လုပ်ငန်းခွင်ဓာတ်ပုံ",
+    docFooter: "HRMS CENTER မှ ထုတ်ပေးသည် — LINE ဖြင့် ဒစ်ဂျစ်တယ်လက်မှတ်",
+    dProject: "စီမံကိန်း", dSite: "နေရာ", dTeam: "အဖွဲ့", dLeader: "အကြီးအကဲ", dWeather: "ရာသီဥတု",
+    dPpl: "ဦး", dNoProblem: "ပြဿနာမရှိ", dImpact: "အလုပ်အပေါ် သက်ရောက်မှုရှိ", dTemp: "ငှား",
+    wl: { sun:"နေသာ", cloudy:"တိမ်", rainy:"မိုး", heavy_rain:"မိုးသည်း", storm:"မုန်တိုင်း" },
+    problems: { material_not_ready:"ပစ္စည်းမအဆင်သင့်", material_incomplete:"ပစ္စည်းမပြည့်", drawing_change:"ပုံစံပြင်", site_not_ready:"နေရာမအဆင်သင့်", owner_absent:"ပိုင်ရှင်မရှိ", other_delay:"အခြားနှောင့်နှေး", tools_not_ready:"ကိရိယာမအဆင်သင့်", weather:"ရာသီဥတု", manpower_short:"လူမလုံ", other:"အခြား" }
   }
 };
 let lang = localStorage.getItem("hrmsLiffLang") || "th";
@@ -203,6 +287,9 @@ function setLang(x){
   setText("txtBtnIn","btnIn");
   setText("txtBtnOut","btnOut");
   setText("txtBtnLeave","btnLeave");
+  setText("txtBtnReport","btnReport");
+  setText("txtBtnClose","btnClose");
+  setText("txtBtnPdf","btnPdf");
   setText("txtFooter","footer");
   document.getElementById("langTh").classList.toggle("on", x==="th");
   document.getElementById("langMm").classList.toggle("on", x==="mm");
@@ -262,6 +349,22 @@ async function doAction(action){
     const idToken = liff.getIDToken();
     if(!idToken) throw new Error(t("idErr"));
 
+    // ถ้าเป็นหัวหน้าทีมและยังไม่ได้ทำรายงานวันนี้ -> ไปหน้ารายงานประจำวัน (บันทึกรายงานจะลงเวลาออกให้เอง)
+    if(action === "out"){
+      try{
+        const ctxRes = await fetch(REPORT_CONTEXT_URL, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idToken })
+        });
+        const ctx = await ctxRes.json();
+        if(ctx && ctx.is_leader && ctx.attendance && ctx.attendance.checked_in
+           && Array.isArray(ctx.groups) && ctx.groups.some(g => !g.already_reported)){
+          window.location.href = "https://liff.line.me/2010634360-YHEKkN47";
+          return;
+        }
+      }catch(e){ /* ตรวจสอบไม่ได้ -> ลงเวลาออกตามปกติ */ }
+    }
+
     let coords = null;
     if(action === "in"){
       coords = await getPosition();
@@ -276,13 +379,230 @@ async function doAction(action){
     if(!res.ok || json.error) throw new Error(json.error || t("genErr"));
 
     showStatus("✅ " + json.message, "ok");
-    if(action === "in") btnIn.disabled = true; else { btnIn.disabled = true; btnOut.disabled = true; }
+    if(action === "in") btnIn.disabled = true; else { btnIn.disabled = true; btnOut.disabled = true; checkTodayReport(); }
   }catch(err){
     showStatus("⚠️ " + err.message, "err");
   }finally{
     if(statusBox.className.indexOf("info") > -1) statusBox.className = "status";
     btnIn.disabled = statusBox.className.indexOf("ok")>-1 ? true : false;
   }
+}
+
+/* ================= รายงานประจำวัน: ดูเป็นภาพฟอร์ม + แชร์ PDF ================= */
+let TODAY_REPORTS = [];   // รายงานของวันนี้ที่ผู้ใช้ (หัวหน้าทีม) บันทึกไว้แล้ว
+let CUR_RPT = null;       // รายงานที่กำลังเปิดดู
+let RPT_COMPANY = "HRMS CENTER";
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function fmtDateTh(iso){
+  if(!iso) return "-";
+  const [y,m,d] = String(iso).slice(0,10).split("-").map(Number);
+  if(lang==="mm") return d+"/"+m+"/"+y;
+  const mo=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+  return d+" "+mo[m-1]+" "+(y+543);
+}
+
+// เรียกหลัง login / หลังลงเวลาออก — ถ้ามีรายงานของวันนี้ ให้โชว์ปุ่มดูรายงาน
+async function checkTodayReport(){
+  try{
+    if(typeof liff==="undefined" || !liff.isLoggedIn || !liff.isLoggedIn()) return;
+    const idToken = liff.getIDToken && liff.getIDToken();
+    if(!idToken) return;
+    const res = await fetch(REPORT_VIEW_URL, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ idToken })
+    });
+    const json = await res.json();
+    if(json && Array.isArray(json.reports) && json.reports.length){
+      TODAY_REPORTS = json.reports;
+      RPT_COMPANY = json.company_name || RPT_COMPANY;
+      document.getElementById("btnReport").style.display = "block";
+    }else{
+      TODAY_REPORTS = [];
+      document.getElementById("btnReport").style.display = "none";
+    }
+  }catch(e){ /* เงียบ — ไม่ให้กระทบการลงเวลา */ }
+}
+
+function paperHtml(r){
+  const rows = (k,v)=>'<tr><td class="k">'+esc(k)+'</td><td>'+(v||"-")+'</td></tr>';
+  const mems = (r.members||[]).filter(m=>m.is_present!==false);
+  const memHtml = mems.length ? mems.map(m=>'<span>'+esc(m.name)+(m.is_temp?" ("+t("dTemp")+")":"")+'</span>').join(" · ") : "-";
+  const wl = t("wl")[r.weather] || r.weather || "-";
+  const tasksHtml = (r.next_tasks||[]).length
+    ? '<ol style="margin:4px 0 0 18px;padding:0">'+(r.next_tasks||[]).map(x=>'<li>'+(x.zone?'<b>['+esc(x.zone)+']</b> ':'')+esc(x.task_note)+'</li>').join("")+'</ol>'
+    : (r.next_day_plan ? '<div class="box">'+esc(r.next_day_plan)+'</div>' : "-");
+  const probHtml = r.has_problem
+    ? '<div class="tags">'+(r.problem_types||[]).map(k=>'<span>'+esc(t("problems")[k]||k)+'</span>').join("")+'</div>'+
+      (r.problem_detail?'<div class="box" style="margin-top:6px">'+esc(r.problem_detail)+'</div>':'')+
+      (r.solution?'<div class="sec" style="margin:9px 0 5px">'+esc(t("docSolution"))+'</div><div class="box">'+esc(r.solution)+'</div>':'')
+    : '<div class="box" style="border-color:#8ed7b4;background:#f0fbf6;color:#1f6f4d">✓ '+esc(t("dNoProblem"))+'</div>';
+  const imgs = (r._photoData || (r.photos||[]).map(p=>p.url));
+  const imgsHtml = imgs.length ? '<div class="imgs">'+imgs.map(u=>'<img src="'+u+'">').join("")+'</div>' : "";
+  return ''+
+  '<div class="paper">'+
+    '<div class="ph"><div><h2>'+esc(t("docTitle"))+'</h2><div class="co">'+esc(RPT_COMPANY)+'</div></div>'+
+      '<div class="no">'+esc(t("docNo"))+'<b>'+esc(r.report_no||"-")+'</b>'+esc(fmtDateTh(r.work_date))+'</div></div>'+
+    '<table>'+
+      rows(t("dProject"), esc(r.project_name)+(r.project_customer?' · '+esc(r.project_customer):''))+
+      (r.project_site?rows(t("dSite"), esc(r.project_site)):'')+
+      rows(t("dTeam"), esc(r.group_name))+
+      rows(t("dLeader"), esc(r.signed_name)+(r.signed_position?' · '+esc(r.signed_position):''))+
+      rows(t("dWeather"), esc(wl)+(r.weather_impact?' <b style="color:#b4600f">⚠ '+esc(t("dImpact"))+'</b>':''))+
+      rows(t("docMan"), '<b>'+(r.manpower_count||0)+'</b> '+esc(t("dPpl"))+' — <span style="color:#41495a">'+memHtml+'</span>')+
+    '</table>'+
+    '<div class="sec">'+esc(t("docPlan"))+'</div><div class="box">'+esc(r.work_plan||"-")+'</div>'+
+    '<div class="sec">'+esc(t("docResult"))+'</div><div class="box">'+esc(r.work_result||"-")+'</div>'+
+    '<div class="sec">'+esc(t("docProgress"))+'</div>'+
+      '<div><b style="font-size:16px">'+(r.progress_percent||0)+'%</b><div class="pbar"><span style="width:'+(r.progress_percent||0)+'%"></span></div></div>'+
+    '<div class="sec">'+esc(t("docProblem"))+'</div>'+probHtml+
+    '<div class="sec">'+esc(t("docNext"))+(r.next_work_date?' · '+esc(fmtDateTh(r.next_work_date)):'')+'</div>'+tasksHtml+
+    (imgsHtml?'<div class="sec">'+esc(t("docPhotos"))+' ('+imgs.length+')</div>'+imgsHtml:'')+
+    '<div class="sign"><div class="signbx"><div class="nm">'+esc(r.signed_name||"")+'</div>'+
+      '<div class="mt">'+esc(r.signed_position||"")+'</div>'+
+      '<div class="mt">🔒 '+esc(fmtDateTh(r.work_date))+'</div></div></div>'+
+    '<div class="ft">'+esc(t("docFooter"))+'</div>'+
+  '</div>';
+}
+
+// แปลงรูปจาก signed URL -> dataURL เพื่อให้ทั้งพรีวิวและ PDF เรนเดอร์ได้แน่นอน (กัน canvas ติด CORS)
+async function toDataUrl(url){
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return await new Promise((ok,bad)=>{
+    const fr = new FileReader();
+    fr.onload = ()=>ok(fr.result); fr.onerror = ()=>bad(new Error("img"));
+    fr.readAsDataURL(blob);
+  });
+}
+async function preparePhotos(r){
+  if(r._photoData) return;
+  const out = [];
+  for(const p of (r.photos||[])){
+    try{ out.push(await toDataUrl(p.url)); }catch(e){}
+  }
+  r._photoData = out;
+}
+
+async function openReport(idx){
+  const r = TODAY_REPORTS[idx||0];
+  if(!r) return;
+  CUR_RPT = r;
+  const modal = document.getElementById("reportModal");
+  const body = document.getElementById("reportBody");
+  modal.classList.add("on");
+  body.innerHTML = '<div style="padding:22px;color:#333;font-size:13px">⏳ '+t("rptLoading")+'</div>';
+  document.getElementById("reportPick").innerHTML = TODAY_REPORTS.length>1
+    ? TODAY_REPORTS.map((x,i)=>'<button style="all:unset;cursor:pointer;padding:4px 10px;margin:0 3px;border-radius:99px;border:1px solid rgba(255,255,255,.2);font-size:11.5px;'+(x===r?'background:#f7941d;color:#1a1206':'color:#8b94a7')+'" onclick="openReport('+i+')">'+esc(x.group_name||("#"+(i+1)))+'</button>').join("")
+    : esc(r.report_no||"");
+  try{
+    await preparePhotos(r);
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "position:relative;overflow:hidden";
+    wrap.innerHTML = '<div class="mscale">'+paperHtml(r)+'</div>';
+    body.innerHTML = ""; body.appendChild(wrap);
+    // รอรูปโหลดเสร็จก่อนวัดความสูง
+    await new Promise(res=>setTimeout(res, 80));
+    RPT_ZOOM = false;
+    applyScale();
+  }catch(e){
+    body.innerHTML = '<div style="padding:22px;color:#b00;font-size:13px">⚠️ '+t("rptErr")+'</div>';
+  }
+}
+// พอดีหน้าจอ <-> ขนาดเต็ม (เลื่อนดูซ้าย-ขวาได้) สำหรับอ่านตัวเล็กบนมือถือ
+let RPT_ZOOM = false;
+function applyScale(){
+  const body = document.getElementById("reportBody");
+  const scaleDiv = body.querySelector(".mscale");
+  if(!scaleDiv) return;
+  const wrap = scaleDiv.parentElement;
+  const paper = scaleDiv.querySelector(".paper");
+  const s = RPT_ZOOM ? 1 : (body.clientWidth / 760);
+  scaleDiv.style.width = "760px";
+  scaleDiv.style.transform = "scale("+s+")";
+  wrap.style.width = (760 * s) + "px";
+  wrap.style.height = (paper.scrollHeight * s) + "px";
+  const z = document.getElementById("btnZoom"); if(z) z.textContent = RPT_ZOOM ? "🔎" : "🔍";
+}
+function toggleZoom(){ RPT_ZOOM = !RPT_ZOOM; applyScale(); }
+function closeReport(){ document.getElementById("reportModal").classList.remove("on"); }
+
+function loadScriptOnce(src){
+  return new Promise((ok,bad)=>{
+    const s = document.createElement("script");
+    s.src = src; s.onload = ()=>ok(); s.onerror = ()=>bad(new Error("script"));
+    document.head.appendChild(s);
+  });
+}
+async function ensurePdfLibs(){
+  if(!window.html2canvas) await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+  if(!window.jspdf) await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+}
+async function makePdfBlob(r){
+  await ensurePdfLibs();
+  const host = document.createElement("div");
+  host.className = "offscreen";
+  host.innerHTML = paperHtml(r);
+  document.body.appendChild(host);
+  try{
+    const canvas = await window.html2canvas(host.firstChild, { scale:2, backgroundColor:"#ffffff", useCORS:true, logging:false });
+    const img = canvas.toDataURL("image/jpeg", 0.92);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF("p","mm","a4");
+    const PW = 210, PH = 297, M = 8;
+    const iw = PW - M*2;
+    const ih = canvas.height * iw / canvas.width;
+    const usable = PH - M*2;
+    let left = ih, pos = M;
+    pdf.addImage(img,"JPEG",M,pos,iw,ih);
+    left -= usable;
+    while(left > 0){
+      pos = M - (ih - left);
+      pdf.addPage();
+      pdf.addImage(img,"JPEG",M,pos,iw,ih);
+      left -= usable;
+    }
+    return pdf.output("blob");
+  } finally { host.remove(); }
+}
+// สำรอง: โหลดไลบรารี PDF ไม่ได้ -> เปิดหน้าเอกสารให้ใช้ "พิมพ์ -> บันทึกเป็น PDF"
+function printFallback(r){
+  const w = window.open("", "_blank");
+  if(!w) return false;
+  const css = [...document.querySelectorAll("style")].map(s=>s.textContent).join("\n");
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+
+    (r.report_no||t("docTitle"))+'</title><style>'+css+
+    'body{margin:0;background:#fff}.paper{width:auto;max-width:820px;margin:0 auto}</style></head><body>'+
+    paperHtml(r)+'<script>setTimeout(function(){window.print()},600);<\/script></body></html>');
+  w.document.close();
+  return true;
+}
+async function shareReportPdf(){
+  if(!CUR_RPT) return;
+  const btn = document.getElementById("btnPdf");
+  const old = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'+t("pdfBusy");
+  try{
+    await preparePhotos(CUR_RPT);
+    const blob = await makePdfBlob(CUR_RPT);
+    const name = (CUR_RPT.report_no || ("daily-report-"+String(CUR_RPT.work_date||"").slice(0,10))) + ".pdf";
+    const file = new File([blob], name, { type:"application/pdf" });
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({ files:[file], title:name, text:t("docTitle")+" "+(CUR_RPT.report_no||"") });
+    }else{
+      const url = URL.createObjectURL(blob);
+      // ในเบราว์เซอร์ของ LINE การดาวน์โหลดตรงมักถูกบล็อก -> เปิดไฟล์ในแท็บใหม่ให้แทน
+      if(/Line\//i.test(navigator.userAgent)){ window.open(url, "_blank"); }
+      else{
+        const a = document.createElement("a"); a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+      setTimeout(()=>URL.revokeObjectURL(url), 120000);
+    }
+  }catch(e){
+    if(!printFallback(CUR_RPT)) alert(t("pdfErr"));
+  }
+  finally{ btn.disabled = false; btn.innerHTML = old; }
 }
 
 async function init(){
@@ -302,6 +622,8 @@ async function init(){
     document.getElementById("profile").style.display = "flex";
     document.getElementById("avatar").src = profile.pictureUrl || "";
     document.getElementById("displayName").textContent = profile.displayName || "";
+    // ถ้าวันนี้บันทึกรายงานประจำวันไปแล้ว -> โชว์ปุ่มเปิดดูรายงาน (ภาพฟอร์ม + แชร์ PDF)
+    checkTodayReport();
   }catch(err){
     showStatus("⚠️ " + err.message, "err");
     btnIn.disabled = true; btnOut.disabled = true;
