@@ -153,6 +153,34 @@
   .hide{display:none!important}
   .divider{height:1px;background:var(--line);margin:2px 0 16px}
 
+  /* ===== step wizard ===== */
+  .stepper{display:flex;align-items:flex-start;justify-content:space-between;margin:2px 0 4px}
+  .stepper .sd{position:relative;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .stepper .sd .bar{position:absolute;top:14px;left:50%;width:100%;height:2px;background:var(--line-2);z-index:0}
+  .stepper .sd.done .bar{background:var(--amber)}
+  .stepper .sd:last-child .bar{display:none}
+  .stepper .sd .dot{position:relative;z-index:1;width:29px;height:29px;border-radius:50%;display:grid;place-items:center;
+    font-size:12.5px;font-weight:700;background:var(--ink);border:1.5px solid var(--line-2);color:var(--muted);transition:.18s}
+  .stepper .sd.active .dot{background:var(--amber);border-color:transparent;color:#1a1206;box-shadow:0 5px 16px -5px var(--amber-glow)}
+  .stepper .sd.done .dot{background:rgba(247,148,29,.16);border-color:var(--amber);color:#ffc169}
+  .stepper .sd .cap{font-size:8.5px;font-weight:600;color:var(--muted-2);text-align:center;line-height:1.15;max-width:62px}
+  .stepper .sd.active .cap{color:#ffc169}
+  .steptitle{font-size:16px;font-weight:700;margin:14px 0 16px;letter-spacing:.2px}
+  .steptitle small{display:block;font-size:11.5px;font-weight:500;color:var(--muted);margin-top:4px;line-height:1.5}
+  .step{display:none}
+  .step.on{display:block;animation:stepin .24s ease}
+  @keyframes stepin{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+  .stepnav{display:flex;gap:10px;margin-top:6px}
+  .stepnav button{border:none;border-radius:15px;padding:16px 10px;font-size:14.5px;font-weight:700;font-family:inherit;cursor:pointer;transition:transform .12s,opacity .2s}
+  .stepnav button:active{transform:translateY(1px) scale(.99)}
+  .stepnav .nav-back{flex:0 0 38%;background:transparent;border:1px solid var(--line-2);color:var(--txt)}
+  .stepnav .nav-next{flex:1;background:linear-gradient(145deg,#ffb04a,var(--amber-lo));color:#1a1206;box-shadow:0 10px 26px -10px var(--amber-glow),0 1px 0 rgba(255,255,255,.35) inset}
+  .stepnav button:disabled{opacity:.45;cursor:not-allowed}
+  .rvrow{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .rvrow:last-child{border-bottom:none}
+  .rvrow .k{color:var(--muted)}
+  .rvrow .v{font-weight:600;text-align:right;max-width:62%}
+
   /* success screen */
   .okwrap{text-align:center;padding:6px 4px}
   .okcheck{width:64px;height:64px;border-radius:50%;background:var(--ok-bg);color:var(--ok);display:grid;place-items:center;font-size:34px;margin:6px auto 12px}
@@ -186,111 +214,125 @@
         <select id="groupPick" onchange="onGroupChange()"></select>
       </div>
 
-      <!-- A. auto info -->
+      <!-- auto info (always visible) -->
       <div class="infobox" id="infoBox"></div>
 
-      <!-- B. manpower -->
-      <div class="section">
-        <div class="label" style="display:flex;justify-content:space-between;align-items:center">
-          <span id="lblManpower">กำลังคนวันนี้</span>
-          <span class="countpill"><span id="manCount">0</span> <span id="lblPpl">คน</span></span>
-        </div>
-        <div class="hint" id="hintManpower">ติ๊กเฉพาะคนที่มาทำงานจริงวันนี้ (ระบบติ๊กให้ตามการลงเวลาเข้า)</div>
-        <div id="memberList"></div>
-        <div id="tempList"></div>
-        <button class="addbtn" id="btnAddTemp" onclick="addTemp()">+ <span id="lblAddTemp">เพิ่มผู้ปฏิบัติงานชั่วคราว / ยืมตัว</span></button>
-      </div>
+      <!-- step progress header -->
+      <div class="stepper" id="stepper"></div>
+      <div class="steptitle" id="stepTitle"></div>
 
-      <!-- C. weather -->
-      <div class="section">
-        <div class="label" id="lblWeather">สภาพอากาศ</div>
-        <div class="chips" id="weatherChips">
-          <button type="button" class="chip" data-w="sun" onclick="pickWeather('sun')"><span class="ic">☀️</span><span class="tt" data-wl="sun">แดด</span></button>
-          <button type="button" class="chip" data-w="cloudy" onclick="pickWeather('cloudy')"><span class="ic">⛅</span><span class="tt" data-wl="cloudy">มีเมฆ</span></button>
-          <button type="button" class="chip" data-w="rainy" onclick="pickWeather('rainy')"><span class="ic">🌧️</span><span class="tt" data-wl="rainy">ฝน</span></button>
-          <button type="button" class="chip" data-w="heavy_rain" onclick="pickWeather('heavy_rain')"><span class="ic">⛈️</span><span class="tt" data-wl="heavy_rain">ฝนหนัก</span></button>
-          <button type="button" class="chip" data-w="storm" onclick="pickWeather('storm')"><span class="ic">🌪️</span><span class="tt" data-wl="storm">พายุ</span></button>
-        </div>
-        <label class="pchk" style="margin-top:9px" id="weatherImpactWrap">
-          <input type="checkbox" id="weatherImpact"><span id="lblWeatherImpact">มีผลกระทบต่อการทำงาน</span>
-        </label>
-      </div>
-
-      <!-- D. today plan + result -->
-      <div class="section">
-        <div class="label" id="lblPlan">แผนงานวันนี้</div>
-        <div class="hint" id="hintPlan">ดึงจากงานที่มอบหมายไว้ แก้ไขได้ถ้าหน้างานเปลี่ยน</div>
-        <textarea id="workPlan" placeholder="" oninput="autoGrow(this)"></textarea>
-      </div>
-      <div class="section">
-        <div class="label" id="lblResult">ผลการทำงานวันนี้ *</div>
-        <textarea id="workResult" placeholder=""></textarea>
-      </div>
-
-      <!-- E. progress -->
-      <div class="section">
-        <div class="label" id="lblProgress">ความคืบหน้าของงานวันนี้</div>
-        <div class="progwrap">
-          <div class="progtop">
-            <span style="font-size:11px;color:var(--muted)" id="lblProgToday">คืบหน้าวันนี้</span>
-            <span class="progval"><span id="progNum">0</span>%</span>
+      <!-- ===== STEP 1: manpower ===== -->
+      <div class="step" data-step="1">
+        <div class="section">
+          <div class="label" style="display:flex;justify-content:space-between;align-items:center">
+            <span id="lblManpower">กำลังคนวันนี้</span>
+            <span class="countpill"><span id="manCount">0</span> <span id="lblPpl">คน</span></span>
           </div>
-          <input type="range" id="progRange" min="0" max="100" step="5" value="0" oninput="onProg(this.value)">
-          <div class="progquick">
-            <button type="button" class="qbtn" onclick="setProg(25)">0–25%</button>
-            <button type="button" class="qbtn" onclick="setProg(50)">26–50%</button>
-            <button type="button" class="qbtn" onclick="setProg(75)">51–75%</button>
-            <button type="button" class="qbtn" onclick="setProg(90)">76–99%</button>
-            <button type="button" class="qbtn" onclick="setProg(100)">100%</button>
+          <div class="hint" id="hintManpower">ติ๊กเฉพาะคนที่มาทำงานจริงวันนี้ (ระบบติ๊กให้ตามการลงเวลาเข้า)</div>
+          <div id="memberList"></div>
+          <div id="tempList"></div>
+          <button class="addbtn" id="btnAddTemp" onclick="addTemp()">+ <span id="lblAddTemp">เพิ่มผู้ปฏิบัติงานชั่วคราว / ยืมตัว</span></button>
+        </div>
+      </div>
+
+      <!-- ===== STEP 2: weather + plan + result ===== -->
+      <div class="step" data-step="2">
+        <div class="section">
+          <div class="label" id="lblWeather">สภาพอากาศ</div>
+          <div class="chips" id="weatherChips">
+            <button type="button" class="chip" data-w="sun" onclick="pickWeather('sun')"><span class="ic">☀️</span><span class="tt" data-wl="sun">แดด</span></button>
+            <button type="button" class="chip" data-w="cloudy" onclick="pickWeather('cloudy')"><span class="ic">⛅</span><span class="tt" data-wl="cloudy">มีเมฆ</span></button>
+            <button type="button" class="chip" data-w="rainy" onclick="pickWeather('rainy')"><span class="ic">🌧️</span><span class="tt" data-wl="rainy">ฝน</span></button>
+            <button type="button" class="chip" data-w="heavy_rain" onclick="pickWeather('heavy_rain')"><span class="ic">⛈️</span><span class="tt" data-wl="heavy_rain">ฝนหนัก</span></button>
+            <button type="button" class="chip" data-w="storm" onclick="pickWeather('storm')"><span class="ic">🌪️</span><span class="tt" data-wl="storm">พายุ</span></button>
+          </div>
+          <label class="pchk" style="margin-top:9px" id="weatherImpactWrap">
+            <input type="checkbox" id="weatherImpact"><span id="lblWeatherImpact">มีผลกระทบต่อการทำงาน</span>
+          </label>
+        </div>
+        <div class="section">
+          <div class="label" id="lblPlan">แผนงานวันนี้</div>
+          <div class="hint" id="hintPlan">ดึงจากงานที่มอบหมายไว้ แก้ไขได้ถ้าหน้างานเปลี่ยน</div>
+          <textarea id="workPlan" placeholder="" oninput="autoGrow(this)"></textarea>
+        </div>
+        <div class="section">
+          <div class="label" id="lblResult">ผลการทำงานวันนี้ *</div>
+          <textarea id="workResult" placeholder="" oninput="autoGrow(this)"></textarea>
+        </div>
+      </div>
+
+      <!-- ===== STEP 3: progress + problems ===== -->
+      <div class="step" data-step="3">
+        <div class="section">
+          <div class="label" id="lblProgress">ความคืบหน้าของงานวันนี้</div>
+          <div class="progwrap">
+            <div class="progtop">
+              <span style="font-size:11px;color:var(--muted)" id="lblProgToday">คืบหน้าวันนี้</span>
+              <span class="progval"><span id="progNum">0</span>%</span>
+            </div>
+            <input type="range" id="progRange" min="0" max="100" step="5" value="0" oninput="onProg(this.value)">
+            <div class="progquick">
+              <button type="button" class="qbtn" onclick="setProg(25)">0–25%</button>
+              <button type="button" class="qbtn" onclick="setProg(50)">26–50%</button>
+              <button type="button" class="qbtn" onclick="setProg(75)">51–75%</button>
+              <button type="button" class="qbtn" onclick="setProg(90)">76–99%</button>
+              <button type="button" class="qbtn" onclick="setProg(100)">100%</button>
+            </div>
+          </div>
+        </div>
+        <div class="section">
+          <div class="label" id="lblProblem">ปัญหาหน้างาน</div>
+          <div class="pgrid" id="problemGrid">
+            <label class="pchk noprob"><input type="checkbox" id="noProblem" onchange="onNoProblem()"><span id="lblNoProb">ไม่มีปัญหา</span></label>
+          </div>
+          <div id="problemDetailWrap" class="hide" style="margin-top:9px">
+            <div class="field"><span class="field-label" id="lblProbDetail">รายละเอียดปัญหา</span><textarea id="problemDetail"></textarea></div>
+            <div class="field"><span class="field-label" id="lblSolution">วิธีการแก้ไข *</span><textarea id="solution"></textarea></div>
           </div>
         </div>
       </div>
 
-      <!-- F. problems -->
-      <div class="section">
-        <div class="label" id="lblProblem">ปัญหาหน้างาน</div>
-        <div class="pgrid" id="problemGrid">
-          <label class="pchk noprob"><input type="checkbox" id="noProblem" onchange="onNoProblem()"><span id="lblNoProb">ไม่มีปัญหา</span></label>
+      <!-- ===== STEP 4: next day + photos ===== -->
+      <div class="step" data-step="4">
+        <div class="section">
+          <div class="label" id="lblNext">แผนงานวันถัดไป *</div>
+          <div class="field"><span class="field-label" id="lblNextDate">วันที่</span><input type="date" id="nextDate"></div>
+          <div id="taskRows"></div>
+          <button class="addbtn" onclick="addTask()">+ <span id="lblAddTask">เพิ่มงาน</span></button>
         </div>
-        <div id="problemDetailWrap" class="hide" style="margin-top:9px">
-          <div class="field"><span class="field-label" id="lblProbDetail">รายละเอียดปัญหา</span><textarea id="problemDetail"></textarea></div>
-          <div class="field"><span class="field-label" id="lblSolution">วิธีการแก้ไข *</span><textarea id="solution"></textarea></div>
-        </div>
-      </div>
-
-      <!-- G. next day -->
-      <div class="section">
-        <div class="label" id="lblNext">แผนงานวันถัดไป *</div>
-        <div class="field"><span class="field-label" id="lblNextDate">วันที่</span><input type="date" id="nextDate"></div>
-        <div id="taskRows"></div>
-        <button class="addbtn" onclick="addTask()">+ <span id="lblAddTask">เพิ่มงาน</span></button>
-      </div>
-
-      <!-- H. photos -->
-      <div class="section">
-        <div class="label" id="lblPhotos">รูปหน้างาน</div>
-        <div class="hint" id="hintPhotos">ถ่ายรูปหรือเลือกจากคลังภาพ (ย่อขนาดอัตโนมัติ)</div>
-        <div class="photobtns">
-          <button type="button" class="pbtn" onclick="pickPhoto()"><span class="ic">📷</span><span id="lblAddPhoto">เพิ่มรูป / ถ่ายรูป</span></button>
-        </div>
-        <input type="file" id="photoInput" accept="image/*" multiple class="hide">
-        <div class="photogrid" id="photoGrid"></div>
-      </div>
-
-      <div class="divider"></div>
-
-      <!-- I. signature (auto) -->
-      <div class="section">
-        <div class="label" id="lblSign">ผู้จัดทำรายงาน (ลงชื่ออัตโนมัติ)</div>
-        <div class="signbox">
-          <div class="signname" id="signName">—</div>
-          <div class="signmeta" id="signMeta"></div>
-          <div class="signlock">🔒 <span id="lblSignLock">ลงชื่อดิจิทัลผ่านระบบ LINE เมื่อกดบันทึก</span></div>
+        <div class="section">
+          <div class="label" id="lblPhotos">รูปหน้างาน</div>
+          <div class="hint" id="hintPhotos">ถ่ายรูปหรือเลือกจากคลังภาพ (ย่อขนาดอัตโนมัติ)</div>
+          <div class="photobtns">
+            <button type="button" class="pbtn" onclick="pickPhoto()"><span class="ic">📷</span><span id="lblAddPhoto">เพิ่มรูป / ถ่ายรูป</span></button>
+          </div>
+          <input type="file" id="photoInput" accept="image/*" multiple class="hide">
+          <div class="photogrid" id="photoGrid"></div>
         </div>
       </div>
 
-      <button class="submit" id="btnSubmit" onclick="doSubmit()">💾 <span id="lblSubmit">บันทึก & ลงเวลาออก</span></button>
-      <div class="footer" id="txtFooter">การบันทึกรายงานถือเป็นการลงเวลาออกงานของหัวหน้าทีม</div>
+      <!-- ===== STEP 5: review + signature ===== -->
+      <div class="step" data-step="5">
+        <div class="section">
+          <div class="label" id="lblReview">ตรวจทานก่อนส่ง</div>
+          <div class="infobox" id="reviewBox"></div>
+        </div>
+        <div class="section">
+          <div class="label" id="lblSign">ผู้จัดทำรายงาน (ลงชื่ออัตโนมัติ)</div>
+          <div class="signbox">
+            <div class="signname" id="signName">—</div>
+            <div class="signmeta" id="signMeta"></div>
+            <div class="signlock">🔒 <span id="lblSignLock">ลงชื่อดิจิทัลผ่านระบบ LINE เมื่อกดบันทึก</span></div>
+          </div>
+        </div>
+        <div class="footer" id="txtFooter">การบันทึกรายงานถือเป็นการลงเวลาออกงานของหัวหน้าทีม</div>
+      </div>
+
+      <!-- step navigation -->
+      <div class="stepnav">
+        <button type="button" class="nav-back" id="navBack" onclick="prevStep()">← <span id="lblBack">ย้อนกลับ</span></button>
+        <button type="button" class="nav-next" id="navNext" onclick="nextStep()"><span id="lblNextBtn">ถัดไป</span> →</button>
+      </div>
     </div>
 
     <!-- success screen -->
@@ -343,7 +385,12 @@ const L = {
     idErr:"ยืนยันตัวตนกับ LINE ไม่สำเร็จ", srvErr:"เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr:"เกิดข้อผิดพลาด",
     noCfg:"ยังไม่ได้ตั้งค่า LIFF ID สำหรับรายงานประจำวัน", login:"กำลังเข้าสู่ระบบผ่าน LINE...",
     okTitle:"บันทึกรายงานเรียบร้อย", okCheckout:"ลงเวลาออกงานแล้ว", viewLater:"ดูรายงานย้อนหลังได้ในแอป HRMS", back:"กลับหน้าลงเวลา",
-    savedNext:"สร้างงานวันพรุ่งนี้ให้แล้ว", photosSaved:"รูปที่บันทึก"
+    savedNext:"สร้างงานวันพรุ่งนี้ให้แล้ว", photosSaved:"รูปที่บันทึก",
+    nextBtn:"ถัดไป", backBtn:"ย้อนกลับ", stepOf:"ขั้นที่",
+    stTitle:{1:"กำลังคนวันนี้",2:"สภาพอากาศ & แผนงาน",3:"ความคืบหน้า & ปัญหา",4:"แผนวันถัดไป & รูปหน้างาน",5:"ตรวจทาน & ลงชื่อ"},
+    stCap:{1:"กำลังคน",2:"แผนงาน",3:"ปัญหา",4:"วันถัดไป",5:"ยืนยัน"},
+    stSub:{1:"เลือกคนที่มาทำงานจริงวันนี้",2:"สภาพอากาศ แผน และผลงานวันนี้",3:"เปอร์เซ็นต์งาน และปัญหาหน้างาน",4:"งานพรุ่งนี้ และรูปหน้างาน",5:"ตรวจสอบก่อนบันทึก & ลงเวลาออก"},
+    review:"ตรวจทานก่อนส่ง", rvNone:"—", rvNoProblem:"ไม่มีปัญหา", rvHasProblem:"มีปัญหา", rvTaskCount:"งานวันถัดไป", rvPhotoCount:"รูปแนบ", rvItems:"รายการ", rvImgs:"รูป"
   },
   mm:{
     subtitle:"နေ့စဉ်လုပ်ငန်းခွင်အစီရင်ခံစာ · အကြီးအကဲ", group:"အဖွဲ့/စီမံကိန်း ရွေးပါ",
@@ -371,7 +418,12 @@ const L = {
     idErr:"LINE အတည်မပြုနိုင်ပါ", srvErr:"ဆာဗာတုံ့ပြန်မှုမှား", genErr:"အမှားဖြစ်ပွား",
     noCfg:"အစီရင်ခံရန် LIFF ID မသတ်မှတ်ရသေးပါ", login:"LINE ဖြင့် ဝင်နေသည်...",
     okTitle:"အစီရင်ခံစာ သိမ်းပြီးပါပြီ", okCheckout:"ထွက်ချိန်မှတ်ပြီး", viewLater:"HRMS app တွင် ပြန်ကြည့်နိုင်သည်", back:"ချိန်မှတ်သို့ပြန်",
-    savedNext:"မနက်ဖြန်အလုပ် ဖန်တီးပြီး", photosSaved:"သိမ်းသောပုံ"
+    savedNext:"မနက်ဖြန်အလုပ် ဖန်တီးပြီး", photosSaved:"သိမ်းသောပုံ",
+    nextBtn:"ရှေ့သို့", backBtn:"နောက်သို့", stepOf:"အဆင့်",
+    stTitle:{1:"ယနေ့လူအင်အား",2:"ရာသီဥတု & အစီအစဉ်",3:"တိုးတက်မှု & ပြဿနာ",4:"နောက်ရက် & ဓာတ်ပုံ",5:"စစ်ဆေး & လက်မှတ်"},
+    stCap:{1:"လူအင်အား",2:"အစီအစဉ်",3:"ပြဿနာ",4:"နောက်ရက်",5:"အတည်ပြု"},
+    stSub:{1:"ယနေ့အမှန်တကယ်လာသူ ရွေးပါ",2:"ရာသီဥတု၊ အစီအစဉ် နှင့် ယနေ့လုပ်ဆောင်ချက်",3:"အလုပ်ရာခိုင်နှုန်း နှင့် လုပ်ငန်းခွင်ပြဿနာ",4:"မနက်ဖြန်အလုပ် နှင့် ဓာတ်ပုံ",5:"သိမ်း & ထွက်ချိန်မမှတ်မီ စစ်ဆေးပါ"},
+    review:"မသိမ်းမီ စစ်ဆေးပါ", rvNone:"—", rvNoProblem:"ပြဿနာမရှိ", rvHasProblem:"ပြဿနာရှိ", rvTaskCount:"နောက်ရက်အလုပ်", rvPhotoCount:"ပုံ", rvItems:"ခု", rvImgs:"ပုံ"
   }
 };
 const PROBLEM_KEYS = ["material_not_ready","material_incomplete","drawing_change","site_not_ready","owner_absent","other_delay","tools_not_ready","weather","manpower_short","other"];
@@ -385,6 +437,8 @@ let progress = 0;
 let weather = null;
 let photos = [];       // {type, dataUrl}
 let tempCounter = 0;
+let curStep = 1;
+const TOTAL_STEPS = 5;
 
 /* ===== boot ===== */
 const statusBox = document.getElementById("statusBox");
@@ -412,7 +466,9 @@ function applyStaticText(){
   setTxt("lblNext","next"); setTxt("lblNextDate","nextDate"); setTxt("lblAddTask","addTask");
   setTxt("lblPhotos","photos"); setTxt("hintPhotos","hintPhotos"); setTxt("lblAddPhoto","addPhoto");
   setTxt("lblSign","sign"); setTxt("lblSignLock","signLock");
-  setTxt("lblSubmit","submit"); setTxt("txtFooter","footer");
+  setTxt("txtFooter","footer");
+  setTxt("lblReview","review");
+  if(document.getElementById("navBack")) updateNav();
   document.getElementById("workResult").placeholder = t("resultPh");
   document.querySelectorAll("[data-wl]").forEach(el=>{ el.textContent = t("wl")[el.getAttribute("data-wl")]; });
   document.querySelectorAll("[data-pl]").forEach(el=>{ el.textContent = t("pl")[el.getAttribute("data-pl")]; });
@@ -430,6 +486,87 @@ function onNoProblem(){
   document.querySelectorAll("#problemGrid .pbox").forEach(cb=>{ if(no){ cb.checked=false; } cb.closest(".pchk").style.opacity = no?".4":"1"; cb.disabled = no; });
 }
 function anyProblemChecked(){ return [...document.querySelectorAll("#problemGrid .pbox")].some(cb=>cb.checked); }
+
+/* ===== step wizard ===== */
+function renderStepper(){
+  const wrap = document.getElementById("stepper");
+  let html = "";
+  for(let i=1;i<=TOTAL_STEPS;i++){
+    const cls = i===curStep ? "active" : (i<curStep ? "done" : "");
+    html += '<div class="sd '+cls+'"><div class="bar"></div>'+
+            '<div class="dot">'+(i<curStep?"✓":i)+'</div>'+
+            '<div class="cap">'+esc(t("stCap")[i])+'</div></div>';
+  }
+  wrap.innerHTML = html;
+  document.getElementById("stepTitle").innerHTML =
+    esc(t("stepOf"))+" "+curStep+"/"+TOTAL_STEPS+" · "+esc(t("stTitle")[curStep])+
+    '<small>'+esc(t("stSub")[curStep])+'</small>';
+}
+function updateNav(){
+  const back = document.getElementById("navBack");
+  const next = document.getElementById("navNext");
+  back.classList.toggle("hide", curStep===1);
+  if(curStep===TOTAL_STEPS){
+    next.innerHTML = '💾 <span id="lblNextBtn">'+esc(t("submit"))+'</span>';
+  }else{
+    next.innerHTML = '<span id="lblNextBtn">'+esc(t("nextBtn"))+'</span> →';
+  }
+  document.getElementById("lblBack").textContent = t("backBtn");
+}
+function goStep(n){
+  n = Math.max(1, Math.min(TOTAL_STEPS, n));
+  curStep = n;
+  document.querySelectorAll(".step").forEach(s=>{
+    s.classList.toggle("on", Number(s.getAttribute("data-step"))===n);
+  });
+  renderStepper();
+  updateNav();
+  if(n===TOTAL_STEPS) renderReview();
+  hideStatus();
+  try{ document.querySelector(".card").scrollIntoView({block:"start",behavior:"smooth"}); }catch(e){ window.scrollTo(0,0); }
+}
+function validateStep(n){
+  if(n===2){
+    if(!document.getElementById("workResult").value.trim()) return t("needResult");
+  }else if(n===3){
+    const noProb = document.getElementById("noProblem").checked;
+    if(!noProb && !anyProblemChecked()) return t("needProblem");
+    if(!noProb && anyProblemChecked() && !document.getElementById("solution").value.trim()) return t("needSolution");
+  }else if(n===4){
+    let has = false;
+    document.querySelectorAll("#taskRows .taskrow").forEach(r=>{
+      if(r.querySelector(".z").value.trim() || r.querySelector(".t").value.trim()) has = true;
+    });
+    if(!has) return t("needNext");
+  }
+  return null;
+}
+function nextStep(){
+  const err = validateStep(curStep);
+  if(err){ showStatus("⚠️ "+err, "err"); try{document.querySelector(".card").scrollIntoView({block:"start",behavior:"smooth"});}catch(e){} return; }
+  if(curStep < TOTAL_STEPS){ goStep(curStep+1); }
+  else{ doSubmit(); }
+}
+function prevStep(){ if(curStep>1) goStep(curStep-1); }
+function renderReview(){
+  const box = document.getElementById("reviewBox");
+  const man = document.getElementById("manCount").textContent;
+  const wLabel = weather ? t("wl")[weather] : t("rvNone");
+  const wImpact = document.getElementById("weatherImpact").checked ? " ⚠️" : "";
+  const noProb = document.getElementById("noProblem").checked;
+  const probCount = [...document.querySelectorAll("#problemGrid .pbox")].filter(c=>c.checked).length;
+  const probTxt = noProb ? t("rvNoProblem") : (probCount>0 ? t("rvHasProblem")+" ("+probCount+")" : t("rvNone"));
+  let taskCount = 0;
+  document.querySelectorAll("#taskRows .taskrow").forEach(r=>{ if(r.querySelector(".z").value.trim()||r.querySelector(".t").value.trim()) taskCount++; });
+  box.innerHTML =
+    rvrow(t("manpower"), man+" "+t("ppl")) +
+    rvrow(t("weather"), wLabel+wImpact) +
+    rvrow(t("progress"), progress+"%") +
+    rvrow(t("problem"), probTxt) +
+    rvrow(t("rvTaskCount"), taskCount+" "+t("rvItems")) +
+    rvrow(t("rvPhotoCount"), photos.length+" "+t("rvImgs"));
+}
+function rvrow(k,v){ return '<div class="rvrow"><span class="k">'+esc(k)+'</span><span class="v">'+esc(v)+'</span></div>'; }
 
 /* ===== members ===== */
 function recount(){
@@ -533,6 +670,7 @@ function renderGroup(){
   document.getElementById("signName").textContent = emp.name;
   document.getElementById("signMeta").textContent = (emp.position?emp.position+" · ":"") + fmtDate(CTX.work_date);
   recount();
+  goStep(1);
 }
 function row(k,v){ return '<div class="inforow"><span class="k">'+esc(k)+'</span><span class="v">'+esc(v)+'</span></div>'; }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -602,12 +740,14 @@ function validate(p){
   return null;
 }
 async function doSubmit(){
-  const btn = document.getElementById("btnSubmit");
+  const btn = document.getElementById("navNext");
+  const back = document.getElementById("navBack");
   const p = collect();
   const err = validate(p);
-  if(err){ showStatus("⚠️ "+err, "err"); window.scrollTo(0,0); return; }
-  btn.disabled = true;
-  showStatus("⏳ "+t("busy"), "info"); window.scrollTo(0,0);
+  if(err){ showStatus("⚠️ "+err, "err"); try{document.querySelector(".card").scrollIntoView({block:"start",behavior:"smooth"});}catch(e){} return; }
+  btn.disabled = true; back.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>'+esc(t("busy"));
+  showStatus("⏳ "+t("busy"), "info");
   try{
     if(!liff.isLoggedIn()){ liff.login(); return; }
     const res = await fetch(SUBMIT_URL, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(p)});
@@ -616,7 +756,8 @@ async function doSubmit(){
     showSuccess(json, p);
   }catch(e){
     showStatus("⚠️ "+e.message, "err");
-    btn.disabled = false;
+    btn.disabled = false; back.disabled = false;
+    updateNav();
   }
 }
 function showSuccess(json, p){
