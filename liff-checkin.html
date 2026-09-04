@@ -112,6 +112,16 @@
 
   /* ===== paper form (พรีวิวรายงาน + สร้าง PDF) — [รอบ 17.7] รื้อใหม่เป็นกล่อง (box) ทุก section ให้ตรงฟอร์มมาตรฐานงานก่อสร้าง ===== */
   .offscreen{position:fixed;left:-99999px;top:0;z-index:-1}
+  /* [รอบ 17.10] แผ่นเลือกรูปแบบไฟล์แชร์ */
+  .fmt-sheet{position:fixed;inset:0;background:rgba(5,8,14,.55);z-index:90;display:flex;align-items:flex-end;justify-content:center}
+  .fmt-sheet.hide{display:none}
+  .fmt-card{background:#fff;width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -8px 30px rgba(0,0,0,.2);animation:fsheetUp .22s ease}
+  @keyframes fsheetUp{from{transform:translateY(30px);opacity:.4}to{transform:translateY(0);opacity:1}}
+  .fmt-title{font-size:14px;font-weight:700;text-align:center;color:#41495a;margin:2px 0 12px}
+  .fmt-opt{width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;border:1.4px solid #dfe3ea;border-radius:12px;background:#fff;font-size:15px;font-weight:600;color:#1c2333;margin-bottom:10px;cursor:pointer}
+  .fmt-opt:active{background:#f4f6fa}
+  .fmt-ic{font-size:20px}
+  .fmt-cancel{width:100%;padding:12px;border:0;background:transparent;color:#8b94a7;font-size:14px;cursor:pointer}
   .paper{width:780px;background:#fff;color:#1c2333;font-family:"Noto Sans Thai","Sora",sans-serif;font-size:12px;line-height:1.55}
   .paper .p-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:16px 22px;border-bottom:3px solid #f7941d}
   .paper .p-head-left{display:flex;align-items:center;gap:12px;min-width:0}
@@ -174,7 +184,7 @@
     <div class="brand">
       <div class="logo">H</div>
       <div>
-        <h1 id="companyName">HRMS CENTER</h1>
+        <h1 id="companyName">Aluminium Glass PRO</h1>
         <div class="sub" id="txtSubtitle">ลงเวลาเข้า-ออกงานผ่าน LINE · ยืนยันตำแหน่งด้วย GPS</div>
       </div>
     </div>
@@ -213,10 +223,20 @@
     <div class="mtop">
       <button class="mclose" onclick="closeReport()" id="txtBtnClose">ปิด</button>
       <button class="mzoom" onclick="toggleZoom()" id="btnZoom">🔍</button>
-      <button class="mpdf" id="btnPdf" onclick="shareReportPdf()">📤 <span id="txtBtnPdf">บันทึก / แชร์ PDF</span></button>
+      <button class="mpdf" id="btnPdf" onclick="shareReportPdf()">📤 <span id="txtBtnPdf">บันทึก / แชร์</span></button>
     </div>
     <div class="mtitle" id="reportPick"></div>
     <div class="mbody" id="reportBody"></div>
+  </div>
+
+  <!-- [รอบ 17.10] เลือกแชร์เป็น PDF หรือ PNG -->
+  <div id="fmtSheet" class="fmt-sheet hide" onclick="if(event.target===this)closeShareChooser()">
+    <div class="fmt-card">
+      <div class="fmt-title" id="fmtTitle">เลือกรูปแบบไฟล์ที่จะแชร์</div>
+      <button class="fmt-opt" onclick="doShareReport('pdf')"><span class="fmt-ic">📄</span><span id="fmtPdf">แชร์เป็นไฟล์ PDF</span></button>
+      <button class="fmt-opt" onclick="doShareReport('png')"><span class="fmt-ic">🖼️</span><span id="fmtPng">แชร์เป็นรูปภาพ PNG</span></button>
+      <button class="fmt-cancel" onclick="closeShareChooser()" id="fmtCancel">ยกเลิก</button>
+    </div>
   </div>
 
 <script>
@@ -230,7 +250,7 @@ const REPORT_VIEW_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/l
 // [รอบ 17.7] อัปโหลด PDF ที่สร้างเสร็จ -> เก็บใน Storage -> คืน https URL จริง (แก้บั๊ก "Unable to open URL" ที่เกิดจาก window.open(blob:) ในเบราว์เซอร์ LINE)
 const PDF_UPLOAD_URL = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1/liff-report-pdf";
 // โลโก้สำรอง (ตรา AG ออกแบบใหม่คมชัด) — ใช้ก็ต่อเมื่อยังไม่มีโลโก้จริงตั้งค่าไว้ใน ตั้งค่าระบบ → settings.company_logo (liff-report-view จะส่ง company_logo มาให้ถ้ามี)
-let RPT_CO_TH = null;  // ชื่อบริษัทภาษาไทย ถ้ามี
+let RPT_CO_TH = "บริษัท อลูมิเนียม กลาส โปร จำกัด";  // ชื่อบริษัทภาษาไทย — โหลดจาก report-view ทับถ้ามีในระบบ
 // ส่งภาษาที่เลือกไปบันทึกไว้กับพนักงาน + ผูก Rich Menu ให้ตรงภาษาทันที — best effort เงียบๆ ถ้ายังไม่ได้ login
 function syncLangToServer(x){
   try{
@@ -255,7 +275,8 @@ const L = {
     noCfg: "ยังไม่ได้ตั้งค่า LIFF ID — แจ้งผู้ดูแลระบบตั้งค่าที่ ตั้งค่าระบบ → ช่องทางแจ้งเตือน",
     loginLine: "กำลังเข้าสู่ระบบผ่าน LINE...",
     leaveSoon: "ยื่นใบลาผ่าน LINE จะเปิดใช้เร็วๆ นี้ — ระหว่างนี้ยื่นผ่านแอป HRMS ได้",
-    btnReport: "ดูรายงานประจำวันวันนี้", btnClose: "ปิด", btnPdf: "บันทึก / แชร์ PDF",
+    btnReport: "ดูรายงานประจำวันวันนี้", btnClose: "ปิด", btnPdf: "บันทึก / แชร์",
+    chooseFmt:"เลือกรูปแบบไฟล์ที่จะแชร์", shareAsPdf:"แชร์เป็นไฟล์ PDF", shareAsPng:"แชร์เป็นรูปภาพ PNG", cancel:"ยกเลิก",
     rptLoading: "กำลังเปิดรายงาน...", rptErr: "เปิดรายงานไม่สำเร็จ",
     pdfBusy: "กำลังสร้างไฟล์ PDF...", pdfErr: "สร้างไฟล์ PDF ไม่สำเร็จ",
     docTitle: "รายงานประจำวันหน้างาน", docNo: "เลขที่รายงาน", docMan: "กำลังคน",
@@ -279,7 +300,8 @@ const L = {
     noCfg: "LIFF ID မသတ်မှတ်ရသေးပါ — စီမံခန့်ခွဲသူကို အသိပေးပါ",
     loginLine: "LINE မှတစ်ဆင့် ဝင်ရောက်နေသည်...",
     leaveSoon: "LINE မှ ခွင့်တင်ခြင်းကို မကြာမီ ဖွင့်ပါမည် — ယခုအတွက် HRMS app မှ တင်ပါ",
-    btnReport: "ယနေ့အစီရင်ခံစာ ကြည့်ရန်", btnClose: "ပိတ်", btnPdf: "PDF သိမ်း / မျှဝေ",
+    btnReport: "ယနေ့အစီရင်ခံစာ ကြည့်ရန်", btnClose: "ပိတ်", btnPdf: "သိမ်း / မျှဝေ",
+    chooseFmt:"မျှဝေမည့် ဖိုင်အမျိုးအစား ရွေးပါ", shareAsPdf:"PDF ဖိုင် မျှဝေ", shareAsPng:"PNG ပုံ မျှဝေ", cancel:"ပယ်ဖျက်",
     rptLoading: "အစီရင်ခံစာ ဖွင့်နေသည်...", rptErr: "အစီရင်ခံစာ မဖွင့်နိုင်ပါ",
     pdfBusy: "PDF ဖိုင် ဖန်တီးနေသည်...", pdfErr: "PDF မဖန်တီးနိုင်ပါ",
     docTitle: "နေ့စဉ်လုပ်ငန်းခွင် အစီရင်ခံစာ", docNo: "အစီရင်ခံစာနံပါတ်", docMan: "လူအင်အား",
@@ -410,7 +432,7 @@ async function doAction(action){
 /* ================= รายงานประจำวัน: ดูเป็นภาพฟอร์ม + แชร์ PDF ================= */
 let TODAY_REPORTS = [];   // รายงานของวันนี้ที่ผู้ใช้ (หัวหน้าทีม) บันทึกไว้แล้ว
 let CUR_RPT = null;       // รายงานที่กำลังเปิดดู
-let RPT_COMPANY = "HRMS CENTER";
+let RPT_COMPANY = "Aluminium Glass PRO";
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function fmtDateTh(iso){
@@ -435,7 +457,7 @@ async function checkTodayReport(){
     if(json && Array.isArray(json.reports) && json.reports.length){
       TODAY_REPORTS = json.reports;
       RPT_COMPANY = json.company_name || RPT_COMPANY;
-      RPT_CO_TH = json.company_name_thai || null;
+      RPT_CO_TH = json.company_name_thai || RPT_CO_TH;
       document.getElementById("btnReport").style.display = "block";
     }else{
       TODAY_REPORTS = [];
@@ -616,23 +638,40 @@ function printFallback(r){
   w.document.close();
   return true;
 }
+// [รอบ 17.10] รองรับแชร์ทั้ง PDF และ PNG — ผู้ใช้เลือกได้เอง
+async function makePngBlob(r){
+  await ensurePdfLibs();
+  const host = document.createElement("div");
+  host.className = "offscreen";
+  host.innerHTML = paperHtml(r);
+  document.body.appendChild(host);
+  try{
+    const canvas = await window.html2canvas(host.firstChild, { scale:2, backgroundColor:"#ffffff", useCORS:true, logging:false });
+    return await new Promise(res=>canvas.toBlob(res, "image/png"));
+  } finally { host.remove(); }
+}
 // [รอบ 17.7] เดิมเปิด blob: URL ตรงๆ ด้วย window.open() ซึ่งเบราว์เซอร์ในแอป LINE เปิดไม่ได้
-// (ขึ้น "Unable to open URL due to an unexpected error") -> อัปโหลด PDF ขึ้น Storage ก่อนเสมอ ได้ https URL จริงมาเปิด/แชร์แทน
-let PDF_URL_CACHE = null; // {key, url}
-async function getPdfUrl(r){
+// (ขึ้น "Unable to open URL due to an unexpected error") -> อัปโหลดขึ้น Storage ก่อนเสมอ ได้ https URL จริงมาเปิด/แชร์แทน
+let FILE_URL_CACHE = {}; // { "<key>|pdf": url, "<key>|png": url }
+async function getFileUrl(r, fmt){
+  fmt = (fmt === "png") ? "png" : "pdf";
   const key = r.report_no || r.work_date || "report";
-  if(PDF_URL_CACHE && PDF_URL_CACHE.key === key) return PDF_URL_CACHE.url;
+  const ck = key + "|" + fmt;
+  if(FILE_URL_CACHE[ck]) return FILE_URL_CACHE[ck];
   await preparePhotos(r);
-  const blob = await makePdfBlob(r);
+  const blob = fmt === "png" ? await makePngBlob(r) : await makePdfBlob(r);
   const idToken = liff.getIDToken && liff.getIDToken();
   const res = await fetch(PDF_UPLOAD_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/pdf", "x-id-token": idToken, "x-report-no": key },
+    headers: {
+      "Content-Type": fmt === "png" ? "image/png" : "application/pdf",
+      "x-id-token": idToken, "x-report-no": key, "x-file-ext": fmt
+    },
     body: blob
   });
   const json = await res.json().catch(()=>({}));
   if(!res.ok || json.error || !json.url) throw new Error(json.error || t("pdfErr"));
-  PDF_URL_CACHE = { key, url: json.url };
+  FILE_URL_CACHE[ck] = json.url;
   return json.url;
 }
 function inLineClient(){ try{ return typeof liff!=="undefined" && liff.isInClient && liff.isInClient(); }catch(e){ return false; } }
@@ -640,14 +679,26 @@ function openExternal(url){
   if(inLineClient()){ try{ liff.openWindow({ url, external:true }); return; }catch(e){} }
   window.open(url, "_blank");
 }
-async function shareReportPdf(){
+// ปุ่ม "แชร์" -> เปิดแผ่นเลือกรูปแบบ (PDF / PNG) ก่อน
+function shareReportPdf(){
   if(!CUR_RPT) return;
+  document.getElementById("fmtTitle").textContent = t("chooseFmt");
+  document.getElementById("fmtPdf").textContent = t("shareAsPdf");
+  document.getElementById("fmtPng").textContent = t("shareAsPng");
+  document.getElementById("fmtCancel").textContent = t("cancel");
+  document.getElementById("fmtSheet").classList.remove("hide");
+}
+function closeShareChooser(){ document.getElementById("fmtSheet").classList.add("hide"); }
+async function doShareReport(fmt){
+  if(!CUR_RPT) return;
+  closeShareChooser();
   const btn = document.getElementById("btnPdf");
   const old = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'+t("pdfBusy");
   try{
-    const url = await getPdfUrl(CUR_RPT);
+    const url = await getFileUrl(CUR_RPT, fmt);
     const title = t("docTitle")+" "+(CUR_RPT.report_no||"");
+    const openLabel = fmt === "png" ? t("shareAsPng") : t("btnPdf");
     let shared = false;
     // ทางเลือกที่ 1: liff.shareTargetPicker -> แชร์เป็นการ์ดจริงเข้าแชท LINE ได้โดยไม่ต้องออกจากแอป
     if(typeof liff!=="undefined" && liff.isApiAvailable && liff.isApiAvailable("shareTargetPicker")){
@@ -656,12 +707,13 @@ async function shareReportPdf(){
         await liff.shareTargetPicker([{
           type: "flex", altText: title,
           contents: { type:"bubble",
+            hero: fmt === "png" ? { type:"image", url, size:"full", aspectRatio:"3:4", aspectMode:"cover", action:{ type:"uri", uri:url } } : undefined,
             body: { type:"box", layout:"vertical", spacing:"sm", contents:[
               { type:"text", text:"📋 "+title, weight:"bold", size:"md", wrap:true },
               { type:"text", text:(CUR_RPT.project_name||"")+(CUR_RPT.group_name?" · "+CUR_RPT.group_name:""), size:"sm", color:"#8b94a7", wrap:true }
             ]},
             footer: { type:"box", layout:"vertical", contents:[
-              { type:"button", style:"primary", color:"#f7941d", action:{ type:"uri", label:t("btnPdf"), uri:url } }
+              { type:"button", style:"primary", color:"#f7941d", action:{ type:"uri", label:openLabel, uri:url } }
             ]}
           }
         }]);
@@ -674,7 +726,8 @@ async function shareReportPdf(){
     // ทางเลือกสุดท้าย: เปิดลิงก์จริงในเบราว์เซอร์ระบบ ให้ผู้ใช้กดแชร์/ดาวน์โหลดเองจากเมนูเบราว์เซอร์
     if(!shared){ openExternal(url); }
   }catch(e){
-    if(!printFallback(CUR_RPT)) alert(t("pdfErr"));
+    if(fmt !== "png" && printFallback(CUR_RPT)){ /* เปิดหน้าปริ้นต์ให้แทน */ }
+    else alert(e.message || t("pdfErr"));
   }
   finally{ btn.disabled = false; btn.innerHTML = old; }
 }

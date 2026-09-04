@@ -239,6 +239,15 @@ th.num{text-align:right}
 body.dr-capturing .dr-fullpage-body{overflow:visible!important;height:auto!important}
 body.dr-capturing .dr-fullpage{height:auto!important;min-height:100%!important}
 
+/* [รอบ 17.9] กล่องแชร์ PDF — ต้อง z-index สูงกว่า .dr-fullpage (70) เพราะ modal กลางของแอปอยู่ที่ 50 จะโดนหน้าเต็มจอบัง */
+.dr-share-bg{position:fixed;inset:0;background:rgba(22,27,38,.55);display:none;place-items:center;z-index:90;padding:20px}
+.dr-share-bg.show{display:grid}
+.dr-share{background:#fff;border-radius:16px;max-width:430px;width:100%;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.28);animation:fadeUp .2s ease}
+.dr-share h4{margin:0;font-size:15.5px}
+.dr-share .lnk{width:100%;font-size:11px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#f8f9fc;margin-top:10px;color:#41495a}
+.dr-share .opts{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.dr-share .opts .btn{width:100%;text-align:left;justify-content:flex-start}
+
 .paper{width:100%;max-width:820px;background:#fff;color:#1c2333;font-family:"Noto Sans Thai","Prompt",sans-serif;font-size:12.5px;line-height:1.55;border-radius:10px;overflow:hidden}
 .paper .p-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:18px 24px;border-bottom:3px solid #f7941d}
 .paper .p-head-left{display:flex;align-items:center;gap:12px;min-width:0}
@@ -435,6 +444,22 @@ body.dr-capturing .dr-fullpage{height:auto!important;min-height:100%!important}
     <button class="btn sm primary" onclick="drShare()" id="drShareBtn">📤 แชร์</button>
   </div>
   <div class="dr-fullpage-body" id="drFullBody"></div>
+</div>
+
+<!-- [รอบ 17.9] กล่องแชร์ไฟล์ PDF ออกนอกเว็บแอป (LINE / คัดลอกลิงก์ / ดาวน์โหลด / อีเมล) -->
+<div class="dr-share-bg" id="drShareBg" onclick="if(event.target===this)drCloseShare()">
+  <div class="dr-share">
+    <h4>📤 แชร์รายงานเป็นไฟล์ PDF</h4>
+    <div class="hint" style="margin-top:4px" id="drShareHint">ลิงก์นี้เปิดไฟล์ PDF ได้โดยตรง ส่งต่อให้ใครก็เปิดได้ (อายุลิงก์ 7 วัน)</div>
+    <input class="lnk" id="drShareLink" readonly onclick="this.select()">
+    <div class="opts">
+      <button class="btn" onclick="drShareToLine()">💬 แชร์เข้า LINE</button>
+      <button class="btn" onclick="drCopyShareLink()">🔗 คัดลอกลิงก์ไฟล์ PDF</button>
+      <button class="btn" onclick="drDownloadPdf()">📥 ดาวน์โหลดไฟล์ PDF</button>
+      <button class="btn" onclick="drShareEmail()">✉️ ส่งทางอีเมล</button>
+    </div>
+    <div style="text-align:right;margin-top:12px"><button class="btn ghost sm" onclick="drCloseShare()">ปิด</button></div>
+  </div>
 </div>
 <script>
 /* ================== SETTINGS & CONSTANTS ================== */
@@ -8141,37 +8166,79 @@ async function drMakePdfBlob(){
   }
   return pdf.output("blob");
 }
+// [รอบ 17.9] แชร์ออกนอกเว็บแอปได้จริง — ต้องเป็น "ไฟล์ PDF" เสมอ
+// เดสก์ท็อปแชร์ไฟล์ผ่าน Web Share API ไม่ได้ (navigator.canShare({files}) = false) เลยเคยได้แค่ดาวน์โหลด
+// วิธีใหม่: อัปโหลด PDF ขึ้น Supabase Storage แล้วได้ลิงก์ https จริง (อายุ 7 วัน) เอาไปแชร์เข้า LINE/คัดลอก/ส่งอีเมลได้
+// (หลักการเดียวกับที่ใช้แก้ปัญหาเปิด PDF ไม่ได้ในแอป LINE รอบ 17.7 — คือห้ามส่ง blob: ออกไปนอกหน้าเว็บ)
+let DR_SHARE = null;  // { url, blob, name }
+const DR_PDF_TTL = 60*60*24*7;
+async function drUploadPdf(blob, fileName){
+  const ymd = (CUR_DR?.r?.work_date || todayISODate()).replace(/-/g,"");
+  const safe = fileName.replace(/[^A-Za-z0-9._-]+/g,"-");
+  const path = `pdf/${ymd}/${Date.now()}-${safe}`;
+  const up = await sb.storage.from("daily-report-photos").upload(path, blob, { contentType:"application/pdf", upsert:true });
+  if(up.error) throw new Error(up.error.message);
+  const { data, error } = await sb.storage.from("daily-report-photos").createSignedUrl(path, DR_PDF_TTL);
+  if(error || !data?.signedUrl) throw new Error(error?.message || "สร้างลิงก์ไฟล์ไม่สำเร็จ");
+  return data.signedUrl;
+}
+function drOpenShare(){
+  document.getElementById("drShareLink").value = DR_SHARE?.url || "";
+  document.getElementById("drShareBg").classList.add("show");
+}
+function drCloseShare(){ document.getElementById("drShareBg").classList.remove("show"); }
+function drShareToLine(){
+  if(!DR_SHARE) return;
+  // LINE it! — เปิดหน้าต่างเลือกเพื่อน/กลุ่มของ LINE แล้วส่งลิงก์ไฟล์ PDF ออกไป
+  window.open("https://social-plugins.line.me/lineit/share?url="+encodeURIComponent(DR_SHARE.url), "_blank", "noopener,width=560,height=680");
+}
+async function drCopyShareLink(){
+  if(!DR_SHARE) return;
+  try{ await navigator.clipboard.writeText(DR_SHARE.url); toast("คัดลอกลิงก์ไฟล์ PDF แล้ว ✓"); }
+  catch(e){ const el=document.getElementById("drShareLink"); el.select(); document.execCommand("copy"); toast("คัดลอกลิงก์แล้ว ✓"); }
+}
+function drDownloadPdf(){
+  if(!DR_SHARE) return;
+  const url = URL.createObjectURL(DR_SHARE.blob);
+  const a = document.createElement("a"); a.href = url; a.download = DR_SHARE.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 120000);
+}
+function drShareEmail(){
+  if(!DR_SHARE) return;
+  const r = CUR_DR?.r || {};
+  const subject = `รายงานประจำวันหน้างาน ${r.report_no||""} (${isoToThaiDisplay(r.work_date)})`;
+  const body = `รายงานประจำวันหน้างาน\nเลขที่: ${r.report_no||"-"}\nวันที่: ${isoToThaiDisplay(r.work_date)}\nโครงการ: ${drProjName(r)}\nทีม: ${drGroupName(r)}\n\nเปิดไฟล์ PDF ได้ที่ลิงก์นี้ (อายุ 7 วัน):\n${DR_SHARE.url}\n\n— HRMS CENTER`;
+  window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
 async function drShare(){
   if(!CUR_DR) return;
   const btn = document.getElementById("drShareBtn");
-  const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = "⏳ กำลังเตรียมไฟล์...";
+  const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = "⏳ กำลังสร้างไฟล์ PDF...";
   const name = (CUR_DR.r.report_no||"daily-report")+".pdf";
   try{
     const blob = await drMakePdfBlob();
     const file = new File([blob], name, { type:"application/pdf" });
+    // 1) มือถือ/แท็บเล็ต: แชร์ "ไฟล์ PDF" ออกไปตรงๆ ผ่านเมนูแชร์ของเครื่อง (เลือก LINE ได้เลย)
     if(navigator.canShare && navigator.canShare({ files:[file] })){
-      await navigator.share({ files:[file], title:"รายงานประจำวันหน้างาน", text:CUR_DR.r.report_no||"" });
-      return;
-    }
-    // เบราว์เซอร์ไม่รองรับแชร์ไฟล์ (เช่นเดสก์ท็อป) -> ดาวน์โหลด PDF ให้แทน
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url), 120000);
-    toast("อุปกรณ์นี้ไม่รองรับแชร์ไฟล์โดยตรง — ดาวน์โหลด PDF ให้แล้ว");
-  }catch(e){
-    // fallback สุดท้าย: แชร์เป็นรูป PNG ผ่าน Web Share API หรือคัดลอกเลขที่รายงาน
-    try{
-      const canvas = await drRenderCanvas();
-      const blob2 = await new Promise(res=>canvas.toBlob(res,"image/png"));
-      const file2 = new File([blob2], (CUR_DR.r.report_no||"report")+".png", { type:"image/png" });
-      if(navigator.canShare && navigator.canShare({ files:[file2] })){
-        await navigator.share({ files:[file2], title:"รายงานประจำวันหน้างาน", text:CUR_DR.r.report_no||"" });
+      try{
+        await navigator.share({ files:[file], title:"รายงานประจำวันหน้างาน", text:CUR_DR.r.report_no||"" });
         return;
-      }
-    }catch(e2){}
-    try{ await navigator.clipboard.writeText((CUR_DR.r.report_no||"")+" — รายงานประจำวันหน้างาน"); toast("คัดลอกเลขที่รายงานแล้ว"); }
-    catch(e3){ toast("อุปกรณ์นี้ไม่รองรับการแชร์โดยตรง"); }
+      }catch(e){ if(e && e.name==="AbortError") return; }   // ผู้ใช้กดยกเลิกเอง ไม่ต้องทำอะไรต่อ
+    }
+    // 2) เดสก์ท็อป (แชร์ไฟล์ตรงๆ ไม่ได้): อัปโหลดขึ้น storage แล้วให้ลิงก์ไฟล์ PDF จริงไปแชร์ต่อ
+    btn.innerHTML = "⏳ กำลังอัปโหลดไฟล์...";
+    const url = await drUploadPdf(blob, name);
+    DR_SHARE = { url, blob, name };
+    drOpenShare();
+  }catch(e){
+    // อัปโหลดไม่สำเร็จ (เช่นเน็ตหลุด/ยังไม่ได้ตั้งสิทธิ์ storage) — อย่างน้อยต้องได้ไฟล์ PDF ไปแชร์เองต่อ
+    try{
+      const blob = await drMakePdfBlob();
+      DR_SHARE = { url:"", blob, name };
+      drDownloadPdf();
+      toast("แชร์ลิงก์ไม่สำเร็จ ("+(e.message||"ไม่ทราบสาเหตุ")+") — ดาวน์โหลดไฟล์ PDF ให้แทนแล้ว");
+    }catch(e2){ toast("สร้างไฟล์ PDF ไม่สำเร็จ: "+(e2.message||"")); }
   }finally{ btn.disabled = false; btn.innerHTML = old; }
 }
 
@@ -8558,7 +8625,7 @@ function prjDispatch(){
       <div class="card">
         <div style="display:flex;align-items:center;gap:8px">
           <b style="font-size:14px;flex:1">👷 ${g?g.name:'ทีมที่ถูกลบ'}</b>
-          ${canManage?`<button class="btn ghost xs" onclick="sendDispatchLine('${d.id}')" title="ส่ง LINE แจ้งทีมนี้">📱</button><button class="btn ghost xs" onclick="deleteDispatch('${d.id}')">✕</button>`:''}
+          ${canManage?`<button class="btn ghost xs" onclick="openDispatchModal('${d.id}')" title="แก้ไขรายละเอียดงานที่มอบหมาย">✏️</button><button class="btn ghost xs" onclick="sendDispatchLine('${d.id}')" title="ส่ง LINE แจ้งทีมนี้">📱</button><button class="btn ghost xs" onclick="deleteDispatch('${d.id}')" title="ยกเลิกการมอบหมาย">✕</button>`:''}
         </div>
         <div class="hint" style="margin-top:2px">📁 ${p?p.name:'—'}</div>
         <div style="margin-top:8px;font-size:12.5px">
@@ -8604,55 +8671,66 @@ function sendAllDispatchLine(){
   logAudit("project", "ส่ง LINE แจ้งมอบหมายงานรายวันทั้งหมด", isoToThaiDisplay(dispatchDate));
   toast(`ส่ง LINE แจ้ง ${todays.length} ทีม (${n} คน) แล้ว ✓`);
 }
-function openDispatchModal(){
+// [รอบ 17.9] เปิดได้ 2 โหมด: ไม่ส่ง id = มอบหมายใหม่ · ส่ง id = แก้ไขรายละเอียดงานที่มอบหมายไปแล้ว
+function openDispatchModal(id){
+  const d = id ? dailyAssignments.find(x=>String(x.id)===String(id)) : null;
+  const isEdit = !!d;
   document.getElementById("modalBox").className="modal";
   document.getElementById("modalBox").innerHTML=`
-    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">📋</div>
-      <div><h3 style="font-size:16px">มอบหมายทีมประจำวัน</h3><div class="hint">${isoToThaiDisplay(dispatchDate)}</div></div>
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">${isEdit?'✏️':'📋'}</div>
+      <div><h3 style="font-size:16px">${isEdit?'แก้ไขงานที่มอบหมาย':'มอบหมายทีมประจำวัน'}</h3><div class="hint">${isoToThaiDisplay(isEdit?d.work_date:dispatchDate)}</div></div>
       <button class="mclose" onclick="closeModal()">×</button></div>
     <div class="modal-body">
       <div class="field"><label>เลือกทีม *</label>
-        <select id="dpGroup">${projectGroups.map(g=>`<option value="${g.id}">${g.name} — ${PJ(g.project_id)?.name||''}</option>`).join("")}</select>
+        <select id="dpGroup">${projectGroups.map(g=>`<option value="${g.id}" ${isEdit&&String(d.group_id)===String(g.id)?'selected':''}>${g.name} — ${PJ(g.project_id)?.name||''}</option>`).join("")}</select>
       </div>
-      <div class="field"><label>โซน / พื้นที่ทำงาน</label><input id="dpZone" placeholder="เช่น ชั้น 3 / โซน B"></div>
+      <div class="field"><label>โซน / พื้นที่ทำงาน</label><input id="dpZone" placeholder="เช่น ชั้น 3 / โซน B" value="${isEdit?esc(d.zone||''):''}"></div>
       <div class="grid" style="grid-template-columns:1fr 1fr">
-        <div class="field"><label>เวลาเริ่ม</label><input id="dpFrom" type="time" value="08:00"></div>
-        <div class="field"><label>เวลาสิ้นสุด</label><input id="dpTo" type="time" value="17:00"></div>
+        <div class="field"><label>เวลาเริ่ม</label><input id="dpFrom" type="time" value="${isEdit?(d.time_from||'').slice(0,5):'08:00'}"></div>
+        <div class="field"><label>เวลาสิ้นสุด</label><input id="dpTo" type="time" value="${isEdit?(d.time_to||'').slice(0,5):'17:00'}"></div>
       </div>
-      <div class="field"><label>รายละเอียดงาน</label><textarea id="dpNote" rows="2" placeholder="เช่น ติดตั้งกระจกโซน B"></textarea></div>
+      <div class="field"><label>รายละเอียดงาน</label><textarea id="dpNote" rows="2" placeholder="เช่น ติดตั้งกระจกโซน B">${isEdit?esc(d.task_note||''):''}</textarea></div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px 12px;background:#f8f9fc;border-radius:10px;font-size:12.5px;cursor:pointer">
-        <input type="checkbox" id="dpNotifyLine" checked> 📱 ส่ง LINE แจ้งสมาชิกทีมทันทีหลังบันทึก
+        <input type="checkbox" id="dpNotifyLine" ${isEdit?'':'checked'}> 📱 ส่ง LINE แจ้งสมาชิกทีม${isEdit?'ว่ามีการแก้ไข':'ทันทีหลังบันทึก'}
       </label>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
-      <button class="btn primary" onclick="saveDispatch()">✓ มอบหมายงาน</button>
+      <button class="btn primary" onclick="saveDispatch(${isEdit?`'${d.id}'`:'null'})">${isEdit?'💾 บันทึกการแก้ไข':'✓ มอบหมายงาน'}</button>
     </div>`;
   document.getElementById("modalBg").classList.add("show");
 }
-async function saveDispatch(){
+async function saveDispatch(id){
+  const cur = id ? dailyAssignments.find(x=>String(x.id)===String(id)) : null;
   const groupId = document.getElementById("dpGroup").value;
   const g = PG(groupId);
   if(!g){ toast("กรุณาเลือกทีม"); return; }
   const notifyLine = document.getElementById("dpNotifyLine")?.checked;
   const payload = {
-    work_date: dispatchDate, project_id: g.project_id, group_id: groupId,
+    work_date: cur ? cur.work_date : dispatchDate, project_id: g.project_id, group_id: groupId,
     zone: document.getElementById("dpZone").value.trim(),
     time_from: document.getElementById("dpFrom").value, time_to: document.getElementById("dpTo").value,
-    task_note: document.getElementById("dpNote").value.trim(), created_by: loggedInEmployeeId
+    task_note: document.getElementById("dpNote").value.trim()
   };
-  const { data, error } = await sb.from("daily_assignments").insert(payload).select();
+  let data, error;
+  if(cur){
+    // แก้ไข — ต่อ .select() เสมอเพื่อเช็คว่าอัปเดตติดจริง (RLS กรองจนเหลือ 0 แถวจะไม่คืน error)
+    ({ data, error } = await sb.from("daily_assignments").update(payload).eq("id", id).select());
+    if(!error && (!data || data.length===0)){ toast("แก้ไขไม่สำเร็จ — รายการนี้อาจถูกลบไปแล้ว หรือไม่มีสิทธิ์แก้ไข"); await loadProjectsModule(); render("projects"); return; }
+  } else {
+    ({ data, error } = await sb.from("daily_assignments").insert({ ...payload, created_by: loggedInEmployeeId }).select());
+  }
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   closeModal();
-  logAudit("project", "มอบหมายงานรายวัน", `${g.name} · ${isoToThaiDisplay(dispatchDate)}`);
+  logAudit("project", cur?"แก้ไขงานที่มอบหมายรายวัน":"มอบหมายงานรายวัน", `${g.name} · ${isoToThaiDisplay(payload.work_date)}`);
   await loadProjectsModule();
   render("projects");
-  toast("มอบหมายงานแล้ว ✓");
+  toast(cur?"บันทึกการแก้ไขแล้ว ✓":"มอบหมายงานแล้ว ✓");
   updateProjectBadge();
   if(notifyLine){
-    const saved = data && data[0];
+    const saved = (data && data[0]) || payload;
     const mem = membersOf(groupId);
-    const text = dispatchLineText(saved||payload);
+    const text = (cur?"✏️ แก้ไขงานที่มอบหมาย\n":"") + dispatchLineText(saved);
     mem.forEach(m=>notifyLineBestEffort(m.employee_id, text));
   }
 }

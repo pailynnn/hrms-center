@@ -204,6 +204,16 @@
 
   /* ===== paper form (ใช้สร้าง PDF / พรีวิวรายงาน) — [รอบ 17.7] รื้อใหม่เป็นกล่อง (box) ทุก section ให้ตรงฟอร์มมาตรฐานงานก่อสร้าง ===== */
   .offscreen{position:fixed;left:-99999px;top:0;z-index:-1}
+  /* [รอบ 17.10] แผ่นเลือกรูปแบบไฟล์แชร์ */
+  .fmt-sheet{position:fixed;inset:0;background:rgba(5,8,14,.55);z-index:80;display:flex;align-items:flex-end;justify-content:center;padding:0}
+  .fmt-sheet.hide{display:none}
+  .fmt-card{background:#fff;width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -8px 30px rgba(0,0,0,.2);animation:sheetUp .22s ease}
+  @keyframes sheetUp{from{transform:translateY(30px);opacity:.4}to{transform:translateY(0);opacity:1}}
+  .fmt-title{font-size:14px;font-weight:700;text-align:center;color:#41495a;margin:2px 0 12px}
+  .fmt-opt{width:100%;display:flex;align-items:center;gap:12px;padding:14px 16px;border:1.4px solid var(--line);border-radius:12px;background:#fff;font-size:15px;font-weight:600;color:#1c2333;margin-bottom:10px;cursor:pointer}
+  .fmt-opt:active{background:#f4f6fa}
+  .fmt-ic{font-size:20px}
+  .fmt-cancel{width:100%;padding:12px;border:0;background:transparent;color:#8b94a7;font-size:14px;cursor:pointer}
   .paper{width:780px;background:#fff;color:#1c2333;font-family:"Noto Sans Thai","Sora",sans-serif;font-size:12px;line-height:1.55}
   .paper .p-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:16px 22px;border-bottom:3px solid #f7941d}
   .paper .p-head-left{display:flex;align-items:center;gap:12px;min-width:0}
@@ -262,7 +272,7 @@
     <div class="brand">
       <div class="logo">📋</div>
       <div>
-        <h1 id="companyName">HRMS CENTER</h1>
+        <h1 id="companyName">Aluminium Glass PRO</h1>
         <div class="sub" id="txtSubtitle">รายงานประจำวันหน้างาน · หัวหน้าทีม</div>
       </div>
     </div>
@@ -407,6 +417,16 @@
 
   </div>
 
+<!-- [รอบ 17.10] เลือกแชร์เป็น PDF หรือ PNG — overlay ในหน้า (ไม่ใช้ confirm/alert ที่ทำ LINE webview ค้าง) -->
+<div id="fmtSheet" class="fmt-sheet hide" onclick="if(event.target===this)closeShareChooser()">
+  <div class="fmt-card">
+    <div class="fmt-title" id="fmtTitle">เลือกรูปแบบไฟล์ที่จะแชร์</div>
+    <button class="fmt-opt" onclick="doShare('pdf')"><span class="fmt-ic">📄</span><span id="fmtPdf">แชร์เป็นไฟล์ PDF</span></button>
+    <button class="fmt-opt" onclick="doShare('png')"><span class="fmt-ic">🖼️</span><span id="fmtPng">แชร์เป็นรูปภาพ PNG</span></button>
+    <button class="fmt-cancel" onclick="closeShareChooser()" id="fmtCancel">ยกเลิก</button>
+  </div>
+</div>
+
 <script>
 const BASE = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1";
 const CONFIG_URL = BASE + "/liff-report-config";
@@ -462,6 +482,8 @@ const L = {
     idErr:"ยืนยันตัวตนกับ LINE ไม่สำเร็จ", srvErr:"เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr:"เกิดข้อผิดพลาด",
     noCfg:"ยังไม่ได้ตั้งค่า LIFF ID สำหรับรายงานประจำวัน", login:"กำลังเข้าสู่ระบบผ่าน LINE...",
     okTitle:"บันทึกรายงานเรียบร้อย", okCheckout:"ลงเวลาออกงานแล้ว", viewLater:"ดูรายงานย้อนหลังได้ในแอป HRMS", back:"กลับหน้าลงเวลา",
+    chooseFmt:"เลือกรูปแบบไฟล์ที่จะแชร์", shareAsPdf:"แชร์เป็นไฟล์ PDF", shareAsPng:"แชร์เป็นรูปภาพ PNG", cancel:"ยกเลิก",
+    remainTitle:"ยังไม่ลงเวลาออก — เหลืออีก {n} ทีมที่ต้องรายงาน", remainHint:"หัวหน้าที่ดูแลหลายโครงการ ต้องกรอกรายงานให้ครบทุกทีมก่อน ระบบจึงจะลงเวลาออกงานให้", goNextTeam:"กรอกรายงานทีมถัดไป →", teamDoneCount:"รายงานแล้ว {done} จาก {total} ทีม",
     savedNext:"สร้างงานวันพรุ่งนี้ให้แล้ว", photosSaved:"รูปที่บันทึก", dTemp:"ยืมตัว",
     nextBtn:"ถัดไป", backBtn:"ย้อนกลับ", stepOf:"ขั้นที่",
     stTitle:{1:"กำลังคนวันนี้",2:"สภาพอากาศ & แผนงาน",3:"ความคืบหน้า & ปัญหา",4:"แผนวันถัดไป & รูปหน้างาน",5:"ตรวจทาน & ลงชื่อ"},
@@ -501,6 +523,8 @@ const L = {
     idErr:"LINE အတည်မပြုနိုင်ပါ", srvErr:"ဆာဗာတုံ့ပြန်မှုမှား", genErr:"အမှားဖြစ်ပွား",
     noCfg:"အစီရင်ခံရန် LIFF ID မသတ်မှတ်ရသေးပါ", login:"LINE ဖြင့် ဝင်နေသည်...",
     okTitle:"အစီရင်ခံစာ သိမ်းပြီးပါပြီ", okCheckout:"ထွက်ချိန်မှတ်ပြီး", viewLater:"HRMS app တွင် ပြန်ကြည့်နိုင်သည်", back:"ချိန်မှတ်သို့ပြန်",
+    chooseFmt:"မျှဝေမည့် ဖိုင်အမျိုးအစား ရွေးပါ", shareAsPdf:"PDF ဖိုင် မျှဝေ", shareAsPng:"PNG ပုံ မျှဝေ", cancel:"ပယ်ဖျက်",
+    remainTitle:"ထွက်ချိန်မမှတ်ရသေး — {n} အဖွဲ့ ကျန်သေးသည်", remainHint:"စီမံကိန်းများစွာ တာဝန်ယူသော ခေါင်းဆောင်သည် အဖွဲ့အားလုံး၏ အစီရင်ခံစာ ဖြည့်ပြီးမှ ထွက်ချိန်မှတ်ပါမည်", goNextTeam:"နောက်အဖွဲ့ အစီရင်ခံရန် →", teamDoneCount:"{total} တွင် {done} အဖွဲ့ ပြီးပြီ",
     savedNext:"မနက်ဖြန်အလုပ် ဖန်တီးပြီး", photosSaved:"သိမ်းသောပုံ", dTemp:"ငှား",
     nextBtn:"ရှေ့သို့", backBtn:"နောက်သို့", stepOf:"အဆင့်",
     stTitle:{1:"ယနေ့လူအင်အား",2:"ရာသီဥတု & အစီအစဉ်",3:"တိုးတက်မှု & ပြဿနာ",4:"နောက်ရက် & ဓာတ်ပုံ",5:"စစ်ဆေး & လက်မှတ်"},
@@ -515,7 +539,7 @@ let lang = localStorage.getItem("hrmsLiffLang") || "th";
 function t(k){ return (L[lang] && L[lang][k]) != null ? L[lang][k] : L.th[k]; }
 
 let CTX = null;        // context payload
-let CFG_CO_TH = null;  // ชื่อบริษัทภาษาไทย (settings.company_name_thai) ถ้ามี
+let CFG_CO_TH = "บริษัท อลูมิเนียม กลาส โปร จำกัด";  // ชื่อบริษัทภาษาไทย (settings.company_name_thai) — โหลดจาก config ทับตอน init ถ้ามีในระบบ
 let curGroup = null;   // selected group object
 let progress = 0;
 let weather = null;
@@ -886,7 +910,7 @@ function buildRptData(json, p){
   const emp = CTX.employee;
   return {
     report_id: json.report_id || null,
-    company: document.getElementById("companyName").textContent || "HRMS CENTER",
+    company: document.getElementById("companyName").textContent || "Aluminium Glass PRO",
     company_th: CFG_CO_TH || "",
     report_no: json.report_no || "",
     work_date: CTX.work_date,
@@ -1022,19 +1046,38 @@ function printFallback(r){
 // [รอบ 17.7] เดิม sharePdf/openPdf เปิด blob: URL ด้วย window.open() ตรงๆ ซึ่งเบราว์เซอร์ในแอป LINE เปิดไม่ได้
 // (ขึ้น "Unable to open URL due to an unexpected error") -> ตอนนี้อัปโหลด PDF ขึ้น Storage ก่อนเสมอ ได้ https URL จริง
 // แล้วค่อยเปิด/แชร์ URL นั้น ซึ่งใช้ได้ทั้งในแอป LINE และเบราว์เซอร์ทั่วไป
-let PDF_URL_CACHE = null; // {reportNo, url} กันอัปโหลดซ้ำถ้ากดปุ่มหลายครั้งในหน้าเดียวกัน
-async function getPdfUrl(){
-  const key = RPT.report_no || RPT.work_date || "report";
-  if(PDF_URL_CACHE && PDF_URL_CACHE.key === key) return PDF_URL_CACHE.url;
-  const blob = await makePdfBlob(RPT);
+// [รอบ 17.10] รองรับแชร์ทั้ง PDF และ PNG — ผู้ใช้เลือกได้เอง
+// สร้างรูป PNG จากฟอร์มกระดาษ (เหมือน PDF แต่คืนเป็นไฟล์รูปหน้าเดียว)
+async function makePngBlob(r){
+  await ensurePdfLibs();
+  const host = document.createElement("div");
+  host.className = "offscreen";
+  host.innerHTML = paperHtml(r);
+  document.body.appendChild(host);
+  try{
+    const canvas = await window.html2canvas(host.firstChild, { scale:2, backgroundColor:"#ffffff", useCORS:true, logging:false });
+    return await new Promise(res=>canvas.toBlob(res, "image/png"));
+  } finally { host.remove(); }
+}
+// cache แยกตาม (รายงาน + รูปแบบไฟล์) กันอัปโหลดซ้ำถ้ากดหลายครั้ง
+let FILE_URL_CACHE = {}; // { "<key>|pdf": url, "<key>|png": url }
+async function getFileUrl(fmt){
+  fmt = (fmt === "png") ? "png" : "pdf";
+  const key = (RPT.report_no || RPT.work_date || "report");
+  const ck = key + "|" + fmt;
+  if(FILE_URL_CACHE[ck]) return FILE_URL_CACHE[ck];
+  const blob = fmt === "png" ? await makePngBlob(RPT) : await makePdfBlob(RPT);
   const res = await fetch(PDF_UPLOAD_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/pdf", "x-id-token": liff.getIDToken(), "x-report-no": key },
+    headers: {
+      "Content-Type": fmt === "png" ? "image/png" : "application/pdf",
+      "x-id-token": liff.getIDToken(), "x-report-no": key, "x-file-ext": fmt
+    },
     body: blob
   });
   const json = await res.json().catch(()=>({}));
   if(!res.ok || json.error || !json.url) throw new Error(json.error || t("pdfErr"));
-  PDF_URL_CACHE = { key, url: json.url };
+  FILE_URL_CACHE[ck] = json.url;
   return json.url;
 }
 function inLineClient(){ try{ return typeof liff!=="undefined" && liff.isInClient && liff.isInClient(); }catch(e){ return false; } }
@@ -1047,7 +1090,7 @@ async function openPdf(){
   if(!RPT) return;
   showStatus("⏳ "+t("pdfBusy"), "info");
   try{
-    const url = await getPdfUrl();
+    const url = await getFileUrl("pdf");
     openExternal(url);
     hideStatus();
   }catch(e){
@@ -1055,13 +1098,26 @@ async function openPdf(){
     else showStatus("⚠️ "+t("pdfErr"), "err");
   }
 }
-async function sharePdf(){
+// ปุ่ม "แชร์" -> เปิดแผ่นเลือกรูปแบบ (PDF / PNG) ก่อน
+function sharePdf(){ openShareChooser(); }
+function openShareChooser(){
   if(!RPT) return;
+  document.getElementById("fmtTitle").textContent = t("chooseFmt");
+  document.getElementById("fmtPdf").textContent = t("shareAsPdf");
+  document.getElementById("fmtPng").textContent = t("shareAsPng");
+  document.getElementById("fmtCancel").textContent = t("cancel");
+  document.getElementById("fmtSheet").classList.remove("hide");
+}
+function closeShareChooser(){ document.getElementById("fmtSheet").classList.add("hide"); }
+async function doShare(fmt){
+  if(!RPT) return;
+  closeShareChooser();
   const btns = document.querySelectorAll("#okWrap button"); btns.forEach(b=>b.disabled=true);
   showStatus("⏳ "+t("pdfBusy"), "info");
   try{
-    const url = await getPdfUrl();
+    const url = await getFileUrl(fmt);
     const title = t("docTitle")+" "+(RPT.report_no||"");
+    const openLabel = fmt === "png" ? t("shareAsPng") : t("pdfOpen");
     let shared = false;
     // ทางเลือกที่ 1: liff.shareTargetPicker -> แชร์เป็นการ์ดจริงเข้าแชท LINE (เพื่อน/กลุ่ม) ได้โดยไม่ต้องออกจากแอป
     if(typeof liff!=="undefined" && liff.isApiAvailable && liff.isApiAvailable("shareTargetPicker")){
@@ -1070,12 +1126,13 @@ async function sharePdf(){
         await liff.shareTargetPicker([{
           type: "flex", altText: title,
           contents: { type:"bubble",
+            hero: fmt === "png" ? { type:"image", url, size:"full", aspectRatio:"3:4", aspectMode:"cover", action:{ type:"uri", uri:url } } : undefined,
             body: { type:"box", layout:"vertical", spacing:"sm", contents:[
               { type:"text", text:"📋 "+title, weight:"bold", size:"md", wrap:true },
               { type:"text", text:(RPT.project||"")+(RPT.team?" · "+RPT.team:""), size:"sm", color:"#8b94a7", wrap:true }
             ]},
             footer: { type:"box", layout:"vertical", contents:[
-              { type:"button", style:"primary", color:"#f7941d", action:{ type:"uri", label:t("pdfOpen"), uri:url } }
+              { type:"button", style:"primary", color:"#f7941d", action:{ type:"uri", label:openLabel, uri:url } }
             ]}
           }
         }]);
@@ -1089,8 +1146,8 @@ async function sharePdf(){
     if(!shared){ openExternal(url); }
     hideStatus();
   }catch(e){
-    if(printFallback(RPT)) hideStatus();
-    else showStatus("⚠️ "+t("pdfErr"), "err");
+    if(fmt !== "png" && printFallback(RPT)) hideStatus();
+    else showStatus("⚠️ "+(e.message||t("pdfErr")), "err");
   }
   finally{ document.querySelectorAll("#okWrap button").forEach(b=>b.disabled=false); }
 }
@@ -1103,17 +1160,29 @@ function showSuccess(json, p){
   const ok = document.getElementById("okWrap");
   ok.classList.remove("hide");
   const nextTxt = p.next_tasks.map(x=>(x.zone?"["+x.zone+"] ":"")+x.task_note).join(" · ");
+  const remaining = Array.isArray(json.remaining_teams) ? json.remaining_teams.length : 0;
   ok.innerHTML =
     '<div class="okcheck">✓</div>'+
     '<h1 style="margin:0 0 2px">'+t("okTitle")+'</h1>'+
     '<div class="sub" style="margin-bottom:2px">'+esc(json.report_no||"")+'</div>'+
     '<div class="okbar"><span style="width:'+p.progress_percent+'%"></span></div>'+
     '<div style="font-size:13px;color:var(--muted);margin-bottom:12px">'+t("progToday")+' '+p.progress_percent+'%</div>'+
-    (json.checked_out?'<div class="signlock" style="justify-content:center;margin-bottom:10px">🔒 '+t("okCheckout")+'</div>':'')+
+    // [รอบ 17.10] ถ้ายังเหลือทีมอื่นที่ต้องรายงาน -> ยังไม่ลงเวลาออก แสดงกล่องเตือน + ปุ่มไปทีมถัดไป
+    (remaining>0
+      ? '<div class="infobox" style="text-align:left;background:#fff7ec;border:1px solid #f2c98a;margin-bottom:10px">'+
+          '<div style="font-weight:700;color:#b4600f;font-size:13px">⚠️ '+esc(t("remainTitle").replace("{n}", remaining))+'</div>'+
+          '<div style="font-size:12px;color:#8b6a3a;margin-top:3px">'+esc(t("remainHint"))+'</div>'+
+          '<div style="font-size:11.5px;color:#a5824f;margin-top:5px">'+esc(t("teamDoneCount").replace("{done}", (json.reported_teams||0)).replace("{total}", (json.total_teams||0)))+'</div>'+
+        '</div>'
+      : (json.checked_out?'<div class="signlock" style="justify-content:center;margin-bottom:10px">🔒 '+t("okCheckout")+'</div>':''))+
     (nextTxt?'<div class="infobox" style="text-align:left"><div class="inforow"><span class="k">'+t("next")+'</span></div><div style="font-size:12.5px">'+esc(nextTxt)+'</div></div>':'')+
     (json.photos_uploaded?'<div style="font-size:11.5px;color:var(--muted)">'+t("photosSaved")+': '+json.photos_uploaded+'</div>':'')+
     (RPT?'<button class="submit" style="margin-top:12px" onclick="sharePdf()">📤 '+t("pdfBtn")+'</button>'+
          '<button class="btn-ghost" onclick="openPdf()">👁 '+t("pdfOpen")+'</button>':'')+
+    // เหลือทีมอื่น -> ปุ่มหลักคือ "กรอกทีมถัดไป" (reload หน้า init จะเด้งไปทีมที่ยังไม่ได้รายงานให้เอง)
+    (remaining>0
+      ? '<button class="submit" style="margin-top:12px;background:#2b8a3e" onclick="location.reload()">📝 '+t("goNextTeam")+'</button>'
+      : '')+
     '<div style="font-size:11.5px;color:var(--muted);margin:10px 0 4px">'+t("viewLater")+'</div>'+
     '<button class="btn-ghost" onclick="location.href=\''+CHECKIN_PAGE+'\'">← '+t("back")+'</button>';
   window.scrollTo(0,0);
@@ -1129,7 +1198,7 @@ async function init(){
   try{
     const cfg = await (await fetch(CONFIG_URL)).json();
     if(cfg.companyName) document.getElementById("companyName").textContent = cfg.companyName;
-    CFG_CO_TH = cfg.companyNameThai || null;
+    if(cfg.companyNameThai) CFG_CO_TH = cfg.companyNameThai;
     if(!cfg.liffId) throw new Error(t("noCfg"));
     await liff.init({ liffId: cfg.liffId });
     if(!liff.isLoggedIn()){ showStatus("⏳ "+t("login"), "info"); liff.login(); return; }
