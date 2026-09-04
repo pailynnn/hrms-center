@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>รายงานประจำวัน · HRMS CENTER</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&family=Padauk:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --amber:#f7941d; --amber-lo:#e07d0a; --amber-glow:rgba(247,148,29,.35);
+    --ink:#0d1017; --ink-2:#151a24; --panel:#1b2130; --panel-2:#212838;
+    --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.12);
+    --txt:#eef1f6; --muted:#8b94a7; --muted-2:#5f6982;
+    --ok:#34d399; --ok-bg:rgba(52,211,153,.12); --err:#f87171; --err-bg:rgba(248,113,113,.12); --info:#60a5fa; --info-bg:rgba(96,165,250,.12);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    min-height:100vh; display:flex; align-items:flex-start; justify-content:center;
+    background:
+      radial-gradient(120% 80% at 50% -10%, #23304a 0%, transparent 55%),
+      radial-gradient(90% 60% at 50% 110%, #1a1f2e 0%, transparent 60%),
+      var(--ink);
+    font-family:"Sora","Noto Sans Thai",-apple-system,BlinkMacSystemFont,sans-serif;
+    color:var(--txt); padding:18px;
+  }
+  body.lang-mm{ font-family:"Padauk","Noto Sans Thai","Sora",sans-serif; }
+  .card{
+    width:100%; max-width:440px; position:relative;
+    background:linear-gradient(180deg, var(--panel) 0%, var(--ink-2) 100%);
+    border:1px solid var(--line-2); border-radius:24px;
+    padding:22px 20px 22px;
+    box-shadow:0 1px 0 rgba(255,255,255,.05) inset, 0 30px 70px -20px rgba(0,0,0,.75);
+  }
+  .card::before{content:"";position:absolute;top:0;left:20px;right:20px;height:1px;
+    background:linear-gradient(90deg,transparent,var(--amber-glow),transparent)}
+  .langbar{display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px}
+  .langbar button{
+    all:unset; cursor:pointer; font-family:inherit;
+    padding:5px 13px; border-radius:999px; font-size:12px; font-weight:600;
+    color:var(--muted); border:1px solid var(--line-2); transition:.18s;
+  }
+  .langbar button.on{ color:var(--ink); background:var(--amber); border-color:transparent; box-shadow:0 4px 14px -4px var(--amber-glow) }
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+  .logo{
+    width:42px;height:42px;border-radius:12px;flex:none;
+    background:linear-gradient(145deg,#ffb04a,#e07d0a);
+    display:grid;place-items:center;font-size:20px;font-weight:700;color:#1a1206;
+    box-shadow:0 6px 18px -6px var(--amber-glow), 0 1px 0 rgba(255,255,255,.4) inset;
+  }
+  h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:11.5px;margin-top:2px;line-height:1.5}
+
+  /* header auto-info block */
+  .infobox{background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;margin-bottom:16px}
+  .inforow{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:3px 0}
+  .inforow .k{color:var(--muted)}
+  .inforow .v{font-weight:600;text-align:right}
+
+  .section{margin-bottom:18px}
+  .label{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--muted-2);font-weight:700;margin-bottom:9px}
+  .hint{font-size:11px;color:var(--muted);margin:-4px 0 8px}
+
+  .memrow{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line-2);border-radius:12px;margin-bottom:7px;background:var(--ink)}
+  .memrow.off{opacity:.5}
+  .memrow .nm{font-size:13px;font-weight:600;flex:1}
+  .memrow .ps{font-size:10.5px;color:var(--muted)}
+  .memrow .badge{font-size:9.5px;padding:2px 7px;border-radius:999px;background:rgba(247,148,29,.15);color:#ffc169;font-weight:700}
+  .chk{width:20px;height:20px;accent-color:var(--amber);flex:none}
+  .countpill{font-size:13px;font-weight:700;color:#ffc169;background:rgba(247,148,29,.12);padding:4px 12px;border-radius:999px}
+
+  .chips{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}
+  .chip{
+    all:unset;cursor:pointer;box-sizing:border-box;text-align:center;
+    padding:10px 4px;border-radius:13px;border:1.5px solid var(--line-2);background:var(--ink);transition:.15s;
+  }
+  .chip .ic{font-size:18px;display:block;margin-bottom:3px}
+  .chip .tt{font-size:10px;font-weight:600;color:var(--txt);display:block;line-height:1.2}
+  .chip.on{border-color:var(--amber);background:linear-gradient(160deg,rgba(247,148,29,.16),rgba(247,148,29,.04));box-shadow:0 6px 18px -8px var(--amber-glow)}
+  .chip.on .tt{color:#ffc169}
+
+  .field{margin-bottom:10px}
+  .field-label{font-size:11.5px;color:var(--muted);margin-bottom:6px;display:block}
+  input[type=text], input[type=date], textarea, select{
+    width:100%;background:var(--ink);border:1.5px solid var(--line-2);border-radius:12px;
+    padding:11px 12px;color:var(--txt);font-family:inherit;font-size:13.5px;
+  }
+  input:focus, textarea:focus, select:focus{outline:none;border-color:var(--amber)}
+  textarea{resize:vertical;min-height:62px}
+  #workPlan{min-height:104px}
+
+  /* progress slider */
+  .progwrap{background:var(--ink);border:1px solid var(--line);border-radius:14px;padding:16px 14px 12px}
+  .progtop{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .progval{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;
+    background:linear-gradient(180deg,#fff,#ffc169);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  input[type=range]{width:100%;accent-color:var(--amber);height:26px}
+  .progquick{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .qbtn{all:unset;cursor:pointer;font-size:11px;font-weight:600;color:var(--muted);border:1px solid var(--line-2);border-radius:999px;padding:5px 10px}
+  .qbtn.on{color:var(--ink);background:var(--amber);border-color:transparent}
+
+  /* problems */
+  .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .pchk{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:8px 10px;border:1px solid var(--line-2);border-radius:11px;background:var(--ink);cursor:pointer}
+  .pchk input{accent-color:var(--amber);width:17px;height:17px}
+  .pchk.noprob{grid-column:1 / -1;border-color:rgba(52,211,153,.3);background:var(--ok-bg)}
+
+  /* next tasks */
+  .taskrow{display:flex;gap:8px;margin-bottom:10px;align-items:flex-start}
+  .taskrow .z{width:30%;min-height:46px}
+  .taskrow .t{flex:1;min-height:46px;line-height:1.5}
+  .taskrow .del{all:unset;cursor:pointer;color:var(--err);font-size:18px;width:28px;text-align:center;flex:none;margin-top:11px}
+  .addbtn{all:unset;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--amber);border:1px dashed var(--line-2);border-radius:11px;padding:9px;display:block;text-align:center}
+
+  /* photos */
+  .photogrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+  .thumb{position:relative;aspect-ratio:1;border-radius:12px;overflow:hidden;border:1px solid var(--line-2);background:var(--ink)}
+  .thumb img{width:100%;height:100%;object-fit:cover}
+  .thumb .rm{position:absolute;top:3px;right:3px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;border:none;font-size:13px;cursor:pointer;display:grid;place-items:center}
+  .thumb .tag{position:absolute;left:0;bottom:0;right:0;font-size:9px;text-align:center;background:rgba(0,0,0,.55);color:#fff;padding:2px}
+  .photobtns{display:flex;gap:7px;margin-top:8px}
+  .pbtn{flex:1;all:unset;cursor:pointer;text-align:center;font-size:11.5px;font-weight:600;color:var(--txt);border:1.5px dashed var(--line-2);border-radius:12px;padding:11px 4px}
+  .pbtn .ic{display:block;font-size:16px;margin-bottom:2px}
+
+  /* signature */
+  .signbox{background:var(--panel-2);border:1px solid var(--line);border-radius:13px;padding:13px 14px;margin-bottom:16px}
+  .signname{font-size:15px;font-weight:700;letter-spacing:.3px}
+  .signmeta{font-size:11px;color:var(--muted);margin-top:2px}
+  .signlock{font-size:10.5px;color:#7fd4a8;margin-top:7px;display:flex;align-items:center;gap:5px}
+
+  .status{font-size:13px;padding:12px 14px;border-radius:12px;margin-bottom:14px;line-height:1.55;display:none;border:1px solid transparent}
+  .status.show{display:block}
+  .status.ok{background:var(--ok-bg);color:var(--ok);border-color:rgba(52,211,153,.25)}
+  .status.err{background:var(--err-bg);color:var(--err);border-color:rgba(248,113,113,.25)}
+  .status.info{background:var(--info-bg);color:var(--info);border-color:rgba(96,165,250,.25)}
+
+  button.submit{
+    width:100%;border:none;border-radius:16px;padding:17px 10px;font-size:15.5px;font-weight:700;font-family:inherit;
+    cursor:pointer;transition:transform .12s ease, opacity .2s;
+    background:linear-gradient(145deg,#ffb04a,var(--amber-lo));color:#1a1206;
+    box-shadow:0 10px 26px -10px var(--amber-glow), 0 1px 0 rgba(255,255,255,.35) inset;
+  }
+  button.submit:active{transform:translateY(1px) scale(.99)}
+  button.submit:disabled{opacity:.45;cursor:not-allowed}
+  .btn-ghost{width:100%;margin-top:10px;border:1px solid var(--line-2);background:transparent;color:var(--txt);border-radius:13px;padding:12px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer}
+  .footer{margin-top:14px;font-size:10.5px;color:var(--muted-2);line-height:1.5;text-align:center}
+  .spinner{width:16px;height:16px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;
+    display:inline-block;vertical-align:-3px;margin-right:6px;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .hide{display:none!important}
+  .divider{height:1px;background:var(--line);margin:2px 0 16px}
+
+  /* success screen */
+  .okwrap{text-align:center;padding:6px 4px}
+  .okcheck{width:64px;height:64px;border-radius:50%;background:var(--ok-bg);color:var(--ok);display:grid;place-items:center;font-size:34px;margin:6px auto 12px}
+  .okbar{height:12px;border-radius:999px;background:var(--ink);border:1px solid var(--line);overflow:hidden;margin:12px 0 4px}
+  .okbar > span{display:block;height:100%;background:linear-gradient(90deg,var(--amber),#ffc169)}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="langbar">
+      <button id="langTh" onclick="setLang('th')">ไทย</button>
+      <button id="langMm" onclick="setLang('mm')">မြန်မာ</button>
+    </div>
+
+    <div class="brand">
+      <div class="logo">📋</div>
+      <div>
+        <h1 id="companyName">HRMS CENTER</h1>
+        <div class="sub" id="txtSubtitle">รายงานประจำวันหน้างาน · หัวหน้าทีม</div>
+      </div>
+    </div>
+
+    <div id="statusBox" class="status"></div>
+
+    <!-- Loading / gate messages live in statusBox; form is hidden until context ready -->
+    <div id="formWrap" class="hide">
+
+      <!-- group selector (only if leader leads >1 group working today) -->
+      <div class="section hide" id="groupSel">
+        <div class="label" id="lblGroup">เลือกทีม/โครงการ</div>
+        <select id="groupPick" onchange="onGroupChange()"></select>
+      </div>
+
+      <!-- A. auto info -->
+      <div class="infobox" id="infoBox"></div>
+
+      <!-- B. manpower -->
+      <div class="section">
+        <div class="label" style="display:flex;justify-content:space-between;align-items:center">
+          <span id="lblManpower">กำลังคนวันนี้</span>
+          <span class="countpill"><span id="manCount">0</span> <span id="lblPpl">คน</span></span>
+        </div>
+        <div class="hint" id="hintManpower">ติ๊กเฉพาะคนที่มาทำงานจริงวันนี้ (ระบบติ๊กให้ตามการลงเวลาเข้า)</div>
+        <div id="memberList"></div>
+        <div id="tempList"></div>
+        <button class="addbtn" id="btnAddTemp" onclick="addTemp()">+ <span id="lblAddTemp">เพิ่มผู้ปฏิบัติงานชั่วคราว / ยืมตัว</span></button>
+      </div>
+
+      <!-- C. weather -->
+      <div class="section">
+        <div class="label" id="lblWeather">สภาพอากาศ</div>
+        <div class="chips" id="weatherChips">
+          <button type="button" class="chip" data-w="sun" onclick="pickWeather('sun')"><span class="ic">☀️</span><span class="tt" data-wl="sun">แดด</span></button>
+          <button type="button" class="chip" data-w="cloudy" onclick="pickWeather('cloudy')"><span class="ic">⛅</span><span class="tt" data-wl="cloudy">มีเมฆ</span></button>
+          <button type="button" class="chip" data-w="rainy" onclick="pickWeather('rainy')"><span class="ic">🌧️</span><span class="tt" data-wl="rainy">ฝน</span></button>
+          <button type="button" class="chip" data-w="heavy_rain" onclick="pickWeather('heavy_rain')"><span class="ic">⛈️</span><span class="tt" data-wl="heavy_rain">ฝนหนัก</span></button>
+          <button type="button" class="chip" data-w="storm" onclick="pickWeather('storm')"><span class="ic">🌪️</span><span class="tt" data-wl="storm">พายุ</span></button>
+        </div>
+        <label class="pchk" style="margin-top:9px" id="weatherImpactWrap">
+          <input type="checkbox" id="weatherImpact"><span id="lblWeatherImpact">มีผลกระทบต่อการทำงาน</span>
+        </label>
+      </div>
+
+      <!-- D. today plan + result -->
+      <div class="section">
+        <div class="label" id="lblPlan">แผนงานวันนี้</div>
+        <div class="hint" id="hintPlan">ดึงจากงานที่มอบหมายไว้ แก้ไขได้ถ้าหน้างานเปลี่ยน</div>
+        <textarea id="workPlan" placeholder="" oninput="autoGrow(this)"></textarea>
+      </div>
+      <div class="section">
+        <div class="label" id="lblResult">ผลการทำงานวันนี้ *</div>
+        <textarea id="workResult" placeholder=""></textarea>
+      </div>
+
+      <!-- E. progress -->
+      <div class="section">
+        <div class="label" id="lblProgress">ความคืบหน้าของงานวันนี้</div>
+        <div class="progwrap">
+          <div class="progtop">
+            <span style="font-size:11px;color:var(--muted)" id="lblProgToday">คืบหน้าวันนี้</span>
+            <span class="progval"><span id="progNum">0</span>%</span>
+          </div>
+          <input type="range" id="progRange" min="0" max="100" step="5" value="0" oninput="onProg(this.value)">
+          <div class="progquick">
+            <button type="button" class="qbtn" onclick="setProg(25)">0–25%</button>
+            <button type="button" class="qbtn" onclick="setProg(50)">26–50%</button>
+            <button type="button" class="qbtn" onclick="setProg(75)">51–75%</button>
+            <button type="button" class="qbtn" onclick="setProg(90)">76–99%</button>
+            <button type="button" class="qbtn" onclick="setProg(100)">100%</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- F. problems -->
+      <div class="section">
+        <div class="label" id="lblProblem">ปัญหาหน้างาน</div>
+        <div class="pgrid" id="problemGrid">
+          <label class="pchk noprob"><input type="checkbox" id="noProblem" onchange="onNoProblem()"><span id="lblNoProb">ไม่มีปัญหา</span></label>
+        </div>
+        <div id="problemDetailWrap" class="hide" style="margin-top:9px">
+          <div class="field"><span class="field-label" id="lblProbDetail">รายละเอียดปัญหา</span><textarea id="problemDetail"></textarea></div>
+          <div class="field"><span class="field-label" id="lblSolution">วิธีการแก้ไข *</span><textarea id="solution"></textarea></div>
+        </div>
+      </div>
+
+      <!-- G. next day -->
+      <div class="section">
+        <div class="label" id="lblNext">แผนงานวันถัดไป *</div>
+        <div class="field"><span class="field-label" id="lblNextDate">วันที่</span><input type="date" id="nextDate"></div>
+        <div id="taskRows"></div>
+        <button class="addbtn" onclick="addTask()">+ <span id="lblAddTask">เพิ่มงาน</span></button>
+      </div>
+
+      <!-- H. photos -->
+      <div class="section">
+        <div class="label" id="lblPhotos">รูปหน้างาน</div>
+        <div class="hint" id="hintPhotos">ถ่ายรูปหรือเลือกจากคลังภาพ (ย่อขนาดอัตโนมัติ)</div>
+        <div class="photobtns">
+          <button type="button" class="pbtn" onclick="pickPhoto()"><span class="ic">📷</span><span id="lblAddPhoto">เพิ่มรูป / ถ่ายรูป</span></button>
+        </div>
+        <input type="file" id="photoInput" accept="image/*" multiple class="hide">
+        <div class="photogrid" id="photoGrid"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- I. signature (auto) -->
+      <div class="section">
+        <div class="label" id="lblSign">ผู้จัดทำรายงาน (ลงชื่ออัตโนมัติ)</div>
+        <div class="signbox">
+          <div class="signname" id="signName">—</div>
+          <div class="signmeta" id="signMeta"></div>
+          <div class="signlock">🔒 <span id="lblSignLock">ลงชื่อดิจิทัลผ่านระบบ LINE เมื่อกดบันทึก</span></div>
+        </div>
+      </div>
+
+      <button class="submit" id="btnSubmit" onclick="doSubmit()">💾 <span id="lblSubmit">บันทึก & ลงเวลาออก</span></button>
+      <div class="footer" id="txtFooter">การบันทึกรายงานถือเป็นการลงเวลาออกงานของหัวหน้าทีม</div>
+    </div>
+
+    <!-- success screen -->
+    <div id="okWrap" class="okwrap hide"></div>
+
+  </div>
+
+<script>
+const BASE = "https://sxthurchkwuojymzfodx.supabase.co/functions/v1";
+const CONFIG_URL = BASE + "/liff-report-config";
+const CONTEXT_URL = BASE + "/liff-report-context";
+const SUBMIT_URL = BASE + "/liff-report-submit";
+const SET_LANG_URL = BASE + "/liff-set-lang";
+const CHECKIN_PAGE = "liff-checkin.html";
+
+function syncLangToServer(x){
+  try{
+    if(typeof liff==="undefined" || !liff.isLoggedIn || !liff.isLoggedIn()) return;
+    const idToken = liff.getIDToken && liff.getIDToken();
+    if(!idToken) return;
+    fetch(SET_LANG_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({idToken,lang:x})}).catch(()=>{});
+  }catch(e){}
+}
+
+/* ===== i18n ===== */
+const L = {
+  th:{
+    subtitle:"รายงานประจำวันหน้างาน · หัวหน้าทีม", group:"เลือกทีม/โครงการ",
+    manpower:"กำลังคนวันนี้", ppl:"คน", hintMan:"ติ๊กเฉพาะคนที่มาทำงานจริงวันนี้ (ระบบติ๊กให้ตามการลงเวลาเข้า)",
+    addTemp:"เพิ่มผู้ปฏิบัติงานชั่วคราว / ยืมตัว", tempPh:"ชื่อผู้ปฏิบัติงาน (ยืมตัว)",
+    weather:"สภาพอากาศ", weatherImpact:"มีผลกระทบต่อการทำงาน",
+    plan:"แผนงานวันนี้", hintPlan:"ดึงจากงานที่มอบหมายไว้ แก้ไขได้ถ้าหน้างานเปลี่ยน",
+    result:"ผลการทำงานวันนี้ *", resultPh:"สรุปผลงานที่ทำได้จริงวันนี้...",
+    progress:"ความคืบหน้าของงานวันนี้", progToday:"คืบหน้าวันนี้",
+    problem:"ปัญหาหน้างาน", noProb:"ไม่มีปัญหา", probDetail:"รายละเอียดปัญหา", solution:"วิธีการแก้ไข *",
+    next:"แผนงานวันถัดไป *", nextDate:"วันที่", addTask:"เพิ่มงาน", zonePh:"โซน/ชั้น", taskPh:"งานที่จะทำ",
+    photos:"รูปหน้างาน", hintPhotos:"ถ่ายรูปหรือเลือกจากคลังภาพ (ย่อขนาดอัตโนมัติ)", addPhoto:"เพิ่มรูป / ถ่ายรูป",
+    sign:"ผู้จัดทำรายงาน (ลงชื่ออัตโนมัติ)", signLock:"ลงชื่อดิจิทัลผ่านระบบ LINE เมื่อกดบันทึก",
+    submit:"บันทึก & ลงเวลาออก", footer:"การบันทึกรายงานถือเป็นการลงเวลาออกงานของหัวหน้าทีม",
+    date:"วันที่", project:"โครงการ", site:"สถานที่", team:"ทีม", leader:"หัวหน้าทีม",
+    wl:{sun:"แดด",cloudy:"มีเมฆ",rainy:"ฝน",heavy_rain:"ฝนหนัก",storm:"พายุ"},
+    pl:{before:"ก่อน",progress:"ระหว่าง",after:"หลัง"},
+    problems:{material_not_ready:"วัสดุไม่พร้อม",material_incomplete:"วัสดุไม่ครบ",drawing_change:"แบบแก้ไข",site_not_ready:"หน้างานไม่พร้อม",owner_absent:"เจ้าของไม่อยู่",other_delay:"งานอื่นล่าช้า",tools_not_ready:"เครื่องมือไม่พร้อม",weather:"สภาพอากาศ",manpower_short:"คนไม่พอ",other:"อื่น ๆ"},
+    busy:"กำลังบันทึกรายงาน...", loading:"กำลังโหลดข้อมูลหน้างาน...",
+    notLeader:"หน้านี้สำหรับหัวหน้าทีมเท่านั้น — ช่างทั่วไปลงเวลาออกได้จากหน้าลงเวลาปกติ",
+    notCheckedIn:"คุณยังไม่ได้ลงเวลาเข้างานวันนี้ — กรุณาลงเวลาเข้าก่อน แล้วจึงกลับมาทำรายงาน",
+    already:"ทีมนี้ส่งรายงานของวันนี้แล้ว", goCheckin:"ไปหน้าลงเวลา",
+    needResult:"กรุณากรอกผลการทำงานวันนี้", needSolution:"กรุณากรอกวิธีการแก้ไขปัญหา",
+    needNext:"กรุณาระบุแผนงานวันถัดไปอย่างน้อย 1 งาน", needProblem:"เลือก \"ไม่มีปัญหา\" หรือระบุปัญหาอย่างน้อย 1 ข้อ",
+    idErr:"ยืนยันตัวตนกับ LINE ไม่สำเร็จ", srvErr:"เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr:"เกิดข้อผิดพลาด",
+    noCfg:"ยังไม่ได้ตั้งค่า LIFF ID สำหรับรายงานประจำวัน", login:"กำลังเข้าสู่ระบบผ่าน LINE...",
+    okTitle:"บันทึกรายงานเรียบร้อย", okCheckout:"ลงเวลาออกงานแล้ว", viewLater:"ดูรายงานย้อนหลังได้ในแอป HRMS", back:"กลับหน้าลงเวลา",
+    savedNext:"สร้างงานวันพรุ่งนี้ให้แล้ว", photosSaved:"รูปที่บันทึก"
+  },
+  mm:{
+    subtitle:"နေ့စဉ်လုပ်ငန်းခွင်အစီရင်ခံစာ · အကြီးအကဲ", group:"အဖွဲ့/စီမံကိန်း ရွေးပါ",
+    manpower:"ယနေ့လူအင်အား", ppl:"ဦး", hintMan:"ယနေ့အမှန်တကယ်လာသူများကိုသာ အမှန်ခြစ်ပါ",
+    addTemp:"ယာယီ/ငှားလုပ်သား ထည့်ရန်", tempPh:"လုပ်သားအမည် (ငှား)",
+    weather:"ရာသီဥတု", weatherImpact:"အလုပ်အပေါ် သက်ရောက်မှုရှိ",
+    plan:"ယနေ့အလုပ်အစီအစဉ်", hintPlan:"တာဝန်ပေးထားသည်မှ ဆွဲယူ — ပြင်နိုင်သည်",
+    result:"ယနေ့လုပ်ဆောင်ချက် *", resultPh:"ယနေ့အမှန်တကယ်ပြီးသည်ကို အကျဉ်းရေးပါ...",
+    progress:"ယနေ့တိုးတက်မှု", progToday:"ယနေ့တိုးတက်မှု",
+    problem:"လုပ်ငန်းခွင်ပြဿနာ", noProb:"ပြဿနာမရှိ", probDetail:"ပြဿနာအသေးစိတ်", solution:"ဖြေရှင်းနည်း *",
+    next:"နောက်ရက်အစီအစဉ် *", nextDate:"ရက်စွဲ", addTask:"အလုပ်ထည့်", zonePh:"ဇုန်/ထပ်", taskPh:"လုပ်မည့်အလုပ်",
+    photos:"လုပ်ငန်းခွင်ဓာတ်ပုံ", hintPhotos:"ဓာတ်ပုံရိုက် သို့မဟုတ် ပြခန်းမှ ရွေးပါ (အရွယ်အစား အလိုအလျောက်လျှော့)", addPhoto:"ပုံထည့် / ဓာတ်ပုံရိုက်",
+    sign:"အစီရင်ခံသူ (အလိုအလျောက်လက်မှတ်)", signLock:"သိမ်းသည့်အခါ LINE မှ ဒစ်ဂျစ်တယ်လက်မှတ်",
+    submit:"သိမ်း & ထွက်ချိန်မှတ်", footer:"အစီရင်ခံစာသိမ်းခြင်း = အကြီးအကဲ ထွက်ချိန်မှတ်ခြင်း",
+    date:"ရက်စွဲ", project:"စီမံကိန်း", site:"နေရာ", team:"အဖွဲ့", leader:"အကြီးအကဲ",
+    wl:{sun:"နေသာ",cloudy:"တိမ်",rainy:"မိုး",heavy_rain:"မိုးသည်း",storm:"မုန်တိုင်း"},
+    pl:{before:"မတိုင်မီ",progress:"အတွင်း",after:"ပြီးနောက်"},
+    problems:{material_not_ready:"ပစ္စည်းမအဆင်သင့်",material_incomplete:"ပစ္စည်းမပြည့်",drawing_change:"ပုံစံပြင်",site_not_ready:"နေရာမအဆင်သင့်",owner_absent:"ပိုင်ရှင်မရှိ",other_delay:"အခြားနှောင့်နှေး",tools_not_ready:"ကိရိယာမအဆင်သင့်",weather:"ရာသီဥတု",manpower_short:"လူမလုံ",other:"အခြား"},
+    busy:"အစီရင်ခံစာ သိမ်းနေသည်...", loading:"လုပ်ငန်းခွင်အချက်အလက် ဖွင့်နေသည်...",
+    notLeader:"ဤစာမျက်နှာသည် အကြီးအကဲအတွက်သာ — သာမန်လုပ်သားများ ပုံမှန်ထွက်ချိန်မှတ်ပါ",
+    notCheckedIn:"ယနေ့ ဝင်ချိန်မမှတ်ရသေးပါ — ဝင်ချိန်မှတ်ပြီးမှ အစီရင်ခံပါ",
+    already:"ဤအဖွဲ့ ယနေ့အစီရင်ခံပြီးပြီ", goCheckin:"ချိန်မှတ်စာမျက်နှာသို့",
+    needResult:"ယနေ့လုပ်ဆောင်ချက် ဖြည့်ပါ", needSolution:"ဖြေရှင်းနည်း ဖြည့်ပါ",
+    needNext:"နောက်ရက်အလုပ် အနည်းဆုံး ၁ ခု ဖြည့်ပါ", needProblem:"\"ပြဿနာမရှိ\" ရွေးပါ သို့ ပြဿနာရွေးပါ",
+    idErr:"LINE အတည်မပြုနိုင်ပါ", srvErr:"ဆာဗာတုံ့ပြန်မှုမှား", genErr:"အမှားဖြစ်ပွား",
+    noCfg:"အစီရင်ခံရန် LIFF ID မသတ်မှတ်ရသေးပါ", login:"LINE ဖြင့် ဝင်နေသည်...",
+    okTitle:"အစီရင်ခံစာ သိမ်းပြီးပါပြီ", okCheckout:"ထွက်ချိန်မှတ်ပြီး", viewLater:"HRMS app တွင် ပြန်ကြည့်နိုင်သည်", back:"ချိန်မှတ်သို့ပြန်",
+    savedNext:"မနက်ဖြန်အလုပ် ဖန်တီးပြီး", photosSaved:"သိမ်းသောပုံ"
+  }
+};
+const PROBLEM_KEYS = ["material_not_ready","material_incomplete","drawing_change","site_not_ready","owner_absent","other_delay","tools_not_ready","weather","manpower_short","other"];
+
+let lang = localStorage.getItem("hrmsLiffLang") || "th";
+function t(k){ return (L[lang] && L[lang][k]) != null ? L[lang][k] : L.th[k]; }
+
+let CTX = null;        // context payload
+let curGroup = null;   // selected group object
+let progress = 0;
+let weather = null;
+let photos = [];       // {type, dataUrl}
+let tempCounter = 0;
+
+/* ===== boot ===== */
+const statusBox = document.getElementById("statusBox");
+function showStatus(msg,type){ statusBox.textContent = msg; statusBox.className = "status show " + type; }
+function hideStatus(){ statusBox.className = "status"; }
+
+function setLang(x){
+  lang = x;
+  try{ localStorage.setItem("hrmsLiffLang", x); }catch(e){}
+  document.body.classList.toggle("lang-mm", x==="mm");
+  document.getElementById("langTh").classList.toggle("on", x==="th");
+  document.getElementById("langMm").classList.toggle("on", x==="mm");
+  applyStaticText();
+  if(CTX) renderGroup();  // re-render dynamic labels
+  syncLangToServer(x);
+}
+function setTxt(id,k){ const el=document.getElementById(id); if(el) el.textContent = t(k); }
+function applyStaticText(){
+  setTxt("txtSubtitle","subtitle"); setTxt("lblGroup","group");
+  setTxt("lblManpower","manpower"); setTxt("lblPpl","ppl"); setTxt("hintManpower","hintMan"); setTxt("lblAddTemp","addTemp");
+  setTxt("lblWeather","weather"); setTxt("lblWeatherImpact","weatherImpact");
+  setTxt("lblPlan","plan"); setTxt("hintPlan","hintPlan"); setTxt("lblResult","result");
+  setTxt("lblProgress","progress"); setTxt("lblProgToday","progToday");
+  setTxt("lblProblem","problem"); setTxt("lblNoProb","noProb"); setTxt("lblProbDetail","probDetail"); setTxt("lblSolution","solution");
+  setTxt("lblNext","next"); setTxt("lblNextDate","nextDate"); setTxt("lblAddTask","addTask");
+  setTxt("lblPhotos","photos"); setTxt("hintPhotos","hintPhotos"); setTxt("lblAddPhoto","addPhoto");
+  setTxt("lblSign","sign"); setTxt("lblSignLock","signLock");
+  setTxt("lblSubmit","submit"); setTxt("txtFooter","footer");
+  document.getElementById("workResult").placeholder = t("resultPh");
+  document.querySelectorAll("[data-wl]").forEach(el=>{ el.textContent = t("wl")[el.getAttribute("data-wl")]; });
+  document.querySelectorAll("[data-pl]").forEach(el=>{ el.textContent = t("pl")[el.getAttribute("data-pl")]; });
+}
+
+function onProg(v){ progress = Number(v); document.getElementById("progNum").textContent = progress;
+  document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("on")); }
+function setProg(v){ progress = v; document.getElementById("progRange").value = v; document.getElementById("progNum").textContent = v;
+  document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("on")); try{ if(window.event&&window.event.target) window.event.target.classList.add("on"); }catch(e){} }
+function pickWeather(w){ weather = w; document.querySelectorAll("#weatherChips .chip").forEach(c=>c.classList.toggle("on", c.dataset.w===w)); }
+
+function onNoProblem(){
+  const no = document.getElementById("noProblem").checked;
+  document.getElementById("problemDetailWrap").classList.toggle("hide", no);
+  document.querySelectorAll("#problemGrid .pbox").forEach(cb=>{ if(no){ cb.checked=false; } cb.closest(".pchk").style.opacity = no?".4":"1"; cb.disabled = no; });
+}
+function anyProblemChecked(){ return [...document.querySelectorAll("#problemGrid .pbox")].some(cb=>cb.checked); }
+
+/* ===== members ===== */
+function recount(){
+  let n = 0;
+  document.querySelectorAll("#memberList .chk").forEach(c=>{ if(c.checked) n++; });
+  document.querySelectorAll("#tempList input[type=text]").forEach(i=>{ if(i.value.trim()) n++; });
+  document.getElementById("manCount").textContent = n;
+}
+function addTemp(){
+  const id = "temp_" + (tempCounter++);
+  const div = document.createElement("div");
+  div.className = "memrow";
+  div.innerHTML = '<span class="badge">ยืม</span><input type="text" style="border:none;background:transparent;padding:6px 0" placeholder="'+t("tempPh")+'" oninput="recount()"><button class="taskrow del" onclick="this.parentElement.remove();recount()">✕</button>';
+  document.getElementById("tempList").appendChild(div);
+}
+
+/* ===== next tasks ===== */
+function addTask(prefZone, prefNote){
+  const div = document.createElement("div");
+  div.className = "taskrow";
+  div.innerHTML = '<input type="text" class="z" placeholder="'+t("zonePh")+'" value="'+esc(prefZone||"")+'"><textarea class="t" placeholder="'+t("taskPh")+'" oninput="autoGrow(this)">'+esc(prefNote||"")+'</textarea><button class="del" onclick="this.parentElement.remove()">✕</button>';
+  document.getElementById("taskRows").appendChild(div);
+}
+
+/* ===== photos ===== */
+let pendingType = "site";
+document.getElementById("photoInput").addEventListener("change", async function(e){
+  const files = [...(e.target.files||[])];
+  for(const f of files){ try{ const d = await compress(f); photos.push({type:pendingType, dataUrl:d}); }catch(err){} }
+  e.target.value = "";
+  renderPhotos();
+});
+function pickPhoto(type){ pendingType = type||"site"; document.getElementById("photoInput").click(); }
+function autoGrow(el){ if(!el) return; el.style.height="auto"; el.style.height=(el.scrollHeight+2)+"px"; }
+function compress(file){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{
+      const max = 1280; let {width:w,height:h} = img;
+      if(w>h && w>max){ h = Math.round(h*max/w); w = max; }
+      else if(h>=w && h>max){ w = Math.round(w*max/h); h = max; }
+      const cv = document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(url);
+      resolve(cv.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error("img")); };
+    img.src = url;
+  });
+}
+function renderPhotos(){
+  const g = document.getElementById("photoGrid"); g.innerHTML = "";
+  photos.forEach((p,i)=>{
+    const d = document.createElement("div"); d.className="thumb";
+    d.innerHTML = '<img src="'+p.dataUrl+'"><button class="rm" onclick="rmPhoto('+i+')">✕</button>';
+    g.appendChild(d);
+  });
+}
+function rmPhoto(i){ photos.splice(i,1); renderPhotos(); }
+
+/* ===== render context ===== */
+function buildProblemGrid(){
+  const grid = document.getElementById("problemGrid");
+  // keep the "no problem" label (first child), append problem checkboxes
+  PROBLEM_KEYS.forEach(k=>{
+    const lab = document.createElement("label"); lab.className="pchk";
+    lab.innerHTML = '<input type="checkbox" class="pbox" data-k="'+k+'" onchange="if(this.checked){document.getElementById(\'noProblem\').checked=false;onNoProblem()}"><span>'+t("problems")[k]+'</span>';
+    grid.appendChild(lab);
+  });
+}
+function renderGroup(){
+  if(!curGroup) return;
+  const emp = CTX.employee;
+  const info = document.getElementById("infoBox");
+  info.innerHTML =
+    row(t("date"), fmtDate(CTX.work_date)) +
+    row(t("project"), curGroup.project_name || "-") +
+    (curGroup.project_site ? row(t("site"), curGroup.project_site) : "") +
+    row(t("team"), curGroup.group_name || "-") +
+    row(t("leader"), emp.name);
+  // members
+  const ml = document.getElementById("memberList"); ml.innerHTML = "";
+  (curGroup.members||[]).forEach(m=>{
+    const div = document.createElement("div"); div.className="memrow"+(m.checked?"":" off");
+    const isLead = m.role==="leader";
+    div.innerHTML =
+      '<input type="checkbox" class="chk" '+(m.checked||isLead?"checked":"")+' onchange="this.closest(\'.memrow\').classList.toggle(\'off\',!this.checked);recount()">'+
+      '<div style="flex:1"><div class="nm">'+esc(m.name)+'</div>'+(m.position?'<div class="ps">'+esc(m.position)+'</div>':'')+'</div>'+
+      (isLead?'<span class="badge">'+t("leader")+'</span>':'');
+    ml.appendChild(div);
+  });
+  document.getElementById("tempList").innerHTML = "";
+  // plan prefill
+  document.getElementById("workPlan").value = curGroup.work_plan_prefill || "";
+  autoGrow(document.getElementById("workPlan"));
+  // next tasks: start with one row (prefill zone from assignments if any)
+  document.getElementById("taskRows").innerHTML = "";
+  addTask();
+  // signature
+  document.getElementById("signName").textContent = emp.name;
+  document.getElementById("signMeta").textContent = (emp.position?emp.position+" · ":"") + fmtDate(CTX.work_date);
+  recount();
+}
+function row(k,v){ return '<div class="inforow"><span class="k">'+esc(k)+'</span><span class="v">'+esc(v)+'</span></div>'; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function fmtDate(iso){
+  if(!iso) return "-";
+  const [y,m,d] = iso.split("-").map(Number);
+  if(lang==="mm") return d+"/"+m+"/"+y;
+  const mo=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+  return d+" "+mo[m-1]+" "+(y+543);
+}
+
+function onGroupChange(){
+  const gid = Number(document.getElementById("groupPick").value);
+  curGroup = CTX.groups.find(g=>g.group_id===gid);
+  if(curGroup && curGroup.already_reported){ showAlready(curGroup); return; }
+  renderGroup();
+}
+
+/* ===== gates ===== */
+function showAlready(g){
+  document.getElementById("formWrap").classList.add("hide");
+  showStatus("✅ "+t("already")+" ("+(g.existing_report?g.existing_report.report_no:"")+")", "ok");
+}
+
+/* ===== submit ===== */
+function collect(){
+  const present_member_ids = [];
+  document.querySelectorAll("#memberList .memrow").forEach((rowEl,idx)=>{
+    const cb = rowEl.querySelector(".chk");
+    if(cb && cb.checked){ present_member_ids.push(curGroup.members[idx].employee_id); }
+  });
+  const temp_members = [];
+  document.querySelectorAll("#tempList input[type=text]").forEach(i=>{ if(i.value.trim()) temp_members.push({name:i.value.trim()}); });
+  const next_tasks = [];
+  document.querySelectorAll("#taskRows .taskrow").forEach(r=>{
+    const z = r.querySelector(".z").value.trim(); const nt = r.querySelector(".t").value.trim();
+    if(z||nt) next_tasks.push({zone:z, task_note:nt});
+  });
+  const noProb = document.getElementById("noProblem").checked;
+  const problem_types = noProb ? [] : [...document.querySelectorAll("#problemGrid .pbox")].filter(c=>c.checked).map(c=>c.dataset.k);
+  return {
+    idToken: liff.getIDToken(),
+    group_id: curGroup.group_id,
+    project_id: curGroup.project_id,
+    present_member_ids, temp_members,
+    manpower_count: Number(document.getElementById("manCount").textContent)||0,
+    weather, weather_impact: document.getElementById("weatherImpact").checked ? "มีผลกระทบ" : "",
+    work_plan: document.getElementById("workPlan").value.trim(),
+    work_result: document.getElementById("workResult").value.trim(),
+    progress_percent: progress,
+    has_problem: !noProb && problem_types.length>0,
+    problem_types,
+    problem_detail: document.getElementById("problemDetail").value.trim(),
+    solution: document.getElementById("solution").value.trim(),
+    next_day_plan: next_tasks.map(x=>(x.zone?"["+x.zone+"] ":"")+x.task_note).join("\n"),
+    next_tasks,
+    next_work_date: document.getElementById("nextDate").value || null,
+    photos, lang
+  };
+}
+function validate(p){
+  if(!p.work_result){ return t("needResult"); }
+  const noProb = document.getElementById("noProblem").checked;
+  if(!noProb && p.problem_types.length===0){ return t("needProblem"); }
+  if(p.has_problem && !p.solution){ return t("needSolution"); }
+  if(p.next_tasks.length===0){ return t("needNext"); }
+  return null;
+}
+async function doSubmit(){
+  const btn = document.getElementById("btnSubmit");
+  const p = collect();
+  const err = validate(p);
+  if(err){ showStatus("⚠️ "+err, "err"); window.scrollTo(0,0); return; }
+  btn.disabled = true;
+  showStatus("⏳ "+t("busy"), "info"); window.scrollTo(0,0);
+  try{
+    if(!liff.isLoggedIn()){ liff.login(); return; }
+    const res = await fetch(SUBMIT_URL, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(p)});
+    const json = await res.json().catch(()=>({error:t("srvErr")}));
+    if(!res.ok || json.error){ throw new Error(json.error || t("genErr")); }
+    showSuccess(json, p);
+  }catch(e){
+    showStatus("⚠️ "+e.message, "err");
+    btn.disabled = false;
+  }
+}
+function showSuccess(json, p){
+  document.getElementById("formWrap").classList.add("hide");
+  hideStatus();
+  const ok = document.getElementById("okWrap");
+  ok.classList.remove("hide");
+  const nextTxt = p.next_tasks.map(x=>(x.zone?"["+x.zone+"] ":"")+x.task_note).join(" · ");
+  ok.innerHTML =
+    '<div class="okcheck">✓</div>'+
+    '<h1 style="margin:0 0 2px">'+t("okTitle")+'</h1>'+
+    '<div class="sub" style="margin-bottom:2px">'+esc(json.report_no||"")+'</div>'+
+    '<div class="okbar"><span style="width:'+p.progress_percent+'%"></span></div>'+
+    '<div style="font-size:13px;color:var(--muted);margin-bottom:12px">'+t("progToday")+' '+p.progress_percent+'%</div>'+
+    (json.checked_out?'<div class="signlock" style="justify-content:center;margin-bottom:10px">🔒 '+t("okCheckout")+'</div>':'')+
+    (nextTxt?'<div class="infobox" style="text-align:left"><div class="inforow"><span class="k">'+t("next")+'</span></div><div style="font-size:12.5px">'+esc(nextTxt)+'</div></div>':'')+
+    (json.photos_uploaded?'<div style="font-size:11.5px;color:var(--muted)">'+t("photosSaved")+': '+json.photos_uploaded+'</div>':'')+
+    '<div style="font-size:11.5px;color:var(--muted);margin:8px 0 4px">'+t("viewLater")+'</div>'+
+    '<button class="btn-ghost" onclick="location.href=\''+CHECKIN_PAGE+'\'">← '+t("back")+'</button>';
+  window.scrollTo(0,0);
+}
+
+/* ===== init ===== */
+async function init(){
+  applyStaticText();
+  document.getElementById("langTh").classList.toggle("on", lang==="th");
+  document.getElementById("langMm").classList.toggle("on", lang==="mm");
+  buildProblemGrid();
+  showStatus("⏳ "+t("loading"), "info");
+  try{
+    const cfg = await (await fetch(CONFIG_URL)).json();
+    if(cfg.companyName) document.getElementById("companyName").textContent = cfg.companyName;
+    if(!cfg.liffId) throw new Error(t("noCfg"));
+    await liff.init({ liffId: cfg.liffId });
+    if(!liff.isLoggedIn()){ showStatus("⏳ "+t("login"), "info"); liff.login(); return; }
+    const idToken = liff.getIDToken();
+    if(!idToken) throw new Error(t("idErr"));
+
+    const res = await fetch(CONTEXT_URL, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({idToken})});
+    CTX = await res.json();
+    if(CTX.error) throw new Error(CTX.error);
+
+    if(!CTX.is_leader){ gateMsg(t("notLeader")); return; }
+    if(!CTX.attendance.checked_in){ gateMsg(t("notCheckedIn")); return; }
+
+    // default next date = tomorrow (Thai)
+    const nd = new Date(CTX.work_date+"T00:00:00Z"); nd.setUTCDate(nd.getUTCDate()+1);
+    document.getElementById("nextDate").value = nd.toISOString().slice(0,10);
+
+    // group selection
+    const groups = CTX.groups || [];
+    if(groups.length > 1){
+      const sel = document.getElementById("groupPick");
+      sel.innerHTML = groups.map(g=>'<option value="'+g.group_id+'">'+esc(g.group_name)+' · '+esc(g.project_name)+(g.already_reported?' ✓':'')+'</option>').join("");
+      document.getElementById("groupSel").classList.remove("hide");
+    }
+    curGroup = groups[0] || null;
+    if(!curGroup){ gateMsg(t("notLeader")); return; }
+    if(curGroup.already_reported){ showAlready(curGroup); return; }
+
+    hideStatus();
+    document.getElementById("formWrap").classList.remove("hide");
+    renderGroup();
+  }catch(e){
+    gateMsg("⚠️ "+e.message, true);
+  }
+}
+function gateMsg(msg, isErr){
+  document.getElementById("formWrap").classList.add("hide");
+  showStatus((isErr?"":"ℹ️ ")+msg, isErr?"err":"info");
+  const ok = document.getElementById("okWrap"); ok.classList.remove("hide");
+  ok.innerHTML = '<button class="btn-ghost" onclick="location.href=\''+CHECKIN_PAGE+'\'">← '+t("goCheckin")+'</button>';
+}
+
+setLang(lang);
+init();
+</script>
+</body>
+</html>
