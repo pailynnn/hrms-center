@@ -202,30 +202,45 @@
   body.compact .steptitle small{display:none}
   body.compact .section{margin-bottom:14px}
 
-  /* ===== paper form (ใช้สร้าง PDF / พรีวิวรายงาน) ===== */
+  /* ===== paper form (ใช้สร้าง PDF / พรีวิวรายงาน) — [รอบ 17.7] รื้อใหม่เป็นกล่อง (box) ทุก section ให้ตรงฟอร์มมาตรฐานงานก่อสร้าง ===== */
   .offscreen{position:fixed;left:-99999px;top:0;z-index:-1}
-  .paper{width:760px;background:#fff;color:#14181f;padding:26px 28px 30px;
-    font-family:"Noto Sans Thai","Sora",sans-serif;font-size:12.5px;line-height:1.55}
-  .paper .ph{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2.5px solid #f7941d;padding-bottom:9px;margin-bottom:12px}
-  .paper .ph h2{margin:0;font-size:19px;letter-spacing:.3px}
-  .paper .ph .co{font-size:12px;color:#5b6472;margin-top:2px}
-  .paper .ph .no{text-align:right;font-size:11.5px;color:#5b6472}
-  .paper .ph .no b{display:block;font-size:14px;color:#14181f;letter-spacing:.4px}
-  .paper table{width:100%;border-collapse:collapse;margin-bottom:4px}
-  .paper td,.paper th{border:1px solid #d3d9e2;padding:6px 9px;vertical-align:top;text-align:left}
-  .paper td.k{background:#f4f6f9;font-weight:600;width:22%;color:#41495a}
-  .paper .sec{margin:14px 0 7px;font-weight:700;font-size:13.5px;border-left:4px solid #f7941d;padding-left:8px}
-  .paper .box{border:1px solid #d3d9e2;border-radius:4px;padding:8px 10px;white-space:pre-wrap;min-height:34px}
-  .paper .pbar{height:13px;border:1px solid #d3d9e2;border-radius:99px;overflow:hidden;background:#eef1f6;margin-top:5px}
-  .paper .pbar span{display:block;height:100%;background:#f7941d}
-  .paper .tags span{display:inline-block;border:1px solid #f0b26a;background:#fff5e8;color:#8a5a12;border-radius:99px;padding:2px 9px;margin:2px 4px 2px 0;font-size:11.5px}
-  .paper .imgs{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
-  .paper .imgs img{width:174px;height:130px;object-fit:cover;border:1px solid #d3d9e2;border-radius:4px}
-  .paper .sign{margin-top:20px;display:flex;justify-content:flex-end}
-  .paper .signbx{min-width:250px;text-align:center;border-top:1px dashed #9aa3b2;padding-top:8px}
-  .paper .signbx .nm{font-weight:700;font-size:14px}
-  .paper .signbx .mt{font-size:11px;color:#5b6472;margin-top:2px}
-  .paper .ft{margin-top:14px;font-size:10.5px;color:#77808f;text-align:center;border-top:1px solid #e3e7ee;padding-top:8px}
+  .paper{width:780px;background:#fff;color:#1c2333;font-family:"Noto Sans Thai","Sora",sans-serif;font-size:12px;line-height:1.55}
+  .paper .p-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:16px 22px;border-bottom:3px solid #f7941d}
+  .paper .p-head-left{display:flex;align-items:center;gap:12px;min-width:0}
+  .paper .p-logo{width:50px;height:50px;border-radius:11px;flex:none;object-fit:cover;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+  .paper .p-co-en{font-size:15.5px;font-weight:800;letter-spacing:.3px;color:#1c2333;white-space:nowrap}
+  .paper .p-co-th{font-size:11px;color:#5b6472;margin-top:1px}
+  .paper .p-head-right{text-align:right;flex:none}
+  .paper .p-doctitle{font-size:15.5px;font-weight:800;letter-spacing:.4px;color:#1c2333}
+  .paper .p-doctitle-th{font-size:10.5px;color:#5b6472}
+  .paper .p-metabar{display:flex;flex-wrap:wrap;gap:6px 20px;background:#f4f6fa;padding:7px 22px;font-size:10.5px;color:#41495a;border-bottom:1px solid #e1e5ee}
+  .paper .p-metabar b{color:#1c2333}
+  .paper .p-body{padding:14px 22px 20px}
+  .paper .p-box{border:1.3px solid #ccd3e0;border-radius:7px;margin-bottom:10px;overflow:hidden;break-inside:avoid}
+  .paper .p-box-title{background:#eef1f7;color:#2a3040;font-weight:800;font-size:11px;padding:6px 11px;border-bottom:1.3px solid #ccd3e0;letter-spacing:.2px}
+  .paper .p-box-body{padding:9px 12px}
+  .paper .p-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .paper .p-wx{display:flex;gap:6px;flex-wrap:wrap}
+  .paper .p-wx span{display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 8px;border:1.3px solid #dbe0ea;border-radius:7px;font-size:9.5px;color:#8992a3;min-width:40px}
+  .paper .p-wx span.on{border-color:#f7941d;background:#fff5e8;color:#a5620a;font-weight:700}
+  .paper .p-wx span .ic{font-size:15px}
+  .paper table{width:100%;border-collapse:collapse}
+  .paper td{padding:3px 0;vertical-align:top;font-size:11.5px}
+  .paper td.k{color:#6b7385;width:34%;white-space:nowrap}
+  .paper .p-chips span{display:inline-block;background:#f3f5f9;border-radius:7px;padding:3px 9px;margin:2px 4px 2px 0;font-size:11px}
+  .paper .p-chips span.lead{background:#fff3e2;color:#a5620a;font-weight:700}
+  .paper .p-chips span.temp{background:#eef0f5;color:#6b7280}
+  .paper .p-box-body div.txt{white-space:pre-wrap}
+  .paper .p-pbar{height:12px;border:1px solid #ccd3e0;border-radius:99px;overflow:hidden;background:#eef1f6;margin-top:5px}
+  .paper .p-pbar span{display:block;height:100%;background:linear-gradient(90deg,#f7941d,#ffc169)}
+  .paper .p-tags span{display:inline-block;border:1px solid #f0b26a;background:#fff5e8;color:#8a5a12;border-radius:99px;padding:2px 9px;margin:2px 4px 2px 0;font-size:11px}
+  .paper .p-imgs{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
+  .paper .p-imgs img{width:148px;height:110px;object-fit:cover;border:1px solid #ccd3e0;border-radius:5px}
+  .paper .p-sign{display:flex;justify-content:flex-end;margin-top:2px}
+  .paper .p-signbx{min-width:230px;text-align:center;border-top:1.3px solid #1c2333;padding-top:7px}
+  .paper .p-signbx .nm{font-weight:800;font-size:13px}
+  .paper .p-signbx .mt{font-size:10.5px;color:#5b6472;margin-top:2px}
+  .paper .p-foot{margin-top:12px;font-size:9.5px;color:#8992a3;text-align:center;border-top:1px solid #e6e9f0;padding-top:7px}
 
   /* preview modal */
   .modal{position:fixed;inset:0;background:rgba(5,8,14,.86);z-index:60;display:flex;flex-direction:column;padding:12px}
@@ -400,6 +415,9 @@ const SUBMIT_URL = BASE + "/liff-report-submit";
 const SET_LANG_URL = BASE + "/liff-set-lang";
 // หน้าลงเวลาเป็น LIFF app คนละตัวกับหน้ารายงาน -> ต้องกลับด้วย LIFF URL เต็ม ไม่ใช่ relative path
 const CHECKIN_PAGE = "https://liff.line.me/2010634360-Lh7upfPt";
+// [รอบ 17.7] อัปโหลด PDF ที่สร้างเสร็จ -> เก็บใน Storage -> คืน https URL จริง (แก้บั๊ก "Unable to open URL" ที่เกิดจาก window.open(blob:) ในเบราว์เซอร์ LINE)
+const PDF_UPLOAD_URL = BASE + "/liff-report-pdf";
+// โลโก้สำรอง (ตรา AG ออกแบบใหม่คมชัด) — ใช้ก็ต่อเมื่อยังไม่มีโลโก้จริงตั้งค่าไว้ใน ตั้งค่าระบบ → settings.company_logo (liff-report-config จะส่ง companyLogo มาให้ถ้ามี)
 
 function syncLangToServer(x){
   try{
@@ -497,6 +515,7 @@ let lang = localStorage.getItem("hrmsLiffLang") || "th";
 function t(k){ return (L[lang] && L[lang][k]) != null ? L[lang][k] : L.th[k]; }
 
 let CTX = null;        // context payload
+let CFG_CO_TH = null;  // ชื่อบริษัทภาษาไทย (settings.company_name_thai) ถ้ามี
 let curGroup = null;   // selected group object
 let progress = 0;
 let weather = null;
@@ -866,7 +885,9 @@ function buildRptData(json, p){
   });
   const emp = CTX.employee;
   return {
+    report_id: json.report_id || null,
     company: document.getElementById("companyName").textContent || "HRMS CENTER",
+    company_th: CFG_CO_TH || "",
     report_no: json.report_no || "",
     work_date: CTX.work_date,
     project: curGroup.project_name || "",
@@ -875,6 +896,7 @@ function buildRptData(json, p){
     team: curGroup.group_name || "",
     manpower: p.manpower_count,
     members: memNames,
+    weather_key: p.weather || "",
     weather_label: p.weather ? t("wl")[p.weather] : "-",
     weather_impact: !!document.getElementById("weatherImpact").checked,
     work_plan: p.work_plan, work_result: p.work_result, progress: p.progress_percent,
@@ -887,45 +909,63 @@ function buildRptData(json, p){
     checked_out: !!json.checked_out
   };
 }
+const WEATHER_ICONS = [["sun","☀️"],["cloudy","⛅"],["rainy","🌧️"],["heavy_rain","⛈️"],["storm","🌪️"]];
 function paperHtml(r){
-  const rows = (k,v)=>'<tr><td class="k">'+esc(k)+'</td><td>'+(v||"-")+'</td></tr>';
+  const box = (title,body)=>'<div class="p-box"><div class="p-box-title">'+esc(title)+'</div><div class="p-box-body">'+body+'</div></div>';
   const memHtml = (r.members||[]).length
-    ? (r.members||[]).map(m=>'<span>'+esc(m.name)+(m.temp?" ("+esc(t("dTemp"))+")":"")+'</span>').join(" · ")
-    : "-";
+    ? '<div class="p-chips">'+(r.members||[]).map(m=>'<span'+(m.temp?' class="temp"':'')+'>'+esc(m.name)+(m.temp?" ("+esc(t("dTemp"))+")":"")+'</span>').join("")+'</div>'
+    : '<span style="color:#8992a3">-</span>';
+  const wxHtml = '<div class="p-wx">'+WEATHER_ICONS.map(([k,ic])=>
+    '<span class="'+(r.weather_key===k?'on':'')+'"><span class="ic">'+ic+'</span>'+esc(t("wl")[k])+'</span>').join("")+'</div>';
+  const infoTable = '<table>'+
+      '<tr><td class="k">'+esc(t("project"))+'</td><td>'+esc(r.project)+(r.customer?' · '+esc(r.customer):'')+'</td></tr>'+
+      (r.site?'<tr><td class="k">'+esc(t("site"))+'</td><td>'+esc(r.site)+'</td></tr>':'')+
+      '<tr><td class="k">'+esc(t("team"))+'</td><td>'+esc(r.team)+'</td></tr>'+
+      '<tr><td class="k">'+esc(t("leader"))+'</td><td>'+esc(r.signed_name)+(r.signed_position?' · '+esc(r.signed_position):'')+'</td></tr>'+
+    '</table>';
   const tasksHtml = (r.next_tasks||[]).length
-    ? '<ol style="margin:4px 0 0 18px;padding:0">'+(r.next_tasks||[]).map(x=>'<li>'+(x.zone?'<b>['+esc(x.zone)+']</b> ':'')+esc(x.task_note)+'</li>').join("")+'</ol>'
-    : "-";
+    ? '<ol style="margin:2px 0 0 16px;padding:0">'+(r.next_tasks||[]).map(x=>'<li>'+(x.zone?'<b>['+esc(x.zone)+']</b> ':'')+esc(x.task_note)+'</li>').join("")+'</ol>'
+    : '<span style="color:#8992a3">-</span>';
   const probHtml = r.has_problem
-    ? '<div class="tags">'+(r.problem_labels||[]).map(l=>'<span>'+esc(l)+'</span>').join("")+'</div>'+
-      (r.problem_detail?'<div class="box" style="margin-top:6px">'+esc(r.problem_detail)+'</div>':'')+
-      (r.solution?'<div class="sec" style="margin:9px 0 5px">'+esc(t("solution")).replace(" *","")+'</div><div class="box">'+esc(r.solution)+'</div>':'')
-    : '<div class="box" style="border-color:#8ed7b4;background:#f0fbf6;color:#1f6f4d">✓ '+esc(t("rvNoProblem"))+'</div>';
+    ? '<div class="p-tags">'+(r.problem_labels||[]).map(l=>'<span>'+esc(l)+'</span>').join("")+'</div>'+
+      (r.problem_detail?'<div class="txt" style="margin-top:6px">'+esc(r.problem_detail)+'</div>':'')+
+      (r.solution?'<div style="margin-top:8px;font-weight:700;font-size:11px;color:#41495a">'+esc(t("solution")).replace(" *","")+'</div><div class="txt">'+esc(r.solution)+'</div>':'')
+    : '<div style="color:#1f6f4d;font-weight:700">✓ '+esc(t("rvNoProblem"))+'</div>';
   const imgsHtml = (r.photos||[]).length
-    ? '<div class="imgs">'+(r.photos||[]).map(u=>'<img src="'+u+'">').join("")+'</div>' : "";
+    ? '<div class="p-imgs">'+(r.photos||[]).map(u=>'<img src="'+u+'">').join("")+'</div>' : '<span style="color:#8992a3">-</span>';
   const signAt = r.signed_at_text || fmtDate(r.work_date);
+  const printedAt = new Date().toLocaleString(lang==="mm"?"en-GB":"th-TH",{hour:"2-digit",minute:"2-digit"});
   return ''+
   '<div class="paper">'+
-    '<div class="ph"><div><h2>'+esc(t("docTitle"))+'</h2><div class="co">'+esc(r.company)+'</div></div>'+
-      '<div class="no">'+esc(t("docNo"))+'<b>'+esc(r.report_no||"-")+'</b>'+esc(fmtDate(r.work_date))+'</div></div>'+
-    '<table>'+
-      rows(t("project"), esc(r.project)+(r.customer?' · '+esc(r.customer):''))+
-      (r.site?rows(t("site"), esc(r.site)):'')+
-      rows(t("team"), esc(r.team))+
-      rows(t("leader"), esc(r.signed_name)+(r.signed_position?' · '+esc(r.signed_position):''))+
-      rows(t("weather"), esc(r.weather_label)+(r.weather_impact?' <b style="color:#b4600f">⚠ '+esc(t("weatherImpact"))+'</b>':''))+
-      rows(t("docMan"), '<b>'+r.manpower+'</b> '+esc(t("ppl"))+' — <span style="color:#41495a">'+memHtml+'</span>')+
-    '</table>'+
-    '<div class="sec">'+esc(t("docPlan"))+'</div><div class="box">'+esc(r.work_plan||"-")+'</div>'+
-    '<div class="sec">'+esc(t("docResult"))+'</div><div class="box">'+esc(r.work_result||"-")+'</div>'+
-    '<div class="sec">'+esc(t("docProgress"))+'</div>'+
-      '<div><b style="font-size:16px">'+r.progress+'%</b><div class="pbar"><span style="width:'+r.progress+'%"></span></div></div>'+
-    '<div class="sec">'+esc(t("docProblem"))+'</div>'+probHtml+
-    '<div class="sec">'+esc(t("docNext"))+(r.next_date?' · '+esc(fmtDate(r.next_date)):'')+'</div>'+tasksHtml+
-    (imgsHtml?'<div class="sec">'+esc(t("docPhotos"))+' ('+(r.photos||[]).length+')</div>'+imgsHtml:'')+
-    '<div class="sign"><div class="signbx"><div class="nm">'+esc(r.signed_name)+'</div>'+
-      '<div class="mt">'+esc(r.signed_position||"")+'</div>'+
-      '<div class="mt">🔒 '+esc(signAt)+'</div></div></div>'+
-    '<div class="ft">'+esc(t("docFooter"))+'</div>'+
+    '<div class="p-head">'+
+      '<div class="p-head-left">'+
+        '<div><div class="p-co-en">'+esc(r.company)+'</div>'+(r.company_th?'<div class="p-co-th">'+esc(r.company_th)+'</div>':'')+'</div></div>'+
+      '<div class="p-head-right"><div class="p-doctitle">'+esc(t("docTitle"))+'</div>'+
+        (lang!=="mm"?'<div class="p-doctitle-th">DAILY SITE REPORT</div>':'')+'</div>'+
+    '</div>'+
+    '<div class="p-metabar">'+
+      '<div>'+esc(t("docNo"))+' <b>'+esc(r.report_no||"-")+'</b></div>'+
+      '<div>'+esc(t("date"))+' <b>'+esc(fmtDate(r.work_date))+'</b></div>'+
+      '<div>'+esc(lang==="mm"?"Printed":"พิมพ์เมื่อ")+' <b>'+esc(printedAt)+'</b></div>'+
+    '</div>'+
+    '<div class="p-body">'+
+      box("1. "+t("project")+" / "+t("weather"), '<div class="p-grid2"><div>'+infoTable+'</div><div>'+wxHtml+
+        (r.weather_impact?'<div style="margin-top:6px;color:#b4600f;font-weight:700;font-size:11px">⚠ '+esc(t("weatherImpact"))+'</div>':'')+'</div></div>')+
+      box("2. "+t("docMan")+" ("+r.manpower+" "+esc(t("ppl"))+")", memHtml)+
+      '<div class="p-grid2">'+
+        box("3. "+t("docPlan"), '<div class="txt">'+esc(r.work_plan||"-")+'</div>')+
+        box("4. "+t("docResult"), '<div class="txt">'+esc(r.work_result||"-")+'</div>'+
+          '<div style="margin-top:8px"><b style="font-size:15px">'+r.progress+'%</b> <span style="font-size:10.5px;color:#6b7385">'+esc(t("docProgress"))+'</span>'+
+          '<div class="p-pbar"><span style="width:'+r.progress+'%"></span></div></div>')+
+      '</div>'+
+      box("5. "+t("docProblem"), probHtml)+
+      box("6. "+t("docNext")+(r.next_date?' · '+esc(fmtDate(r.next_date)):''), tasksHtml)+
+      box("7. "+t("docPhotos")+" ("+(r.photos||[]).length+")", imgsHtml)+
+      '<div class="p-sign"><div class="p-signbx"><div class="nm">'+esc(r.signed_name)+'</div>'+
+        '<div class="mt">'+esc(r.signed_position||"")+'</div>'+
+        '<div class="mt">🔒 '+esc(signAt)+'</div></div></div>'+
+      '<div class="p-foot">'+esc(t("docFooter"))+'</div>'+
+    '</div>'+
   '</div>';
 }
 function loadScriptOnce(src){
@@ -979,46 +1019,80 @@ function printFallback(r){
   w.document.close();
   return true;
 }
+// [รอบ 17.7] เดิม sharePdf/openPdf เปิด blob: URL ด้วย window.open() ตรงๆ ซึ่งเบราว์เซอร์ในแอป LINE เปิดไม่ได้
+// (ขึ้น "Unable to open URL due to an unexpected error") -> ตอนนี้อัปโหลด PDF ขึ้น Storage ก่อนเสมอ ได้ https URL จริง
+// แล้วค่อยเปิด/แชร์ URL นั้น ซึ่งใช้ได้ทั้งในแอป LINE และเบราว์เซอร์ทั่วไป
+let PDF_URL_CACHE = null; // {reportNo, url} กันอัปโหลดซ้ำถ้ากดปุ่มหลายครั้งในหน้าเดียวกัน
+async function getPdfUrl(){
+  const key = RPT.report_no || RPT.work_date || "report";
+  if(PDF_URL_CACHE && PDF_URL_CACHE.key === key) return PDF_URL_CACHE.url;
+  const blob = await makePdfBlob(RPT);
+  const res = await fetch(PDF_UPLOAD_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/pdf", "x-id-token": liff.getIDToken(), "x-report-no": key },
+    body: blob
+  });
+  const json = await res.json().catch(()=>({}));
+  if(!res.ok || json.error || !json.url) throw new Error(json.error || t("pdfErr"));
+  PDF_URL_CACHE = { key, url: json.url };
+  return json.url;
+}
+function inLineClient(){ try{ return typeof liff!=="undefined" && liff.isInClient && liff.isInClient(); }catch(e){ return false; } }
+// เปิดลิงก์ในเบราว์เซอร์ระบบ (นอกแอป LINE) — LINE webview มีข้อจำกัดหลายอย่าง เปิดข้างนอกแล้ว view/download/share ได้เต็มที่กว่า
+function openExternal(url){
+  if(inLineClient()){ try{ liff.openWindow({ url, external:true }); return; }catch(e){} }
+  window.open(url, "_blank");
+}
+async function openPdf(){
+  if(!RPT) return;
+  showStatus("⏳ "+t("pdfBusy"), "info");
+  try{
+    const url = await getPdfUrl();
+    openExternal(url);
+    hideStatus();
+  }catch(e){
+    if(printFallback(RPT)) hideStatus();
+    else showStatus("⚠️ "+t("pdfErr"), "err");
+  }
+}
 async function sharePdf(){
   if(!RPT) return;
   const btns = document.querySelectorAll("#okWrap button"); btns.forEach(b=>b.disabled=true);
   showStatus("⏳ "+t("pdfBusy"), "info");
   try{
-    const blob = await makePdfBlob(RPT);
-    const name = pdfFileName(RPT);
-    const file = new File([blob], name, { type:"application/pdf" });
-    if(navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({ files:[file], title:name, text:t("docTitle")+" "+(RPT.report_no||"") });
-    }else{
-      const url = URL.createObjectURL(blob);
-      // เบราว์เซอร์ใน LINE มักบล็อกการดาวน์โหลดตรง -> เปิดไฟล์ในแท็บใหม่ให้แทน
-      if(/Line\//i.test(navigator.userAgent)){ window.open(url, "_blank"); }
-      else{
-        const a = document.createElement("a"); a.href = url; a.download = name;
-        document.body.appendChild(a); a.click(); a.remove();
-      }
-      setTimeout(()=>URL.revokeObjectURL(url), 120000);
+    const url = await getPdfUrl();
+    const title = t("docTitle")+" "+(RPT.report_no||"");
+    let shared = false;
+    // ทางเลือกที่ 1: liff.shareTargetPicker -> แชร์เป็นการ์ดจริงเข้าแชท LINE (เพื่อน/กลุ่ม) ได้โดยไม่ต้องออกจากแอป
+    if(typeof liff!=="undefined" && liff.isApiAvailable && liff.isApiAvailable("shareTargetPicker")){
+      shared = true; // ให้ LINE จัดการ UX เลือกคน/ยกเลิกเอง ไม่ fallback ซ้อนแม้ผู้ใช้ยกเลิก
+      try{
+        await liff.shareTargetPicker([{
+          type: "flex", altText: title,
+          contents: { type:"bubble",
+            body: { type:"box", layout:"vertical", spacing:"sm", contents:[
+              { type:"text", text:"📋 "+title, weight:"bold", size:"md", wrap:true },
+              { type:"text", text:(RPT.project||"")+(RPT.team?" · "+RPT.team:""), size:"sm", color:"#8b94a7", wrap:true }
+            ]},
+            footer: { type:"box", layout:"vertical", contents:[
+              { type:"button", style:"primary", color:"#f7941d", action:{ type:"uri", label:t("pdfOpen"), uri:url } }
+            ]}
+          }
+        }]);
+      }catch(e){ /* ผู้ใช้ยกเลิก หรือ error ฝั่ง LINE — ไม่ต้องแจ้งซ้ำ */ }
     }
+    // ทางเลือกที่ 2: Web Share API มาตรฐาน (เบราว์เซอร์ทั่วไปที่ไม่ใช่ LINE)
+    if(!shared && navigator.share){
+      try{ await navigator.share({ url, title, text:title }); shared = true; }catch(e){}
+    }
+    // ทางเลือกสุดท้าย: เปิดลิงก์จริงในเบราว์เซอร์ระบบ ให้ผู้ใช้กดแชร์/ดาวน์โหลดเองจากเมนูเบราว์เซอร์
+    if(!shared){ openExternal(url); }
     hideStatus();
   }catch(e){
     if(printFallback(RPT)) hideStatus();
     else showStatus("⚠️ "+t("pdfErr"), "err");
   }
   finally{ document.querySelectorAll("#okWrap button").forEach(b=>b.disabled=false); }
-}
-async function openPdf(){
-  if(!RPT) return;
-  showStatus("⏳ "+t("pdfBusy"), "info");
-  try{
-    const blob = await makePdfBlob(RPT);
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    setTimeout(()=>URL.revokeObjectURL(url), 120000);
-    hideStatus();
-  }catch(e){
-    if(printFallback(RPT)) hideStatus();
-    else showStatus("⚠️ "+t("pdfErr"), "err");
-  }
 }
 
 function showSuccess(json, p){
@@ -1055,6 +1129,7 @@ async function init(){
   try{
     const cfg = await (await fetch(CONFIG_URL)).json();
     if(cfg.companyName) document.getElementById("companyName").textContent = cfg.companyName;
+    CFG_CO_TH = cfg.companyNameThai || null;
     if(!cfg.liffId) throw new Error(t("noCfg"));
     await liff.init({ liffId: cfg.liffId });
     if(!liff.isLoggedIn()){ showStatus("⏳ "+t("login"), "info"); liff.login(); return; }
