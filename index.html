@@ -7842,7 +7842,7 @@ function ensureProjectsLoaded(){
   projectsLoading = true;
   loadProjectsModule().then(()=>{ projectsLoaded = true; projectsLoading = false; updateProjectBadge(); if(currentPage==="projects") render("projects"); });
 }
-const PROJECT_STATUS = { active:{label:"กำลังดำเนินงาน",color:"green"}, pending:{label:"ยังไม่เริ่ม",color:"amber"}, done:{label:"เสร็จสิ้น",color:"gray"} };
+const PROJECT_STATUS = { active:{label:"กำลังดำเนินงาน",color:"green"}, on_hold:{label:"หยุดชั่วคราว",color:"red"}, pending:{label:"ยังไม่เริ่ม",color:"amber"}, done:{label:"เสร็จสิ้น",color:"gray"} };
 function canManageProjects(){ return canViewAll() || isTeamLead(); }
 function PG(id){ return projectGroups.find(g=>String(g.id)===String(id)); }
 function PJ(id){ return projects.find(p=>String(p.id)===String(id)); }
@@ -8354,13 +8354,24 @@ async function wkAggregate(pid, gid, ws){
   const proj = PJ(pid); const grp = gid?PG(gid):null;
   const leaderName = grp && E(grp.leader_employee_id) ? E(grp.leader_employee_id).full_name : "";
   return { pid, gid, ws, we, project:proj, group:grp, leaderName, daily, manpower, completed, problems, nextPlans,
-    progress_start, progress_end, manpower_avg, manpower_max, work_days:list.length, problem_count:problems.length };
+    progress_start, progress_end, manpower_avg, manpower_max, work_days:list.length, problem_count:problems.length,
+    on_hold: !!(proj && proj.status==="on_hold"), hold_reason: proj?proj.hold_reason:null };
 }
 
 // ── ตัวเขียนสรุป (deterministic) — จุดเดียวที่ต้องแก้ถ้าจะต่อ LLM จริงในอนาคต ──
 function wkComposeText(a){
   const projN = a.project?a.project.name:"-";
   const teamN = a.group?a.group.name:"ทุกทีม";
+  // [รอบ 17.12] โครงการหยุดชั่วคราว + ไม่มีรายงานทั้งสัปดาห์ -> สรุปให้อัตโนมัติว่าหยุดชั่วคราว (ไม่ปล่อยว่าง)
+  if(a.on_hold && !a.work_days){
+    const rn = a.hold_reason ? " (เหตุผล: "+a.hold_reason+")" : "";
+    return {
+      summary:`โครงการ${projN} ทีม${teamN} หยุดชั่วคราวในสัปดาห์ ${wkWeekLabel(a.ws)}${rn} — ไม่มีการปฏิบัติงานหน้างาน จึงไม่มีรายงานประจำวันในสัปดาห์นี้`,
+      progress_note:"— (โครงการหยุดชั่วคราว)", work_completed:"-",
+      problem_summary:"ไม่มีการปฏิบัติงาน (โครงการหยุดชั่วคราว)", solution_note:"-",
+      manpower_note:"ไม่มีกำลังคนปฏิบัติงาน (โครงการหยุดชั่วคราว)", next_week_plan:"-"
+    };
+  }
   const dgain = a.progress_end - a.progress_start;
   const topWork = a.completed.slice(0,4).map(c=>c.text.split(/\n|·/)[0].trim()).filter(Boolean);
   let summary = `ในสัปดาห์ ${wkWeekLabel(a.ws)} ทีม${teamN} โครงการ${projN} ปฏิบัติงานทั้งหมด ${a.work_days} วัน`;
@@ -8404,10 +8415,10 @@ async function wkGenerate(pid, gid, ws){
   let a;
   try{ a = await wkAggregate(pid, gid, ws); }
   catch(e){ toast("รวบรวมข้อมูลไม่สำเร็จ: "+(e.message||"")); return; }
-  if(!a.work_days){ toast("ไม่พบ Daily Report (สถานะส่งแล้ว) ในสัปดาห์นี้"); return; }
+  if(!a.work_days && !a.on_hold){ toast("ไม่พบ Daily Report (สถานะส่งแล้ว) ในสัปดาห์นี้"); return; }
   const text = wkComposeText(a);
   const report_no = "WR-"+ws.replace(/-/g,"")+"-"+pid+(gid?("-"+gid):"");
-  const metrics = { daily:a.daily, manpower:a.manpower, completed:a.completed, problems:a.problems, next:a.nextPlans };
+  const metrics = { daily:a.daily, manpower:a.manpower, completed:a.completed, problems:a.problems, next:a.nextPlans, on_hold:a.on_hold, hold_reason:a.hold_reason };
   const nowISO = new Date().toISOString();
   const payload = { report_no, project_id:pid, group_id:gid||null, week_start:ws, week_end:a.we, status:"draft", ai_engine:"auto",
     summary:text.summary, progress_note:text.progress_note, work_completed:text.work_completed, problem_summary:text.problem_summary,
@@ -8474,7 +8485,7 @@ function prjWeekly(){
     </div>` : "";
 
   const rows = list.length? list.map(w=>{
-    const st = w.status==="approved" ? '<span class="pill green">✓ อนุมัติแล้ว</span>' : '<span class="pill amber">ร่าง</span>';
+    const st = (w.status==="approved" ? '<span class="pill green">✓ อนุมัติแล้ว</span>' : '<span class="pill amber">ร่าง</span>') + ((w.metrics&&w.metrics.on_hold)?' <span class="pill red">⏸️ หยุด</span>':'');
     const dg = (w.progress_end||0)-(w.progress_start||0);
     return `<tr style="cursor:pointer" onclick="wkOpenDetail(${w.id})">
       <td>${esc(wkWeekLabel(w.week_start))}</td>
@@ -8592,6 +8603,7 @@ function wkRenderDetail(w){
       <div style="margin-left:auto">${statusPill}</div>
     </div>
     <div class="p-body">
+      ${(m.on_hold)?`<div class="p-box" style="border-color:#e6a23c;background:#fff8ec"><div class="p-box-body" style="color:#b4600f;font-weight:700">⏸️ โครงการนี้หยุดชั่วคราว${m.hold_reason?` — เหตุผล: ${esc(m.hold_reason)}`:''}</div></div>`:''}
       ${box("ข้อมูลโครงการ (Project Information)", `<div class="p-grid2"><div class="p-info">${info}</div><div><div class="txt" style="font-size:11px;color:#6b7385">🤖 ${engineNote}${w.edited?' · ✎ แก้ไขโดยผู้ใช้':''}</div></div></div>`)}
       ${box("1. Weekly Work Summary — สรุปภาพรวมสัปดาห์", `<div class="txt">${esc(w.summary||'-')}</div>`)}
       ${box("2. Work Progress — ความคืบหน้า", progBar + (w.progress_note?`<div class="txt" style="margin-top:6px">${esc(w.progress_note)}</div>`:'') + progTable)}
@@ -8720,6 +8732,7 @@ function prjBoard(){
       <h3>📁 ภาพรวมโครงการ (${list.length})</h3>
       <select style="margin-left:auto;padding:8px 10px;border:1.5px solid var(--line);border-radius:9px" onchange="prjFilter.status=this.value;render('projects')">
         <option value="active" ${prjFilter.status==='active'?'selected':''}>กำลังดำเนินงาน</option>
+        <option value="on_hold" ${prjFilter.status==='on_hold'?'selected':''}>หยุดชั่วคราว</option>
         <option value="pending" ${prjFilter.status==='pending'?'selected':''}>ยังไม่เริ่ม</option>
         <option value="done" ${prjFilter.status==='done'?'selected':''}>เสร็จสิ้น</option>
         <option value="all" ${prjFilter.status==='all'?'selected':''}>ทั้งหมด</option>
@@ -8739,8 +8752,10 @@ function prjBoard(){
             <div class="hint" style="margin-top:2px">${p.customer||'—'} ${p.site?'· 📍'+p.site:''}</div>
           </div>
           ${canManage?`<button class="btn ghost xs" onclick="event.stopPropagation();openProjectModal('${p.id}')">✏️</button>`:''}
+          ${canSeePayroll()?`<button class="btn ghost xs" style="color:var(--red)" title="ลบโครงการ (สำหรับทดสอบ)" onclick="event.stopPropagation();confirmDeleteProject('${p.id}')">🗑</button>`:''}
           <span class="pill ${PROJECT_STATUS[p.status]?.color||'gray'}">${PROJECT_STATUS[p.status]?.label||p.status}</span>
         </div>
+        ${p.status==='on_hold'&&p.hold_reason?`<div class="hint" style="margin-top:6px;color:#b4600f">⏸️ หยุดชั่วคราว: ${esc(p.hold_reason)}</div>`:''}
         <div class="hint" style="margin-top:8px">${p.start_date?isoToThaiDisplay(p.start_date):'—'} ${p.end_date?' – '+isoToThaiDisplay(p.end_date):''}</div>
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
           <span class="pill blue">👥 ${grps.length} ทีม</span>
@@ -8765,9 +8780,10 @@ function openProjectModal(id){
       <div class="grid" style="grid-template-columns:1fr 1fr">
         <div class="field"><label>วันที่เริ่ม</label><input id="pjStart" type="date" value="${p.start_date||''}"></div>
         <div class="field"><label>วันที่สิ้นสุด (ประมาณ)</label><input id="pjEnd" type="date" value="${p.end_date||''}"></div>
-        <div class="field" style="grid-column:span 2"><label>สถานะ</label><select id="pjStatus">
+        <div class="field" style="grid-column:span 2"><label>สถานะ</label><select id="pjStatus" onchange="document.getElementById('pjHoldWrap').style.display=this.value==='on_hold'?'block':'none'">
           ${Object.entries(PROJECT_STATUS).map(([k,v])=>`<option value="${k}" ${p.status===k?'selected':''}>${v.label}</option>`).join("")}
         </select></div>
+        <div class="field" style="grid-column:span 2;display:${p.status==='on_hold'?'block':'none'}" id="pjHoldWrap"><label>เหตุผลที่หยุดชั่วคราว</label><textarea id="pjHoldReason" rows="2" placeholder="เช่น รอวัสดุ / ลูกค้าเลื่อนงาน / รอเคลียร์แบบ">${(p.hold_reason||'').replace(/</g,'&lt;')}</textarea></div>
       </div>
     </div>
     <div class="modal-foot">
@@ -8785,6 +8801,16 @@ async function saveProject(id){
     end_date: document.getElementById("pjEnd").value || null,
     status: document.getElementById("pjStatus").value
   };
+  // [รอบ 17.12] สถานะ "หยุดชั่วคราว" — เก็บเหตุผล + วันที่เริ่มหยุด (เคลียร์ทิ้งเมื่อกลับมาทำต่อ)
+  if(payload.status==="on_hold"){
+    const hr = document.getElementById("pjHoldReason");
+    payload.hold_reason = hr ? hr.value.trim() : "";
+    const prev = id ? PJ(id) : null;
+    payload.hold_since = (prev && prev.hold_since) ? prev.hold_since : todayISODate();
+  } else {
+    payload.hold_reason = null;
+    payload.hold_since = null;
+  }
   if(!payload.name){ toast("กรุณากรอกชื่อโครงการ"); return; }
   const { error } = id ? await sb.from("projects").update(payload).eq("id", id) : await sb.from("projects").insert(payload);
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
@@ -8793,6 +8819,43 @@ async function saveProject(id){
   await loadProjectsModule();
   render("projects");
   toast(`บันทึกโครงการ "${payload.name}" แล้ว ✓`);
+}
+// [รอบ 17.12] ลบโครงการ (สำหรับทดสอบ) — เฉพาะ HR/Super Admin · ยืนยันด้วยการพิมพ์ชื่อ · ลบผ่าน RPC delete_project_cascade (ลบลูกครบทุกตารางในทรานแซกชันเดียว)
+function confirmDeleteProject(id){
+  if(!canSeePayroll()){ toast("เฉพาะ HR/Super Admin ลบโครงการได้"); return; }
+  const p = PJ(id); if(!p) return;
+  const nRep = dailyReports.filter(r=>String(r.project_id)===String(id)).length;
+  const nGrp = groupsOf(id).length;
+  const nWk = (typeof weeklyReports!=="undefined"?weeklyReports:[]).filter(w=>String(w.project_id)===String(id)).length;
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--red);border-radius:10px;display:grid;place-items:center;color:#fff">🗑</div>
+      <div><h3 style="font-size:16px">ลบโครงการ (สำหรับทดสอบ)</h3></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:10px">กำลังจะลบโครงการ <b>${esc(p.name)}</b> พร้อมข้อมูลที่เกี่ยวข้องทั้งหมด — <b style="color:var(--red)">ลบแล้วกู้คืนไม่ได้</b></div>
+      <div class="card" style="background:#fdecea;margin-bottom:12px"><div class="hint">จะถูกลบไปด้วย: <b>${nGrp}</b> ทีม · <b>${nRep}</b> รายงานประจำวัน · <b>${nWk}</b> รายงานประจำสัปดาห์ · งานที่มอบหมาย/แผนงานของโครงการนี้</div></div>
+      <div class="field"><label>พิมพ์ชื่อโครงการเพื่อยืนยัน</label><input id="pjDelConfirm" placeholder="${esc(p.name)}"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn" style="background:var(--red);color:#fff" onclick="doDeleteProject('${id}')">🗑 ลบถาวร</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function doDeleteProject(id){
+  if(!canSeePayroll()){ toast("ไม่มีสิทธิ์ลบ"); return; }
+  const p = PJ(id); if(!p) return;
+  const typed = (document.getElementById("pjDelConfirm")?.value||"").trim();
+  if(typed !== p.name){ toast("ชื่อโครงการไม่ตรง — พิมพ์ให้ตรงเพื่อยืนยัน"); return; }
+  const { error } = await sb.rpc("delete_project_cascade", { p_id: Number(id) });
+  if(error){ toast("ลบไม่สำเร็จ: "+error.message); return; }
+  logAudit("project","ลบโครงการ (ทดสอบ)", p.name);
+  closeModal();
+  if(String(prjActiveProject)===String(id)) prjActiveProject = null;
+  await loadProjectsModule();
+  render("projects");
+  toast(`ลบโครงการ "${p.name}" แล้ว ✓`);
 }
 function openProjectDetail(id){ subTab.projects="teams"; prjActiveProject = id; render("projects"); }
 
