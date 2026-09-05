@@ -450,7 +450,7 @@ body.dr-capturing .dr-fullpage{height:auto!important;min-height:100%!important}
 <div class="dr-share-bg" id="drShareBg" onclick="if(event.target===this)drCloseShare()">
   <div class="dr-share">
     <h4>📤 แชร์รายงานเป็นไฟล์ PDF</h4>
-    <div class="hint" style="margin-top:4px" id="drShareHint">ลิงก์นี้เปิดไฟล์ PDF ได้โดยตรง ส่งต่อให้ใครก็เปิดได้ (อายุลิงก์ 7 วัน)</div>
+    <div class="hint" style="margin-top:4px" id="drShareHint">ลิงก์นี้เปิดไฟล์ PDF ได้โดยตรง ส่งต่อให้ใครก็เปิดได้ (อายุลิงก์ 30 วัน)</div>
     <input class="lnk" id="drShareLink" readonly onclick="this.select()">
     <div class="opts">
       <button class="btn" onclick="drShareToLine()">💬 แชร์เข้า LINE</button>
@@ -490,7 +490,7 @@ body.dr-capturing .dr-fullpage{height:auto!important;min-height:100%!important}
 <div class="dr-share-bg" id="wkShareBg" onclick="if(event.target===this)wkCloseShare()">
   <div class="dr-share">
     <h4>📤 แชร์รายงานประจำสัปดาห์เป็นไฟล์ PDF</h4>
-    <div class="hint" style="margin-top:4px">ลิงก์นี้เปิดไฟล์ PDF ได้โดยตรง ส่งต่อให้ใครก็เปิดได้ (อายุลิงก์ 7 วัน)</div>
+    <div class="hint" style="margin-top:4px">ลิงก์นี้เปิดไฟล์ PDF ได้โดยตรง ส่งต่อให้ใครก็เปิดได้ (อายุลิงก์ 30 วัน)</div>
     <input class="lnk" id="wkShareLink" readonly onclick="this.select()">
     <div class="opts">
       <button class="btn" onclick="wkShareToLine()">💬 แชร์เข้า LINE</button>
@@ -8052,14 +8052,16 @@ async function openReportDetail(id){
   const members = mRes.data||[], photoRows = pRes.data||[], nexts = nRes.data||[];
   // signed URLs for photos
   const photos = [];
+  let purgedPhotos = 0;   // [รอบ 17.14] รูปที่ถูกลบอัตโนมัติตามนโยบายเก็บรูป 180 วัน (แถวยังอยู่ แต่ไฟล์ถูกลบแล้ว)
   for(const ph of photoRows){
+    if(ph.purged_at){ purgedPhotos++; continue; }
     try{
       const { data } = await sb.storage.from("daily-report-photos").createSignedUrl(ph.storage_path, 3600);
       if(data && data.signedUrl) photos.push({ ...ph, url:data.signedUrl });
     }catch(e){}
   }
-  CUR_DR = { r, members, photos, nexts };
-  renderReportDetail(r, members, photos, nexts);
+  CUR_DR = { r, members, photos, nexts, purgedPhotos };
+  renderReportDetail(r, members, photos, nexts, purgedPhotos);
 }
 function drCloseFullPage(){
   document.getElementById("drFullPage").classList.remove("show");
@@ -8067,7 +8069,7 @@ function drCloseFullPage(){
 }
 
 const DR_PHOTOTYPE = { before:"ก่อนเริ่มงาน", progress:"ระหว่างทำงาน", after:"หลังเสร็จงาน", other:"อื่น ๆ" };
-function renderReportDetail(r, members, photos, nexts){
+function renderReportDetail(r, members, photos, nexts, purgedPhotos){
   const box = (title,body)=>`<div class="p-box"><div class="p-box-title">${esc(title)}</div><div class="p-box-body">${body}</div></div>`;
   const memHtml = members.length
     ? `<div class="p-chips">${members.map(m=>{
@@ -8087,9 +8089,13 @@ function renderReportDetail(r, members, photos, nexts){
     : `<div style="color:#1f6f4d;font-weight:700">✓ ไม่มีปัญหา</div>`;
   const nextHtml = nexts.length ? `<ol style="margin:2px 0 0 16px;padding:0">${nexts.map(n=>`<li>${n.zone?`<b>[${esc(n.zone)}]</b> `:''}${esc(n.task_note||'')}</li>`).join("")}</ol>`
     : (r.next_day_plan?`<div class="txt">${esc(r.next_day_plan)}</div>`:'<span style="color:#8992a3">–</span>');
-  const photoHtml = photos.length ? `<div class="p-imgs">${photos.map(p=>
-      `<a class="ph" href="${p.url}" target="_blank"><img src="${p.url}"><span class="tag">${DR_PHOTOTYPE[p.photo_type]||''}</span></a>`).join("")}</div>`
-    : '<span style="color:#8992a3">ไม่มีรูป</span>';
+  const purgedNote = purgedPhotos
+    ? `<div style="margin-top:${photos.length?'8px':'0'};color:#b4600f;font-size:11.5px">🗑 รูป ${purgedPhotos} รูปถูกลบอัตโนมัติตามนโยบายเก็บรูปหน้างาน 180 วัน (6 เดือน)</div>`
+    : '';
+  const photoHtml = photos.length
+    ? `<div class="p-imgs">${photos.map(p=>
+      `<a class="ph" href="${p.url}" target="_blank"><img src="${p.url}"><span class="tag">${DR_PHOTOTYPE[p.photo_type]||''}</span></a>`).join("")}</div>${purgedNote}`
+    : (purgedNote || '<span style="color:#8992a3">ไม่มีรูป</span>');
   const nextDateTxt = nexts[0]?.work_date ? ' · '+isoToThaiDisplay(nexts[0].work_date) : '';
   const printedAt = new Date().toLocaleString("th-TH",{hour:"2-digit",minute:"2-digit"});
 
@@ -8211,10 +8217,10 @@ async function drMakePdfBlob(){
 }
 // [รอบ 17.9] แชร์ออกนอกเว็บแอปได้จริง — ต้องเป็น "ไฟล์ PDF" เสมอ
 // เดสก์ท็อปแชร์ไฟล์ผ่าน Web Share API ไม่ได้ (navigator.canShare({files}) = false) เลยเคยได้แค่ดาวน์โหลด
-// วิธีใหม่: อัปโหลด PDF ขึ้น Supabase Storage แล้วได้ลิงก์ https จริง (อายุ 7 วัน) เอาไปแชร์เข้า LINE/คัดลอก/ส่งอีเมลได้
+// วิธีใหม่: อัปโหลด PDF ขึ้น Supabase Storage แล้วได้ลิงก์ https จริง (อายุ 30 วัน) เอาไปแชร์เข้า LINE/คัดลอก/ส่งอีเมลได้
 // (หลักการเดียวกับที่ใช้แก้ปัญหาเปิด PDF ไม่ได้ในแอป LINE รอบ 17.7 — คือห้ามส่ง blob: ออกไปนอกหน้าเว็บ)
 let DR_SHARE = null;  // { url, blob, name }
-const DR_PDF_TTL = 60*60*24*7;
+const DR_PDF_TTL = 60*60*24*30;   // [รอบ 17.13] 30 วัน — ตรงกับ cron storage_maintenance_02 ที่ลบไฟล์ pdf/ เก่าเกิน 30 วัน
 async function drUploadPdf(blob, fileName){
   const ymd = (CUR_DR?.r?.work_date || todayISODate()).replace(/-/g,"");
   const safe = fileName.replace(/[^A-Za-z0-9._-]+/g,"-");
@@ -8251,7 +8257,7 @@ function drShareEmail(){
   if(!DR_SHARE) return;
   const r = CUR_DR?.r || {};
   const subject = `รายงานประจำวันหน้างาน ${r.report_no||""} (${isoToThaiDisplay(r.work_date)})`;
-  const body = `รายงานประจำวันหน้างาน\nเลขที่: ${r.report_no||"-"}\nวันที่: ${isoToThaiDisplay(r.work_date)}\nโครงการ: ${drProjName(r)}\nทีม: ${drGroupName(r)}\n\nเปิดไฟล์ PDF ได้ที่ลิงก์นี้ (อายุ 7 วัน):\n${DR_SHARE.url}\n\n— HRMS CENTER`;
+  const body = `รายงานประจำวันหน้างาน\nเลขที่: ${r.report_no||"-"}\nวันที่: ${isoToThaiDisplay(r.work_date)}\nโครงการ: ${drProjName(r)}\nทีม: ${drGroupName(r)}\n\nเปิดไฟล์ PDF ได้ที่ลิงก์นี้ (อายุ 30 วัน):\n${DR_SHARE.url}\n\n— HRMS CENTER`;
   window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 async function drShare(){
@@ -8707,7 +8713,7 @@ function wkCloseShare(){ document.getElementById("wkShareBg").classList.remove("
 function wkShareToLine(){ if(!WK_SHARE) return; window.open("https://social-plugins.line.me/lineit/share?url="+encodeURIComponent(WK_SHARE.url),"_blank","noopener,width=560,height=680"); }
 async function wkCopyShareLink(){ if(!WK_SHARE) return; try{ await navigator.clipboard.writeText(WK_SHARE.url); toast("คัดลอกลิงก์แล้ว ✓"); }catch(e){ const el=document.getElementById("wkShareLink"); el.select(); document.execCommand("copy"); toast("คัดลอกลิงก์แล้ว ✓"); } }
 function wkDownloadPdf(){ if(!WK_SHARE) return; const url=URL.createObjectURL(WK_SHARE.blob); const a=document.createElement("a"); a.href=url; a.download=WK_SHARE.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),120000); }
-function wkShareEmail(){ if(!WK_SHARE) return; const w=CUR_WK||{}; const wl=wkWeekLabel(w.week_start||todayISODate()); const subject=`รายงานประจำสัปดาห์ ${w.report_no||""} (${wl})`; const body=`รายงานประจำสัปดาห์หน้างาน\nเลขที่: ${w.report_no||"-"}\nสัปดาห์: ${wl}\nโครงการ: ${(PJ(w.project_id)||{}).name||"-"}\n\nเปิดไฟล์ PDF (อายุลิงก์ 7 วัน):\n${WK_SHARE.url}\n\n— HRMS CENTER`; window.location.href=`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`; }
+function wkShareEmail(){ if(!WK_SHARE) return; const w=CUR_WK||{}; const wl=wkWeekLabel(w.week_start||todayISODate()); const subject=`รายงานประจำสัปดาห์ ${w.report_no||""} (${wl})`; const body=`รายงานประจำสัปดาห์หน้างาน\nเลขที่: ${w.report_no||"-"}\nสัปดาห์: ${wl}\nโครงการ: ${(PJ(w.project_id)||{}).name||"-"}\n\nเปิดไฟล์ PDF (อายุลิงก์ 30 วัน):\n${WK_SHARE.url}\n\n— HRMS CENTER`; window.location.href=`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`; }
 async function wkShare(){
   if(!CUR_WK) return; const btn=document.getElementById("wkShareBtn"); const old=btn.innerHTML; btn.disabled=true; btn.innerHTML="⏳ กำลังสร้าง PDF...";
   const name=(CUR_WK.report_no||"weekly-report")+".pdf";
