@@ -421,7 +421,7 @@ body.dr-capturing .dr-fullpage{height:auto!important;min-height:100%!important}
       <button class="bell" id="bellBtn" onclick="toggleNotifPanel(event)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5b6472" stroke-width="2"><path d="M6 9a6 6 0 0112 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 004 0"/></svg></button>
       <div id="notifPanel" style="display:none;position:absolute;top:48px;right:0;width:320px;max-height:400px;overflow-y:auto;background:#fff;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.18);z-index:60;padding:10px"></div>
       </div>
-      <div class="user-chip"><div class="who" style="text-align:right"><b>System Admin</b><span>Super Admin</span></div><div class="avatar">SA</div></div>
+      <div class="user-chip"><div class="who" style="text-align:right"><b id="topUserName">—</b><span id="topUserRole">—</span></div><div class="avatar" id="topUserAvatar">—</div></div>
       <button class="btn ghost sm" onclick="logout()" title="ออกจากระบบ">⏻</button>
     </div>
   </div>
@@ -1225,11 +1225,15 @@ async function resolveOpenAdvancePeriod(cy, start, end){
   return cur;
 }
 async function setPayrollOffset(off){
+  if(isPayrollHistoryView()){ toast("🔒 โหมดประวัติเป็น Read-only — ไม่สามารถเปลี่ยนงวดของ Payroll ที่กำลังทำได้"); return; }
   payrollOffset = Number(off)||0;
+  exitPayrollHistoryView();
   const cy = payrollState.cycle;
-  runStep = null; // ให้เปิดที่ขั้นที่ควรทำต่อของงวดที่เลือก
+  runStep = null; // reset workflow step only when selecting a current payroll period
+  syncPayrollV2Current();
   await loadCycleStats(cy);
   await loadPayrollStatus();
+  syncPayrollV2Current();
   render("payroll");
 }
 
@@ -1530,6 +1534,47 @@ async function doClockOut(){
 }
 
 let payrollState = { cycle:"monthly", status:{monthly:"draft", weekly:"draft", daily:"draft"} };
+
+/* ===================== V2 CORE STATE =====================
+   Single source of truth for the current session and a hard separation between
+   current payroll work and historical payroll viewing.  The legacy variables
+   above remain as a compatibility layer for untouched modules.
+*/
+const AppSession = {
+  employeeId: null,
+  role: null,
+  employee: null,
+  authSessionId: null
+};
+const PayrollV2State = {
+  current: { cycle: "monthly", offset: 0, step: 1, status: "draft", period: null },
+  history: { active: false, key: null, cycle: null, start: null, end: null }
+};
+
+function syncPayrollV2Current(){
+  const cy = payrollState.cycle || "monthly";
+  const off = Number(payrollOffset) || 0;
+  PayrollV2State.current.cycle = cy;
+  PayrollV2State.current.offset = off;
+  PayrollV2State.current.step = Number(runStep)||1;
+  PayrollV2State.current.status = payrollState.status?.[cy] || "draft";
+  PayrollV2State.current.period = activePeriod(cy);
+  return PayrollV2State.current;
+}
+function enterPayrollHistoryView(g){
+  if(!g) return false;
+  PayrollV2State.history = {active:true,key:g.key,cycle:g.cycle,start:g.start,end:g.end};
+  return true;
+}
+function exitPayrollHistoryView(){
+  PayrollV2State.history = {active:false,key:null,cycle:null,start:null,end:null};
+}
+function isPayrollHistoryView(){ return PayrollV2State.history.active === true; }
+function selectedHistoryGroup(){
+  if(!PayrollV2State.history.active || !PayrollV2State.history.key) return null;
+  return groupPayrollHistory().find(g=>g.key===PayrollV2State.history.key) || null;
+}
+
 /* ============ ประวัติงวดเงินเดือนย้อนหลัง (payroll_records จริงทั้งหมด) ============ */
 let payrollHistRows = [];
 let payrollHistLoaded = false, payrollHistLoading = false;
@@ -2036,6 +2081,8 @@ function computeNotifications(){
     scope.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").forEach(l=>{
       // หัวหน้างานเห็นเฉพาะที่ถึงคิวตัวเอง · HR เห็นทั้งที่รอหัวหน้าและที่รอ HR
       if(!canViewAll() && l.supStatus!=="pending") return;
+      // [แก้] ห้ามเด้งแจ้งเตือน "รออนุมัติ" ให้ตัวเอง — เหมือนกฎเดียวกับคำขอแก้เวลา (attendance_adjustments)
+      if(String(l.emp)===String(loggedInEmployeeId)) return;
       const emp = E(l.emp);
       const waitHr = l.hrStatus==="pending" && l.supStatus==="approved";
       items.push({
@@ -2050,7 +2097,8 @@ function computeNotifications(){
     otRequests.filter(o=>o.status==="pending").forEach(o=>{
       const emp = E(o.emp); if(!emp) return;
       if(!canViewAll() && !(me && emp.supervisor===me.name)) return;
-      if(String(o.emp)===String(loggedInEmployeeId) && !canViewAll()) return;
+      // [แก้] เดิมยกเว้นให้ HR/Super Admin เห็นแจ้งเตือน OT ของตัวเองได้ (มี canViewAll() กันไว้) — ตัดออกให้ห้ามเสมอ เหมือนกฎเดียวกับคำขอแก้เวลา
+      if(String(o.emp)===String(loggedInEmployeeId)) return;
       items.push({
         key:`ot_${o.id}_${o.status}`, icon:"⏱️",
         title:`คำขอ OT รออนุมัติ: ${emp.name}`,
@@ -2071,7 +2119,8 @@ function computeNotifications(){
     });
   }
   if(canSeePayroll()){
-    adv.filter(a=>a.status==="pending").forEach(a=>{
+    // [แก้] เดิมไม่กันตัวเอง — เพิ่ม String(a.employee_id)!==String(loggedInEmployeeId) ให้เหมือนกฎเดียวกับคำขอแก้เวลา
+    adv.filter(a=>a.status==="pending" && String(a.employee_id)!==String(loggedInEmployeeId)).forEach(a=>{
       const emp = E(a.employee_id);
       items.push({
         key:`adv_${a.id}_${a.status}`, icon:"💳",
@@ -3730,7 +3779,8 @@ function attOt(){
       ${otRequests.length===0?'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">ยังไม่มีรายการขอ OT</td></tr>':otRequests.map(o=>{
         const e=E(o.emp); if(!e) return '';
         const isMine = String(o.emp)===String(loggedInEmployeeId);
-        const showApprove = canApprove && o.status==="pending" && (!isMine || canViewAll());
+        // [แก้] เดิมมี "|| canViewAll()" ทำให้ HR/Super Admin กดอนุมัติ OT ของตัวเองได้ — ตัดออก ห้ามอนุมัติคำขอตัวเองเสมอ
+        const showApprove = canApprove && o.status==="pending" && !isMine;
         return `<tr id="ot-${o.id}">
         <td>${o.date}</td><td>${empCell(e,true)}</td>
         <td style="white-space:nowrap;font-size:12.5px">${otSpanLabel(o)}</td>
@@ -4634,7 +4684,7 @@ function leaveApprove(){
     <div class="hint">ใบลาที่หัวหน้าอนุมัติแล้วจะเด้งมาให้ HR อนุมัติต่อ · ปฏิเสธที่ระดับไหนก็จบทันที${!canViewAll()?' · แสดงเฉพาะใบลาของทีมคุณ':''}</div>
     <table style="margin-top:12px">
       <tr><th>พนักงาน</th><th>วันที่ลา</th><th>ประเภท</th><th>ยื่นเมื่อ</th><th>ตรงเวลา</th><th>ระดับหัวหน้า</th><th>ระดับ HR</th><th style="text-align:center">การดำเนินการ</th></tr>
-      ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);return `<tr id="lv-${l.id}">
+      ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);const mine=String(l.emp)===String(loggedInEmployeeId);return `<tr id="lv-${l.id}">
         <td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td>${l.date}</td>
         <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}<div style="color:var(--muted);font-size:11.5px">${l.note}</div></td>
         <td class="num">${l.submitted}</td>
@@ -4642,10 +4692,11 @@ function leaveApprove(){
         <td>${l.supStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.supStatus==='rejected'?'<span class="pill red">✕</span>':'<span class="pill amber">รอ</span>'}</td>
         <td>${l.hrStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.hrStatus==='rejected'?'<span class="pill red">✕</span>':l.supStatus==='approved'?'<span class="pill blue">รอ HR</span>':'<span class="pill gray">รอหัวหน้า</span>'}</td>
         <td style="white-space:nowrap;text-align:center">${
-          l.supStatus==="pending"?`<button class="btn green xs" onclick="actLeave(${l.id},'sup','approved')">หัวหน้าอนุมัติ</button>
-                                    <button class="btn danger xs" onclick="actLeave(${l.id},'sup','rejected')">ปฏิเสธ</button>`:
-          (l.hrStatus==="pending"&&l.supStatus==="approved"&&canViewAll())?`<button class="btn primary xs" onclick="actLeave(${l.id},'hr','approved')">HR อนุมัติ</button>
-                                    <button class="btn danger xs" onclick="actLeave(${l.id},'hr','rejected')">ปฏิเสธ</button>`:
+          // [แก้] ห้ามอนุมัติ/ปฏิเสธใบลาของตัวเอง (ทั้งระดับหัวหน้าและ HR) — เหมือนกฎเดียวกับคำขอแก้เวลา ป้องกันการอนุมัติตัวเอง
+          l.supStatus==="pending"?(mine?'<span class="hint" style="font-size:11.5px">รอหัวหน้างานอนุมัติ (อนุมัติคำขอตัวเองไม่ได้)</span>':`<button class="btn green xs" onclick="actLeave(${l.id},'sup','approved')">หัวหน้าอนุมัติ</button>
+                                    <button class="btn danger xs" onclick="actLeave(${l.id},'sup','rejected')">ปฏิเสธ</button>`):
+          (l.hrStatus==="pending"&&l.supStatus==="approved"&&canViewAll())?(mine?'<span class="hint" style="font-size:11.5px">รอ HR คนอื่นอนุมัติ (อนุมัติคำขอตัวเองไม่ได้)</span>':`<button class="btn primary xs" onclick="actLeave(${l.id},'hr','approved')">HR อนุมัติ</button>
+                                    <button class="btn danger xs" onclick="actLeave(${l.id},'hr','rejected')">ปฏิเสธ</button>`):
           '<span class="hint" style="font-size:11.5px">-- จบขั้นตอน --</span>'}</td>
       </tr>`;}).join("")}
     </table>
@@ -4942,10 +4993,33 @@ const RUN_STEPS = [
   {n:5, key:"bank", label:"จ่ายเงิน & ปิดงวด", icon:"💸"},
   {n:6, key:"slip", label:"แจกสลิปพนักงาน", icon:"🧾"}
 ];
-function goRunStep(n){ runStep = n; subTab.payroll = "run"; render("payroll"); }
+function goRunStep(n){
+  if(isPayrollHistoryView()){
+    toast("🔒 งวดย้อนหลังอยู่ในโหมด Read-only — ใช้แท็บสลิป/ประวัติเพื่อดูข้อมูลย้อนหลัง");
+    return;
+  }
+  n = Number(n)||1;
+  const cy = payrollState.cycle || "monthly";
+  const st = payrollState.status?.[cy] || "draft";
+  const maxStep = st === "paid" ? 6 : st === "approved" ? 5 : 4;
+  if(n > maxStep){
+    toast(st === "draft" ? "🔒 งวดนี้ยังเป็น Draft — ต้องตรวจสอบและอนุมัติก่อน" : st === "approved" ? "🔒 งวดนี้อนุมัติแล้ว — ไปขั้นจ่ายเงิน & ปิดงวดก่อน" : "🔒 งวดนี้ปิดแล้ว");
+    return;
+  }
+  runStep = n;
+  PayrollV2State.current.step = runStep;
+  subTab.payroll = "run";
+  render("payroll");
+}
 function pyRun(){
-  const cy = payrollState.cycle;
-  const st = payrollState.status[cy];
+  if(isPayrollHistoryView()){
+    const g=selectedHistoryGroup();
+    return `<div class="card"><div class="hint" style="text-align:center;padding:22px">🔒 กำลังดู Payroll ย้อนหลัง ${g?histPeriodLabel(g):""} — โหมด Read-only
+    <div style="margin-top:10px"><button class="btn ghost sm" onclick="exitPayrollHistoryView(); subTab.payroll='slip'; render('payroll')">→ ไปหน้าสลิปเงินเดือน</button></div></div></div>`;
+  }
+  syncPayrollV2Current();
+  const cy = PayrollV2State.current.cycle;
+  const st = PayrollV2State.current.status;
   if(runStep===null) runStep = st==="draft" ? 2 : 5; // เปิดมาที่ขั้นที่ควรทำต่อ
   const step = RUN_STEPS.find(x=>x.n===runStep)||RUN_STEPS[0];
   const content = {1:pyCycles, 2:pyAttOT, 3:pyCalc, 4:pyApprove, 5:pyBank, 6:pySlipStep}[step.n]();
@@ -4965,14 +5039,8 @@ function pyRun(){
           ${i<RUN_STEPS.length-1?`<div style="width:34px;height:2px;background:${x.n<doneUpTo||x.n<step.n?'var(--accent)':'var(--line)'};margin-bottom:18px"></div>`:''}
         </div>`).join("")}
     </div>
-    <div class="hint" style="text-align:center;margin-top:6px">งวดที่เลือก: <b>${CYCLES[cy].name}</b> · ${CYCLES[cy].period} · สถานะ ${st==='paid'?'🔒 จ่ายแล้ว (Locked)':st==='approved'?'✅ อนุมัติแล้ว รอจ่าย':'📝 ฉบับร่าง'}${st==='paid'?' · สลิปพร้อมแจกจ่ายที่แท็บ 🧾':''}</div>
-    <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:8px;flex-wrap:wrap">
-      <span class="hint">เลือกงวด:</span>
-      <select onchange="setPayrollOffset(this.value)" style="padding:7px 12px;border:1.5px solid var(--line);border-radius:9px;font-size:12.5px">
-        ${[0,-1,-2,-3].map(o=>`<option value="${o}" ${payrollOffset===o?'selected':''}>${o===0?'งวดปัจจุบัน':'งวดก่อนหน้า '+Math.abs(o)+' งวด'} (${periodLabel(periodByOffset(cy,o))})</option>`).join("")}
-      </select>
-    </div>
-    ${payrollOffset!==0?`<div class="hint" style="text-align:center;margin-top:8px;padding:8px 12px;background:#fff9f0;border:1px solid #f2c98a;border-radius:10px">⏪ กำลังทำจ่าย <b>งวดย้อนหลัง</b> (ปิดรอบไปแล้ว) — ใช้กรณีตัดรอบก่อนวันจ่าย เช่น ตัดวันที่ 28 แล้วจ่ายสิ้นเดือน · กลับงวดปัจจุบันได้ที่ช่องเลือกงวดด้านบน</div>`:''}
+    <div class="hint" style="text-align:center;margin-top:6px">งวดที่เลือก: <b>${CYCLES[cy].name}</b> · ${CYCLES[cy].period} · สถานะ ${st==='paid'?'🔒 Paid / Locked':st==='approved'?'✅ Approved · รอจ่าย':'📝 Draft · รอตรวจ'}${st==='paid'?' · สลิปพร้อมแจกจ่ายที่แท็บ 🧾':''}</div>
+
   </div>
   ${content}`;
 }
@@ -5029,7 +5097,14 @@ function pyCycles(){
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:12px"><h3>📅 เลือกรอบที่จะทำจ่าย</h3>
     <span class="hint" style="margin-left:auto">ตั้งค่าวันตัดรอบ/วันจ่าย ย้ายไปที่ <b>ตั้งค่าระบบ → ตั้งค่าเงินเดือน</b></span></div>
-    <div class="hint">เลือกการ์ดรอบจ่าย — Attendance stats, Preview, อนุมัติ, สลิป จะขยับตามงวดนี้อัตโนมัติ</div>
+    <div class="hint">เลือกการ์ดรอบจ่าย — หลังจากเลือกแล้ว งวดและข้อมูลต้นทางของ Payroll จะถูกผูกไว้กับ Workflow นี้จนกว่าจะจบหรือกลับมาเลือกใหม่ที่ขั้นตอนที่ 1</div>
+    <div style="margin-top:12px;padding:12px;background:#f8f9fc;border:1px solid var(--line);border-radius:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <b style="font-size:12.5px">📅 งวดที่จะประมวลผล</b>
+      <select onchange="setPayrollOffset(this.value)" style="padding:7px 12px;border:1.5px solid var(--line);border-radius:9px;font-size:12.5px;min-width:250px">
+        ${[0,-1,-2,-3].map(o=>`<option value="${o}" ${payrollOffset===o?'selected':''}>${o===0?'งวดปัจจุบัน':'งวดก่อนหน้า '+Math.abs(o)+' งวด'} — ${periodLabel(periodByOffset(payrollState.cycle,o))}</option>`).join("")}
+      </select>
+      <span class="hint">งวดที่เลือกจะถูกใช้กับ Attendance, Preview, Approve และ Payment ทั้ง Workflow</span>
+    </div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:14px">
       ${activeCycleKeys().map(key=>cycleCard(key,CYCLES[key])).join("")}
     </div>
@@ -5600,7 +5675,12 @@ function openConfirmPayModal(cy){
   document.getElementById("modalBg").classList.add("show");
 }
 let slipPeriod = {monthly:"current", weekly:"current", daily:"current"};
-function setSlipPeriod(val){slipPeriod[payrollState.cycle]=val; render("payroll");}
+function setSlipPeriod(val){
+  slipPeriod[payrollState.cycle]=val;
+  if(val==="current") exitPayrollHistoryView();
+  else { const g=histGroupsFor(payrollState.cycle).find(x=>x.key===val); if(g) enterPayrollHistoryView(g); }
+  render("payroll");
+}
 let _slipExportRows = [];
 let _slipExportPeriod = "";
 function exportSlipSummaryExcel(){
@@ -5783,7 +5863,7 @@ async function afterLogin(){
   updateProjectBadge();
   await loadPayrollStatus();
   await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy)));
-  syncTopbarUser();
+  syncCurrentUserContext();
   showApp();
   return true;
 }
@@ -5828,6 +5908,8 @@ function showLogin(msg){
 }
 // ล้าง state/แคชทั้งหมด — เรียกตอน logout และตอนเริ่ม login ใหม่ กันข้อมูลของบัญชีเก่าค้าง
 function resetAppState(){
+  AppSession.employeeId = null; AppSession.role = null; AppSession.employee = null; AppSession.authSessionId = null;
+  exitPayrollHistoryView();
   loggedInEmployeeId = null;
   currentRoleCode = null;
   employees = []; terminatedEmployees = []; leaves = []; attendanceToday = []; bonusRecords = []; otRequests = []; announcements = [];
@@ -5838,6 +5920,7 @@ function resetAppState(){
   projectsLoaded = false; projectsLoading = false; prjActiveProject = null;
   payrollHistRows = []; payrollHistLoaded = false; payrollHistLoading = false;
   payrollState = { cycle:"monthly", status:{monthly:"draft", weekly:"draft", daily:"draft"} };
+  PayrollV2State.current = { cycle:"monthly", offset:0, step:1, status:"draft", period:null };
   holidayRows = null; empFilesCache = {}; empModalCtx = null;
   missingRows = null; adjustRows = null; payCategories = null;
   advanceRows = null; ytdRows = null; orgUnits = null; userRolesRows = null;
@@ -5926,11 +6009,32 @@ async function savePayrollSigner(){
 }
 function syncTopbarUser(){
   const emp = E(loggedInEmployeeId);
-  if(!emp) return;
-  const who = document.querySelector(".user-chip .who");
-  const av = document.querySelector(".user-chip .avatar");
-  if(who){ who.innerHTML = `<b>${emp.name}</b><span>${roleOf(emp.id)}</span>`; }
-  if(av){ av.textContent = initials(emp.name); }
+  const nameEl = document.getElementById("topUserName");
+  const roleEl = document.getElementById("topUserRole");
+  const av = document.getElementById("topUserAvatar");
+  if(!emp){
+    if(nameEl) nameEl.textContent = "—";
+    if(roleEl) roleEl.textContent = "—";
+    if(av) av.textContent = "—";
+    return;
+  }
+  const role = roleOf(emp.id);
+  AppSession.employeeId = emp.id;
+  AppSession.role = currentRoleCode;
+  AppSession.employee = emp;
+  if(nameEl) nameEl.textContent = emp.name || "—";
+  if(roleEl) roleEl.textContent = role;
+  if(av) av.textContent = initials(emp.name);
+}
+function syncCurrentUserContext(){
+  const emp = E(loggedInEmployeeId);
+  AppSession.employeeId = loggedInEmployeeId || null;
+  AppSession.role = currentRoleCode || null;
+  AppSession.employee = emp || null;
+  AppSession.authSessionId = null;
+  syncTopbarUser();
+  applyRoleUI();
+  updateNotifBell();
 }
 function signatureBlock(size){
   size = size||44;
@@ -6046,13 +6150,34 @@ function exportBankExcel(){
   toast("ดาวน์โหลด Excel สรุปยอดแล้ว ✓");
 }
 function pyBank(){
-  const cy = payrollState.cycle;
-  const st = payrollState.status[cy];
+  syncPayrollV2Current();
+  const cy = PayrollV2State.current.cycle;
+  const st = PayrollV2State.current.status;
   const list = employees.filter(e=>e.cycle===cy);
-  const total = list.reduce((s,e)=>s+calcPay(e).net,0);
+  if(st!=="draft" && !payrollHistLoaded){
+    ensurePayrollHistory("payroll");
+    return `<div class="card"><div class="hint" style="text-align:center;padding:24px">⏳ กำลังโหลด Payroll Snapshot ของงวดนี้...</div></div>`;
+  }
+  // Approved/Paid payroll must use the locked snapshot; Draft may calculate live.
+  const activeP = activePeriod(cy);
+  const snapRows = payrollHistRows.filter(r=>r.cycle===cy && r.cycle_start_date===activeP.start && r.cycle_end_date===activeP.end);
+  const snapByEmp = new Map(snapRows.map(r=>[String(r.employee_id), r]));
+  if(st!=="draft") {
+    const missing = list.filter(e=>!snapByEmp.has(String(e.id)));
+    if(missing.length){
+      return `<div class="card"><div style="text-align:center;padding:26px">
+        <div style="font-size:34px">⚠️</div>
+        <h3 style="justify-content:center;margin-top:8px">ไม่สามารถเปิดขั้นจ่ายเงินได้</h3>
+        <div class="hint" style="margin-top:6px">ไม่พบ Payroll Snapshot ครบทุกคนของงวด ${periodLabel(activeP)} ระบบจึง <b>ไม่คำนวณยอดใหม่</b> และไม่อนุญาตให้จ่ายจากข้อมูลสด</div>
+        <button class="btn ghost sm" style="margin-top:12px" onclick="goRunStep(4)">← กลับไปตรวจ & อนุมัติ</button>
+      </div></div>`;
+    }
+  }
+  const netOf = e => st!=="draft" ? Number(snapByEmp.get(String(e.id)).net_pay)||0 : calcPay(e).net;
+  const total = list.reduce((s,e)=>s+netOf(e),0);
   const banks = ["KBANK (กสิกร)", "SCB (ไทยพาณิชย์)", "BBL (กรุงเทพ)", "KTB (กรุงไทย)"];
-  _bankExportRows = list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return {name:e.name, code:e.code, method:pi.methodLabel, dest:pi.ok?pi.dest:"ยังไม่มีข้อมูล", net:p.net, ok:pi.ok};});
-  _bankExportPeriod = CYCLES[cy].period;
+  _bankExportRows = list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return {name:e.name, code:e.code, method:pi.methodLabel, dest:pi.ok?pi.dest:"ยังไม่มีข้อมูล", net:netOf(e), ok:pi.ok};});
+  _bankExportPeriod = periodLabel(activeP);
   const payBar = st==="paid"
     ? `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#e4f7ee,#fff);border:1px solid #bfe8d2"><b style="font-size:14.5px">🔒 งวดนี้จ่ายและปิดงวดแล้ว (Locked)</b><div class="hint" style="margin-top:3px">สลิป PDF พร้อมแจกจ่าย — พนักงานเปิดดูของตัวเองได้ใน Self-Service ทันที</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn primary sm" onclick="setSub('payroll','slip')">🧾 ไปหน้าสลิปเงินเดือน →</button>${canViewAll()?`<button class="btn danger sm" onclick="unlockPayroll('${cy}')">🔓 เปิดงวดอีกครั้ง</button>`:''}</div></div>`
     : st==="approved"
@@ -6070,11 +6195,11 @@ function pyBank(){
 
     <table style="margin-top:16px">
       <tr><th>พนักงาน</th><th>ช่องทาง</th><th>ปลายทาง</th><th class="num">ยอดโอน</th><th>สถานะ</th></tr>
-      ${list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return `<tr>
+      ${list.map(e=>{const p=calcPay(e);const pi=payInfo(e);const bankNet=netOf(e);return `<tr>
         <td>${empCell(e)}</td>
         <td><span class="pill ${pi.methodLabel==='พร้อมเพย์'?'purple':'blue'}">${pi.methodLabel}</span></td>
         <td style="font-family:monospace;font-size:12.5px">${pi.ok?pi.dest:'<span style="color:var(--red);font-family:inherit">⚠ ยังไม่มีข้อมูล</span>'}${pi.payeeLine}</td>
-        <td class="num"><b>฿${fmt(p.net)}</b></td>
+        <td class="num"><b>฿${fmt(bankNet)}</b></td>
         <td>${pi.ok?'<span class="pill green">พร้อมโอน</span>':'<span class="pill red">รอกรอกข้อมูล</span>'}</td>
       </tr>`;}).join("")}
       <tr style="background:#f8f9fc"><td colspan="3" style="text-align:right;font-weight:600">ยอดรวม</td>
@@ -6142,15 +6267,17 @@ function pyAdvance(){
     ${loading?'<div class="hint" style="text-align:center;padding:20px">⏳ กำลังโหลด...</div>':
     advanceRows.length===0?'<div class="hint" style="text-align:center;padding:20px">ยังไม่มีคำขอ</div>':`
     <table style="margin-top:10px"><tr><th>ยื่นเมื่อ</th><th>พนักงาน</th><th class="num">จำนวน</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center"></th></tr>
-    ${advanceRows.map(a=>{const e=E(a.employee_id);return `<tr id="adv-${a.id}">
+    ${advanceRows.map(a=>{const e=E(a.employee_id);const mine=String(a.employee_id)===String(loggedInEmployeeId);return `<tr id="adv-${a.id}">
       <td style="font-size:12px;white-space:nowrap">${new Date(a.requested_at).toLocaleDateString("th-TH")}</td>
       <td>${e?empCell(e,true):'#'+a.employee_id}</td>
       <td class="num"><b>฿${fmt(a.amount)}</b></td>
       <td class="hint" style="font-size:12.5px;max-width:180px">${a.reason||"—"}</td>
       <td>${stPill(a)}${targetHint(a)}${a.reviewed_by?'<div class="hint" style="font-size:10px">โดย '+(E(a.reviewed_by)?.name||"—")+'</div>':''}</td>
-      <td style="text-align:center;white-space:nowrap">${a.status==='pending'?`
+      <td style="text-align:center;white-space:nowrap">${
+        // [แก้] ห้ามอนุมัติคำขอเบิกเงินล่วงหน้าของตัวเอง — เหมือนกฎเดียวกับคำขอแก้เวลา ป้องกันการอนุมัติตัวเอง
+        a.status==='pending'?(mine?'<span class="hint" style="font-size:11px">รอ HR คนอื่นอนุมัติ</span>':`
         <button class="btn green xs" onclick="reviewAdvance(${a.id},'approved')">✓ อนุมัติ</button>
-        <button class="btn danger xs" onclick="reviewAdvance(${a.id},'rejected')">✗</button>`:''}</td>
+        <button class="btn danger xs" onclick="reviewAdvance(${a.id},'rejected')">✗</button>`):''}</td>
     </tr>`;}).join("")}</table>`}
   </div>`;
   return reqCard + (isHR ? hrList + myList : myList);
