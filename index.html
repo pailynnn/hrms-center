@@ -2016,6 +2016,70 @@ async function loadNotifReads(){
   const { data, error } = await sb.from("notification_reads").select("notif_key").eq("employee_id", loggedInEmployeeId);
   notifReadKeys = error ? new Set() : new Set((data||[]).map(r=>r.notif_key));
 }
+/* ===================== [รอบ 18] แจ้งเตือนพื้นที่ Supabase Storage เข้ากระดิ่ง =====================
+   ผู้ใช้กำหนดเส้นทางแจ้งเตือนไว้ว่า "เรื่องพื้นที่เก็บไฟล์ให้เข้า Super Admin" (คนละเส้นกับใบลาที่ต้องเข้า HR)
+   เดิมมีแต่การ์ด LINE จาก edge function storage-maintenance (cron 02:00 น. ทุกวัน) — ในเว็บแอปไม่ขึ้นอะไรเลย
+   ⚠️ เลขเกณฑ์ 4 ตัวข้างล่างต้องตรงกับ storage-maintenance/index.ts เสมอ ถ้าแก้ต้องแก้ให้ตรงกันทั้ง 2 ที่ */
+const STORAGE_LIMIT_BYTES = 1000000000;   // = LIMIT_BYTES (1 GB แพ็กเกจฟรี)
+const STORAGE_ALERT_PCT = 90;             // = ALERT_PCT
+const STORAGE_PHOTO_DAYS = 180;           // = PHOTO_RETENTION_DAYS
+const STORAGE_PHOTO_WARN_DAYS = 7;        // = PHOTO_WARN_DAYS
+let storageStat = null;    // {used,pct,pdfBytes,photoBytes,dueFiles,dueBytes,dueOldest,duePurgeOn}
+let storageStatAt = 0;     // เวลาโหลดล่าสุด (ms) — กันยิง RPC ซ้ำถี่ทุก 45 วิตอน refreshLiveData
+function fmtBytes(b){
+  b = Number(b)||0;
+  return b >= 1000000000 ? (b/1000000000).toFixed(2)+" GB" : (b/1000000).toFixed(1)+" MB";
+}
+// โหลดสถานะพื้นที่ — เฉพาะ Super Admin (RPC เป็น security definer เปิดให้ authenticated อยู่แล้ว)
+async function loadStorageStat(force){
+  if(currentRoleCode !== "super_admin"){ storageStat = null; return; }
+  if(!force && storageStat && (Date.now()-storageStatAt) < 30*60*1000) return;   // ของเดิมยังสดพอ (30 นาที)
+  try{
+    const [uRes, bRes, dRes] = await Promise.all([
+      sb.rpc("storage_usage_bytes"),
+      sb.rpc("storage_usage_breakdown"),
+      sb.rpc("photos_due_soon", { p_days: STORAGE_PHOTO_DAYS, p_warn: STORAGE_PHOTO_WARN_DAYS })
+    ]);
+    if(uRes.error) throw uRes.error;
+    const used = Number(uRes.data)||0;
+    const bd = {}; (bRes.data||[]).forEach(r=>{ bd[r.kind] = Number(r.bytes)||0; });
+    const due = (Array.isArray(dRes.data) ? dRes.data[0] : dRes.data) || {};
+    storageStat = {
+      used, pct: Math.round(used/STORAGE_LIMIT_BYTES*1000)/10,
+      pdfBytes: bd.pdf||0, photoBytes: bd.other||0,
+      dueFiles: Number(due.files)||0, dueBytes: Number(due.bytes)||0,
+      dueOldest: due.oldest||null, duePurgeOn: due.purge_on||null
+    };
+    storageStatAt = Date.now();
+  }catch(_e){ storageStat = null; }   // RPC หาย/ไม่มีสิทธิ์ = ไม่โชว์เฉยๆ ไม่ทำให้กระดิ่งพัง
+}
+// กดแจ้งเตือนพื้นที่แล้วเปิดรายละเอียด (ไม่ได้ทำการ์ดในหน้าตั้งค่า เพราะผู้ใช้ยังไม่เอารอบ 17.13)
+function openStorageModal(){
+  const s = storageStat; if(!s) return;
+  const filled = Math.min(10, Math.max(0, Math.round(s.pct/10)));
+  const bar = "█".repeat(filled) + "░".repeat(10-filled);
+  const warn = s.pct >= STORAGE_ALERT_PCT;
+  const thai = v => v ? isoToThaiDisplay(String(v).slice(0,10)) : "—";
+  document.getElementById("modalBox").className = "modal";
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modal-head"><div style="width:40px;height:40px;background:${warn?'var(--red)':'var(--accent)'};border-radius:10px;display:grid;place-items:center;color:#fff">💾</div>
+      <div><h3 style="font-size:16px">พื้นที่เก็บไฟล์ (Supabase Storage)</h3>
+      <div class="hint">ใช้ไป ${fmtBytes(s.used)} จาก ${fmtBytes(STORAGE_LIMIT_BYTES)} · แพ็กเกจฟรี</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div style="font-size:19px;font-weight:700;letter-spacing:1px;color:${warn?'var(--red)':'#20304A'}">${bar} ${s.pct}%</div>
+      <table style="margin-top:12px">
+        <tr><th>ประเภทไฟล์</th><th class="num">ขนาด</th><th>นโยบายเก็บ</th></tr>
+        <tr><td>📷 รูปหน้างาน</td><td class="num">${fmtBytes(s.photoBytes)}</td><td>${STORAGE_PHOTO_DAYS} วัน · <b style="color:var(--red)">ลบแล้วกู้คืนไม่ได้</b></td></tr>
+        <tr><td>📄 PDF ลิงก์แชร์</td><td class="num">${fmtBytes(s.pdfBytes)}</td><td>30 วัน · สร้างใหม่ได้เสมอ</td></tr>
+      </table>
+      ${s.dueFiles?`<div class="hint" style="margin-top:12px;padding:10px;border-radius:8px;background:#FFF6E5;color:#8a5a00">
+        🖼 รูปหน้างาน <b>${s.dueFiles} รูป (${fmtBytes(s.dueBytes)})</b> จะถูกลบอัตโนมัติประมาณ <b>${thai(s.duePurgeOn)}</b> (รูปเก่าสุดถ่ายเมื่อ ${thai(s.dueOldest)}) — ถ้าต้องเก็บไว้เป็นหลักฐาน ให้เปิดรายงานประจำวันของช่วงนั้นแล้วโหลดเก็บก่อนถึงกำหนด</div>`:''}
+      <div class="hint" style="margin-top:10px">ระบบล้างไฟล์เก่าอัตโนมัติทุกวัน 02:00 น. · Supabase คิดพื้นที่เป็นค่าเฉลี่ยตลอดรอบบิล ถ้าปล่อยจนเต็มแล้วค่อยลบจะยังไม่ปลดล็อกทันที</div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" onclick="closeModal()">ปิด</button></div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
 // สร้างรายการแจ้งเตือนทีละอัน — คืน [{key, icon, title, sub, nav()}]  ใช้ทั้งตอนเปิดพาเนลและตอนคำนวณจุดแดง
 /* ===================== รีเฟรชข้อมูลสด (Live refresh) =====================
    ปัญหาเดิม: ข้อมูล ใบลา/OT/คำขอแก้เวลา/เบิกล่วงหน้า โหลดครั้งเดียวตอนล็อกอิน
@@ -2050,7 +2114,7 @@ async function refreshLiveData(opts){
   _liveBusy = true;
   const before = liveSignature();
   try{
-    await Promise.all([loadLeaves(), loadOtRequests(), loadAdjustments(), loadAdvances(), loadAttendanceToday()]);
+    await Promise.all([loadLeaves(), loadOtRequests(), loadAdjustments(), loadAdvances(), loadAttendanceToday(), loadStorageStat()]);
   }catch(err){ console.warn("refreshLiveData", err); }
   _liveBusy = false;
   const changed = liveSignature() !== before;
@@ -2199,6 +2263,27 @@ function computeNotifications(){
         title:"คุณถูกย้ายไปช่วยงานชั่วคราว",
         sub:`${toP?toP.name:'-'}${tr.end_date?' ถึง '+isoToThaiDisplay(tr.end_date):''}`,
         nav:()=>{ setSub('projects','teams'); go('projects', navBtn('projects')); }
+      });
+    }
+  }
+
+  // ---------- กลุ่มที่ 3: ดูแลระบบ — เข้าเฉพาะ Super Admin (ตามเส้นทางแจ้งเตือนที่ผู้ใช้กำหนด) ----------
+  if(currentRoleCode==="super_admin" && storageStat){
+    const s = storageStat;
+    if(s.pct >= STORAGE_ALERT_PCT){
+      items.push({
+        key:`storage_quota_${Math.round(s.pct)}`, icon:"⚠️",
+        title:`พื้นที่เก็บไฟล์ใกล้เต็ม: ใช้ไป ${s.pct}%`,
+        sub:`${fmtBytes(s.used)} จาก ${fmtBytes(STORAGE_LIMIT_BYTES)} · 📷 รูป ${fmtBytes(s.photoBytes)} · 📄 PDF ${fmtBytes(s.pdfBytes)}`,
+        nav: ()=>openStorageModal()
+      });
+    }
+    if(s.dueFiles > 0){
+      items.push({
+        key:`storage_photo_purge_${s.duePurgeOn||""}_${s.dueFiles}`, icon:"🖼️",
+        title:`รูปหน้างาน ${s.dueFiles} รูป ใกล้ถึงกำหนดลบอัตโนมัติ`,
+        sub:`${fmtBytes(s.dueBytes)} · จะถูกลบประมาณ ${s.duePurgeOn?isoToThaiDisplay(String(s.duePurgeOn).slice(0,10)):"—"} · ลบแล้วกู้คืนไม่ได้`,
+        nav: ()=>openStorageModal()
       });
     }
   }
@@ -5858,7 +5943,7 @@ async function afterLogin(){
     return false;
   }
   // loadAdjustments/loadAdvances/ensureHolidaysLoaded โหลดตั้งแต่ตอนล็อกอิน เพราะกระดิ่งแจ้งเตือนต้องใช้นับ "สิ่งที่รออนุมัติ" ให้ครบทุกประเภท
-  await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits(), loadNotifReads(), loadAdjustments(), loadAdvances(), ensureHolidaysLoaded()]);
+  await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits(), loadNotifReads(), loadAdjustments(), loadAdvances(), ensureHolidaysLoaded(), loadStorageStat()]);
   await loadProjectsModule(); projectsLoaded = true;
   updateProjectBadge();
   await loadPayrollStatus();
@@ -5930,6 +6015,7 @@ function resetAppState(){
   assetRecords = []; assetsLoaded = false; assetsLoading = false;
   signatures = {};
   notifReadKeys = new Set(); notifPanelItems = [];
+  storageStat = null; storageStatAt = 0;   // [รอบ 18] กันสถานะพื้นที่ของบัญชี Super Admin ค้างข้ามไปบัญชีถัดไป
   // รีเซ็ตการนำทาง — กันหน้า/แท็บเดิมของบัญชีก่อนค้าง
   currentPage = "dashboard";
   subTab = { leave:"dashboard", payroll:"cycles", attendance:"today", settings:"work", projects:"board" };
