@@ -645,7 +645,9 @@ function mapEmployeeRow(row){
     rate: Number(row.base_wage)||0,
     dept: row.department || "—",
     pos: row.position || "—",
-    nat: row.nationality || "TH",
+    // [รอบ 17.17] ไม่ default เป็น TH อีกแล้ว — ผู้ช่วย HR ได้แถวคนอื่นแบบปิดบังสัญชาติมา (null)
+    // ถ้า default เป็น TH จะกลายเป็นโชว์ธงไทยให้คนที่จริง ๆ เป็นเมียนมา = ข้อมูลผิด แย่กว่าไม่โชว์
+    nat: row.nationality || "",
     doc: row.doc_type || "",
     color: row.color || "#3b7bf6",
     status: row.status || "active",
@@ -660,7 +662,7 @@ function mapEmployeeRow(row){
     payeeRelation: row.payee_relation || "",
     phone: row.phone || "",
     email: row.email || "",
-    address: "",
+    address: row.address || "",  // [รอบ 17.17] มีคอลัมน์จริงแล้ว (เดิมฟอร์มให้กรอกได้แต่ค่าหายทุกครั้ง)
     authUserId: row.auth_user_id || null,
     lineUserId: row.line_user_id || null,
     isSystemTest: !!row.is_system_test,
@@ -1770,7 +1772,7 @@ const E = id => employees.find(e=>String(e.id)===String(id)) || terminatedEmploy
 const LT = code => LEAVE_TYPES.find(l=>l.code===code) || {code:code||"unknown", name:code||"ไม่ระบุประเภท", paid:"unpaid", color:"#8a92a6", desc:"ประเภทลานี้ไม่อยู่ในรายการที่ตั้งค่าไว้ (ข้อมูลเก่า/ยังไม่ได้กำหนด)"};
 const fmt = n => Math.round(n).toLocaleString("th-TH");
 const initials = n => n.replace(/\(.*\)/,"").trim().split(" ").map(w=>w[0]).slice(0,2).join("");
-const natFlag = n => n==="MM" ? "🇲🇲" : "🇹🇭";
+const natFlag = n => n==="MM" ? "🇲🇲" : n==="TH" ? "🇹🇭" : "";  // [รอบ 17.17] ไม่รู้/ถูกปิดบัง = ไม่โชว์ธง ดีกว่าโชว์ธงผิดชาติ
 function toast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._x);t._x=setTimeout(()=>t.classList.remove("show"),2600);}
 // แจ้งผู้ใช้แบบเห็นจริงเมื่อโหลดข้อมูลจาก Supabase ไม่สำเร็จ — เดิมหลายจุด error เงียบอยู่แค่ใน console เท่านั้น
 // ผู้ใช้เห็นแค่หน้าว่าง/เลข 0 โดยไม่รู้ว่าเป็นเพราะ "ไม่มีข้อมูลจริง" หรือ "โหลดพัง" ทำให้สับสน/เข้าใจผิดว่าข้อมูลหาย
@@ -2275,12 +2277,10 @@ function go(page,btn){
     toast("🔒 เฉพาะ HR / Super Admin / ผู้ช่วย HR เท่านั้น");
     return;
   }
-  // [รอบ 17.15] ผู้ช่วย HR เข้าหน้า "เงินเดือน" ได้แล้ว แต่เข้าไปเจอเฉพาะ Self-Service ของตัวเอง (pgPayroll → canAccessPayroll()=false)
-  // ยังบล็อก "จัดการพนักงาน" ไว้ เพราะหน้านั้นโชว์ฐานเงินเดือนของพนักงานทุกคน
-  if(page==="employees" && isHrAssistant()){
-    toast("🔒 ผู้ช่วย HR ไม่มีสิทธิ์เข้าหน้านี้ (หน้านี้แสดงฐานเงินเดือนของพนักงานทุกคน)");
-    return;
-  }
+  // [รอบ 17.15/17.17] ผู้ช่วย HR เข้าหน้า "เงินเดือน" และ "จัดการพนักงาน" ได้แล้ว
+  // แต่ทั้งสองหน้าเข้าไปเจอเฉพาะของตัวเอง — เงินเดือน → โหมด Self-Service (canAccessPayroll()=false)
+  // จัดการพนักงาน → pgMyProfile() (โปรไฟล์ตัวเอง + ปุ่มแก้ไข เบอร์โทร/อีเมล/ที่อยู่ เท่านั้น)
+  // ไม่ต้องบล็อกหน้าไหนเพิ่มแล้ว เพราะทั้ง 2 หน้าไม่เรนเดอร์รายชื่อ/ตัวเลขของคนอื่นให้ role นี้เลย
   document.querySelectorAll(".nav-item").forEach(b=>b.classList.remove("active"));
   if(btn) btn.classList.add("active");
   document.getElementById("pageTitle").textContent = tr(PAGES[page]);
@@ -2719,7 +2719,9 @@ function filteredEmployees(){
   });
 }
 function pgEmployees(){
-  if(!canSeePayroll()) return pgMyProfile(); // ผู้ช่วย HR ไม่เห็นรายชื่อ+ฐานเงินเดือน (กันเห็นเงินเดือน)
+  // [รอบ 17.17] ทุก role ที่ไม่ใช่ HR/Super Admin (พนักงานทั่วไป · ผู้ช่วย HR · หัวหน้าทีม)
+  // เห็นหน้านี้เป็น "ข้อมูลของฉัน" เท่านั้น — ไม่มีรายชื่อบริษัท ไม่มีฐานเงินเดือน
+  if(!canSeePayroll()) return pgMyProfile();
   const allEmp = allEmployeesForManagement();
   const total = allEmp.length;
   const active = allEmp.filter(e=>e.status==="active").length;
@@ -3093,7 +3095,7 @@ function empSelfEditForm(e){
     ${ro("วันเริ่มงาน", e.start)}
     ${ro("อายุงาน", tenureText(e))}
   </div>
-  <div class="hint" style="margin:18px 0 10px;padding:10px 12px;background:#e9f0ff;border-radius:10px;color:#2c5cbf">✏️ <b>แก้ไขได้</b></div>
+  <div class="hint" style="margin:18px 0 10px;padding:10px 12px;background:#e9f0ff;border-radius:10px;color:#2c5cbf">✏️ <b>แก้ไขได้เฉพาะ 3 ช่องนี้</b> — ข้อมูลอื่น (ชื่อ · ตำแหน่ง · แผนก · เงินเดือน · บัญชีรับเงิน ฯลฯ) กรุณาติดต่อ HR</div>
   <div class="grid" style="grid-template-columns:1fr 1fr">
     <div class="field"><label>เบอร์โทร</label><input id="selfPhone" value="${e.phone||""}"></div>
     <div class="field"><label>อีเมล</label><input id="selfEmail" value="${e.email||""}"></div>
@@ -3113,7 +3115,7 @@ function empInfoForm(e){
     <div class="field"><label>เลขบัตร / Passport / Work Permit</label><input id="empDocNum" placeholder="เลขที่เอกสาร (ยังไม่บันทึกลงระบบในเฟสนี้)"></div>
     <div class="field"><label>เบอร์โทร</label><input id="empPhone" value="${e.phone||""}"></div>
     <div class="field"><label>อีเมล</label><input id="empEmail" value="${e.email||""}"></div>
-    <div class="field" style="grid-column:span 2"><label>ที่อยู่</label><input id="empAddress" value="${e.address||""}" placeholder="ที่อยู่ปัจจุบัน (ยังไม่บันทึกลงระบบในเฟสนี้)"></div>
+    <div class="field" style="grid-column:span 2"><label>ที่อยู่</label><input id="empAddress" value="${e.address||""}" placeholder="ที่อยู่ปัจจุบัน"></div>
   </div>
   ${e.id&&canViewAll()?`<label style="display:flex;align-items:center;gap:8px;margin-top:12px;padding:10px 12px;background:#f8f9fc;border-radius:10px;font-size:12.5px;cursor:pointer">
     <input type="checkbox" id="empIsTest" ${e.isSystemTest?'checked':''}> 🧪 บัญชีทดสอบระบบ (ซ่อนจากทุกรายชื่อ/รายงาน/ผังองค์กร — เห็นเฉพาะตอนล็อกอินเป็นบัญชีนี้เอง)
@@ -3216,16 +3218,19 @@ async function saveEmp(id,isNew){
   const btn = document.querySelector("#modalBox .modal-foot .btn.primary");
   const setBusy = (b)=>{ if(btn){ btn.disabled=b; btn.textContent = b?"กำลังบันทึก...":"💾 บันทึก"; } };
 
-  // พนักงานทั่วไป + ผู้ช่วย HR แก้ไขได้เฉพาะเบอร์โทร/อีเมลของตัวเอง/คนอื่น (ผู้ช่วย HR ไม่เห็น/ไม่แก้เงินเดือน-บัญชีธนาคาร) — บังคับโดย RLS ฝั่ง DB ด้วย ไม่ใช่แค่ UI (self_update_contact_info ต้องเป็นเจ้าของ record เท่านั้น)
+  // [รอบ 17.17] ทุก role ที่ไม่ใช่ HR/Super Admin (พนักงานทั่วไป · ผู้ช่วย HR · หัวหน้าทีม)
+  // แก้ได้เฉพาะ เบอร์โทร / อีเมล / ที่อยู่ ของ "ตัวเอง" เท่านั้น
+  // บังคับ 2 ชั้น: policy self_update_contact_info (ต้องเป็นเจ้าของแถว)
+  //   + trigger enforce_employee_self_update_columns (whitelist คอลัมน์ — คอลัมน์อื่นเปลี่ยนไม่ได้เลยแม้ยิง API ตรง)
   if(!canSeePayroll() && !isNew){
-    const p = document.getElementById("selfPhone"), em = document.getElementById("selfEmail");
-    const payload = { phone: p?p.value:undefined, email: em?em.value:undefined };
+    const p = document.getElementById("selfPhone"), em = document.getElementById("selfEmail"), ad = document.getElementById("selfAddress");
+    const payload = { phone: p?p.value:undefined, email: em?em.value:undefined, address: ad?ad.value:undefined };
     setBusy(true);
     const { error } = await sb.from("employees").update(payload).eq("id", id);
     setBusy(false);
     if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
     await loadEmployees();
-    logAudit("employee","แก้ไขข้อมูลติดต่อของตัวเอง", myEmp()?.name||"");
+    logAudit("employee","แก้ไขข้อมูลติดต่อของตัวเอง (เบอร์โทร/อีเมล/ที่อยู่)", myEmp()?.name||"");
     closeModal(); render("employees"); toast("บันทึกข้อมูลติดต่อแล้ว ✓");
     return;
   }
@@ -3262,6 +3267,7 @@ async function saveEmp(id,isNew){
     code, full_name: name, department: dept, position: pos,
     nationality: nat, doc_type: nat==="MM" ? "Work Permit" : "บัตร ปชช.",
     phone: val("empPhone"), email: val("empEmail"),
+    address: val("empAddress") || null,   // [รอบ 17.17] บันทึกจริงแล้ว (เดิมกรอกได้แต่ค่าหาย)
     bank_account,
     payment_method: payMethod,
     promptpay_id: payMethod==="promptpay" ? (promptpayId||null) : null,
@@ -5747,10 +5753,9 @@ function applyRoleUI(){
   // settings/audit = เฉพาะ Super Admin/HR · assets = รวมผู้ช่วย HR
   ["settings","audit"].forEach(p=>{ const el=document.querySelector(`[data-page=${p}]`); if(el) el.style.display = canAccessAdmin() ? "" : "none"; });
   const assetsEl = document.querySelector('[data-page=assets]'); if(assetsEl) assetsEl.style.display = canManageAssets() ? "" : "none";
-  // [รอบ 17.15] ผู้ช่วย HR: ซ่อนแค่เมนู "จัดการพนักงาน" (หน้านั้นโชว์ฐานเงินเดือนของทุกคน)
-  // เมนู "เงินเดือน" เปิดให้เข้าได้แล้ว — เข้าไปเจอเฉพาะ Self-Service ของตัวเอง (สลิปตัวเอง + ยื่นขอเบิกล่วงหน้าตัวเอง)
-  const hrAsstHide = document.querySelector('[data-page=employees]');
-  if(hrAsstHide) hrAsstHide.style.display = isHrAssistant() ? "none" : "";
+  // [รอบ 17.17] ผู้ช่วย HR ไม่ต้องซ่อนเมนูไหนเป็นพิเศษอีกแล้ว
+  // "เงินเดือน" → โหมด Self-Service ของตัวเอง · "จัดการพนักงาน" → pgMyProfile() โปรไฟล์ตัวเอง
+  // ข้อมูลของคนอื่นถูกกันที่ชั้น DB แล้ว (RPC employees_for_hr_assistant คืนเฉพาะ ชื่อ/รหัส/แผนก/ตำแหน่ง/หัวหน้างาน/สถานะ)
   // ซ่อนเมนู "เฟสถัดไป" (จัดการเอกสาร/ทริปบริษัท) จากพนักงานทั่วไป — ไม่ให้เห็นสิ่งที่ยังไม่เปิด
   const isPlainEmp = !canViewAll() && !isTeamLead();
   document.querySelectorAll('[data-future="1"]').forEach(el=>{ el.style.display = isPlainEmp ? "none" : ""; });
