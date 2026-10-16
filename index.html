@@ -512,7 +512,11 @@ const settings = {
   locations:[{id:1, name:"สำนักงานใหญ่ (บางนา)", lat:13.667, lng:100.605, radius:150}],
   channels:{line:true, email:true},
   autoSyncLeaveAtt:true, autoDeductUnpaid:true,
-  otCalcType:"flat_rate", otStartTime:"17:30", otDivisorDays:30, otDivisorHours:8, otRoundTo:5, otRequiresApproval:true
+  otCalcType:"flat_rate", otStartTime:"17:30", otDivisorDays:30, otDivisorHours:8, otRoundTo:5, otRequiresApproval:true,
+  // [รอบ 18.1] กติกาค่าจ้างใหม่ — มีผลกับ "วันที่ทำงาน" ตั้งแต่ payRulesV2From (งวดเปลี่ยนผ่าน 29 ต.ค.–30 พ.ย. 2569)
+  v2Schema:false, payRulesV2From:"2026-10-29", otMultWorkday:1.5, otMultHoliday:3, hwMultMonthly:1, hwMultDaily:2, blockWeeklyOffCheckin:false,
+  // [รอบ 18.2] รอบจ่ายใหม่ — v2p2Schema = รัน migration เฟส 2 แล้ว
+  v2p2Schema:false, monthlyCalendarFrom:"2026-10-29", semiAEndDay:12, semiAPayDay:15
 };
 
 // วันหยุดประจำปีย้ายไปเก็บในตาราง holidays แล้ว (HR เพิ่มเองที่ ตั้งค่าระบบ → วันหยุดประจำปี)
@@ -520,6 +524,7 @@ const THAI_MONTHS_FULL = ["มกราคม","กุมภาพันธ์",
 function primaryLocation(){ return settings.locations[0]; }
 const CYCLES = {
   monthly:{name:"Monthly Payroll", desc:"จ่ายพนักงานรายเดือน", cut:"ตัดรอบ: วันที่ 25 ของเดือน", pay:"จ่าย: วันสุดท้ายของเดือน", period:"26 มิ.ย. – 25 ก.ค. 2569"},
+  semimonthly:{name:"Semi-Monthly Payroll", desc:"จ่ายครึ่งเดือน (วันที่ 15 และสิ้นเดือน)", cut:"ตัดรอบ: วันที่ 12 (งวด A) และ 28 (งวด B)", pay:"จ่าย: วันที่ 15 (A) และสิ้นเดือน (B)", period:"-", disabled:true},
   weekly:{name:"Weekly Payroll", desc:"จ่ายพนักงานรายสัปดาห์", cut:"ตัดรอบ: ทุกวันศุกร์", pay:"จ่าย: ทุกวันจันทร์", period:"29 มิ.ย. – 3 ก.ค. 2569"},
   daily:{name:"Daily Payroll", desc:"จ่ายพนักงานรายวัน", cut:"ตัดรอบ: สิ้นวัน", pay:"จ่าย: เย็นวันเดียวกัน", period:"ศ. 3 ก.ค. 2569"},
   biweekly:{name:"Biweekly Payroll", desc:"จ่ายพนักงานทุก 2 สัปดาห์", cut:"ตัดรอบ: ทุก 14 วัน", pay:"จ่าย: 3 วันหลังตัดรอบ", period:"-", disabled:true}
@@ -530,7 +535,7 @@ function activeCycleKeys(){ return Object.keys(CYCLES).filter(k=>!CYCLES[k].disa
 const LEAVE_TYPES = [
   {code:"personal", name:"ลากิจ", paid:"quota", color:"#3b7bf6", desc:"ใช้โควตาไม่หักเงิน 2 วัน/เดือน — เกินหักตามค่าจ้างต่อวัน"},
   {code:"sick", name:"ลาป่วย", paid:"quota", color:"#ee5d9a", desc:"ใช้โควตารวมกับลากิจ — ป่วย 3 วันขึ้นไปต้องมีใบรับรองแพทย์"},
-  {code:"annual", name:"พักร้อน", paid:"unpaid", color:"#17c3a3", desc:"ยังไม่เปิดใช้ (เฟส 2 — พักร้อน 6 วัน/ปี ตามกฎหมาย)"},
+  {code:"annual", name:"พักร้อน", paid:"unpaid", color:"#17c3a3", desc:"ยังไม่เปิดใช้ (เฟส 2)"},
   {code:"unpaid", name:"ลาไม่รับค่าจ้าง", paid:"unpaid", color:"#8a92a6", desc:"หักค่าจ้างตามวันที่ลา"}
 ];
 
@@ -666,7 +671,10 @@ function mapEmployeeRow(row){
     authUserId: row.auth_user_id || null,
     lineUserId: row.line_user_id || null,
     isSystemTest: !!row.is_system_test,
-    att:{workDays:0, absent:0, lateMin:0}, leaveUsed:0, extra:0, files:[], deductions:[], wfh:!!row.wfh
+    att:{workDays:0, absent:0, lateMin:0}, leaveUsed:0, extra:0, files:[], deductions:[], wfh:!!row.wfh,
+    // [รอบ 18.1] ชั่วโมงทำงานปกติต่อวัน (ใช้คิดค่าจ้างต่อชั่วโมง) + วันหยุดประจำสัปดาห์รายคน (null = ใช้ค่าบริษัท)
+    normalHours: Number(row.normal_hours_per_day)||8,
+    weeklyOffDow: (row.weekly_off_dow===null||row.weekly_off_dow===undefined) ? null : Number(row.weekly_off_dow)
   };
 }
 async function loadEmployees(){
@@ -810,6 +818,20 @@ async function loadSettings(){
   settings.otDivisorHours = data.ot_divisor_hours;
   settings.otRoundTo = Number(data.ot_round_to)||5;
   settings.otRequiresApproval = !!data.ot_requires_approval;
+  // [รอบ 18.1] v2Schema = ฐานข้อมูลรัน migration เฟส 1 แล้ว (มีคอลัมน์/ตารางใหม่) — ถ้ายังไม่รัน หน้าเว็บยังทำงานแบบเดิมได้ไม่พัง
+  settings.v2Schema = Object.prototype.hasOwnProperty.call(data, "pay_rules_v2_from");
+  settings.payRulesV2From = data.pay_rules_v2_from || "2026-10-29";
+  settings.otMultWorkday = Math.max(1.5, Number(data.ot_mult_workday)||1.5);   // ตั้งต่ำกว่าขั้นต่ำไม่ได้ (DB มี check constraint ซ้ำอีกชั้น)
+  settings.otMultHoliday = Math.max(3, Number(data.ot_mult_holiday)||3);
+  settings.hwMultMonthly = Math.max(1, Number(data.holiday_work_mult_monthly)||1);
+  settings.hwMultDaily = Math.max(2, Number(data.holiday_work_mult_daily)||2);
+  settings.blockWeeklyOffCheckin = !!data.block_weekly_off_checkin;
+  // [รอบ 18.2] รอบจ่ายใหม่ (ยังไม่รัน migration เฟส 2 = รอบจ่ายแบบเดิมทั้งหมด)
+  settings.v2p2Schema = Object.prototype.hasOwnProperty.call(data, "monthly_calendar_from");
+  settings.monthlyCalendarFrom = String(data.monthly_calendar_from || "2026-10-29").slice(0,10);
+  settings.semiAEndDay = Math.min(27, Math.max(1, Number(data.semimonthly_a_end_day)||12));
+  settings.semiAPayDay = Math.min(28, Math.max(1, Number(data.semimonthly_a_pay_day)||15));
+  refreshCycleLabels();
   // ข้อมูลบริษัท (แสดงบน Sidebar + สลิป — เก็บใน DB ให้เหมือนกันทุกเครื่อง)
   if(data.company_name){ COMPANY.name = data.company_name; }
   if(data.company_name_thai){ COMPANY.nameThai = data.company_name_thai; }
@@ -865,13 +887,50 @@ async function saveOtSettings(){
 /* ============ OT: ยื่นขอ + อนุมัติโดยหัวหน้างาน ============ */
 let otRequests = [];
 // อัตรา OT/ชม. รายคน: รายเดือน = เงินเดือน÷วัน÷ชม. · รายวัน = ค่าแรงวัน÷ชม. แล้วปัดตามตั้งค่า
-function calcOTHourlyFor(e){
+function calcOTHourlyFor(e, dISO){
+  // [รอบ 18.1] งานที่ทำตั้งแต่ payRulesV2From → ค่าจ้างต่อชั่วโมงละเอียดเต็ม (ไม่ปัดทีละ ฿5) ตามชั่วโมงปกติของคนนั้น
+  if(dISO && payV2On(dISO)) return hourlyRateV2(e);
   const perHour = e.type==="monthly"
     ? e.rate/(settings.otDivisorDays||30)/(settings.otDivisorHours||8)
     : e.rate/(settings.otDivisorHours||8);
   const step = settings.otRoundTo||5;
   return Math.ceil(perHour/step)*step;
 }
+/* ===== [รอบ 18.1] กติกาค่าจ้างใหม่ — ใช้กับ "วันที่ทำงาน" ตั้งแต่ settings.payRulesV2From =====
+   OT วันทำงาน ×1.5 · OT วันหยุด ×3 · ค่าทำงานวันหยุด รายเดือน +1 เท่า / รายวันรวม 2 เท่า
+   คิดด้วยความละเอียดเต็ม แล้วปัดยอดเงินขึ้นเป็นบาทตอนท้าย (payCeil) — ไม่ปัดค่าจ้างต่อชั่วโมง */
+function payV2On(dISO){ return !!settings.v2Schema && !!dISO && String(dISO).slice(0,10) >= (settings.payRulesV2From||"2026-10-29"); }   // ยังไม่รัน migration = ใช้สูตรเดิมทั้งหมด
+function normalHoursOf(e){ const h = Number(e && e.normalHours); return h>0 ? h : 8; }
+function hourlyRateV2(e){ const r = Number(e && e.rate)||0; return (e && e.type==="monthly") ? r/30/normalHoursOf(e) : r/normalHoursOf(e); }
+function payCeil(x){ return Math.ceil(Math.round((Number(x)||0)*100)/100); }   // กันเศษทศนิยมลอย (600.0000001 → 600)
+function weeklyOffDowsFor(e){
+  if(e && e.weeklyOffDow!==null && e.weeklyOffDow!==undefined) return [Number(e.weeklyOffDow)];
+  if(settings.weeklyHoliday==="เสาร์-อาทิตย์") return [0,6];
+  return [THAI_DAYS[settings.weeklyHoliday] ?? 0];
+}
+// "company_holiday" = วันหยุดบริษัท · "weekly_off" = วันหยุดประจำสัปดาห์ของคนนี้ · null = วันทำงาน (ตรงกับ is_day_off_for() ใน DB)
+function dayOffKindFor(e, dISO){
+  if(!dISO) return null;
+  if(isHolidayFor(dISO, e)) return "company_holiday";
+  const d = new Date(String(dISO).slice(0,10)+"T00:00:00").getDay();
+  return weeklyOffDowsFor(e).includes(d) ? "weekly_off" : null;
+}
+// ยอดเงินของคำขอ OT 1 ใบ (ใช้แสดงในตาราง) — วันหยุด ×3 · วันทำงาน ×1.5 · ก่อนวันเริ่มกติกาใหม่ = สูตรเดิม
+function otRequestPay(e, o){
+  const dISO = o.dateISO || o.work_date;
+  const h = Number(o.hours)||0;
+  if(!payV2On(dISO)) return Math.round(h*calcOTHourlyFor(e));
+  const m = dayOffKindFor(e, dISO) ? settings.otMultHoliday : settings.otMultWorkday;
+  return payCeil(h*hourlyRateV2(e)*m);
+}
+// ค่าทำงานวันหยุด 1 รายการ (ยังไม่ปัด) — รายวันในวันหยุดบริษัทได้ค่าจ้างวันหยุดในฐานเงินเดือนแล้ว จึงบวกเพิ่มอีก (ตัวคูณรายวัน − 1)
+function holidayWorkAmount(e, r){
+  const h = hourlyRateV2(e);
+  const mult = e.type==="monthly" ? settings.hwMultMonthly
+    : (r.day_kind==="company_holiday" ? settings.hwMultDaily - 1 : settings.hwMultDaily);
+  return (Number(r.normal_hours)||0)*h*mult + (Number(r.ot_hours)||0)*h*settings.otMultHoliday;
+}
+function fmtHrs(h){ return String(Math.round((Number(h)||0)*100)/100); }
 // ===== OT แบบกรอก "เวลาเริ่ม – เวลาสิ้นสุด" (แทนการกรอกจำนวนชั่วโมงเอง) =====
 // ตัดวินาทีจากค่า time ของ Postgres ("17:30:00" → "17:30") ให้ใส่ใน <input type="time"> ได้
 function hhmm(t){ return t ? String(t).slice(0,5) : ""; }
@@ -932,6 +991,12 @@ async function submitOt(){
   if(startTime === endTime){ toast("เวลาเริ่มกับเวลาสิ้นสุดต้องไม่ตรงกัน"); return; }
   const hours = otHoursFromTimes(startTime, endTime);
   if(hours<=0 || hours>12){ toast(`ช่วงเวลานี้ได้ ${hours} ชม. — ต้องอยู่ระหว่าง 0.5 – 12 ชม. กรุณาตรวจสอบเวลาอีกครั้ง`); return; }
+  // [รอบ 18.1] วันหยุดของพนักงาน (ตั้งแต่วันเริ่มกติกาใหม่) ไม่ยื่น OT — ชั่วโมงทั้งหมดอยู่ใน "บันทึกทำงานวันหยุด" รายการเดียว กันคิดซ้ำ
+  const _otEmp = E(empId) || myEmp();
+  if(_otEmp && payV2On(dateISO) && dayOffKindFor(_otEmp, dateISO)){
+    toast("วันที่นี้เป็นวันหยุดของพนักงาน — ไม่ต้องยื่น OT · ให้ผู้ช่วย HR บันทึกที่แท็บ \"ทำงานวันหยุด\" แทน");
+    return;
+  }
   const { error } = await sb.from("ot_requests").insert({ employee_id: empId, work_date: dateISO, hours, reason, start_time: startTime, end_time: endTime });
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   await loadOtRequests();
@@ -1061,6 +1126,7 @@ async function loadDeductions(){
       label: row.label || (DEDUCTION_TYPES.find(t=>t.code===row.code)?.name ?? "รายการหักอื่นๆ"),
       amount: Number(row.amount)||0,
       monthsTotal: row.months_total, monthsPaid: row.months_paid,
+      deductHalf: row.deduct_half || "B",
       note: row.note || ""
     });
   });
@@ -1106,8 +1172,11 @@ function previewBiweekly(){
   box.style.display = "block";
 }
 // คำนวณช่วงวันที่ของ "งวดปัจจุบัน" ตามประเภทรอบจ่าย (อิงกติกาใน payroll_cycle_settings)
-function currentPeriod(cy){
-  const today = new Date();
+function currentPeriod(cy, ref){
+  const today = ref ? new Date(String(ref).slice(0,10)+"T00:00:00") : new Date();   // ref = หางวดที่ "มีวันนี้อยู่" (ไม่ส่ง = วันนี้)
+  // [รอบ 18.2] ครึ่งเดือน A/B และรายเดือนแบบปฏิทิน (ตั้งแต่ monthlyCalendarFrom)
+  if(cy==="semimonthly") return semiPeriodContaining(isoDate(today));
+  if(cy==="monthly" && settings.v2p2Schema) return monthlyPeriodContaining(isoDate(today));
   if(cy==="monthly"){
     const cutRaw = Number(settings.monthlyCutoffDay)||25; // วันตัดรอบตั้งได้ในแท็บ "รอบการจ่าย"
     const y=today.getFullYear(), m=today.getMonth();
@@ -1140,7 +1209,174 @@ function currentPeriod(cy){
     const end = new Date(start); end.setDate(end.getDate()+12);                  // วันเสาร์ (จ.+12 = ส.)
     return {start: isoDate(start), end: isoDate(end)};
   }
-  return {start: todayISODate(), end: todayISODate()}; // daily
+  { const d0 = isoDate(today); return {start:d0, end:d0}; } // daily
+}
+
+/* ================== [รอบ 18.2] เครื่องยนต์งวดจ่ายใหม่ ==================
+   รายเดือน: ก่อน monthlyCalendarFrom = ตัดรอบแบบเดิม · งวดเปลี่ยนผ่าน = [monthlyCalendarFrom, สิ้นเดือนถัดไป] · หลังจากนั้น 1–สิ้นเดือน
+   ครึ่งเดือน: A = วันถัดจากวันที่ 28 ของเดือนก่อน – วันที่ 12 (จ่าย 15) · B = 13–28 (จ่ายสิ้นเดือน) · วันจ่ายตรงวันหยุด → วันทำงานก่อนหน้า
+   รอบจ่ายรายคนอ่านจาก employee_pay_schedule_history (มีผลตั้งแต่วันที่) — เปลี่ยนรอบแล้วนับต่อจากวันสุดท้ายที่รอบเดิมจ่าย ไม่ซ้ำ ไม่ตกหล่น */
+const pad2 = n => String(n).padStart(2,"0");
+function addDaysISO(iso, n){ const d = new Date(String(iso).slice(0,10)+"T00:00:00"); d.setDate(d.getDate()+n); return isoDate(d); }
+function lastDayOfMonthISO(iso){ const d = new Date(String(iso).slice(0,10)+"T00:00:00"); return isoDate(new Date(d.getFullYear(), d.getMonth()+1, 0)); }
+function firstDayOfMonthISO(iso){ return String(iso).slice(0,8)+"01"; }
+function hasTransitionPeriod(){ return !!settings.v2p2Schema && String(settings.monthlyCalendarFrom).slice(8,10)!=="01"; }
+function transitionEndISO(){ return lastDayOfMonthISO(addDaysISO(lastDayOfMonthISO(settings.monthlyCalendarFrom), 1)); }
+function isTransitionPeriod(cy, p){ return cy==="monthly" && hasTransitionPeriod() && p && p.start===settings.monthlyCalendarFrom && p.end===transitionEndISO(); }
+function legacyMonthlyContaining(dISO){
+  const cut = Number(settings.monthlyCutoffDay)||25;
+  const d = new Date(dISO+"T00:00:00"); const y = d.getFullYear(), m = d.getMonth();
+  if(cut>=31) return {start:isoDate(new Date(y,m,1)), end:isoDate(new Date(y,m+1,0))};
+  const start = d.getDate()<=cut ? new Date(y,m-1,cut+1) : new Date(y,m,cut+1);
+  const end   = d.getDate()<=cut ? new Date(y,m,cut)     : new Date(y,m+1,cut);
+  return {start:isoDate(start), end:isoDate(end)};
+}
+function monthlyPeriodContaining(dISO){
+  if(!settings.v2p2Schema) return legacyMonthlyContaining(dISO);
+  const f = settings.monthlyCalendarFrom;
+  if(dISO < f){ const p = legacyMonthlyContaining(dISO); if(p.end >= f) p.end = addDaysISO(f,-1); return p; }
+  if(hasTransitionPeriod() && dISO <= transitionEndISO()) return {start:f, end:transitionEndISO()};
+  return {start:firstDayOfMonthISO(dISO), end:lastDayOfMonthISO(dISO)};
+}
+function semiPeriodContaining(dISO){
+  const aEnd = Number(settings.semiAEndDay)||12;
+  const day = Number(dISO.slice(8,10));
+  if(day>aEnd && day<=28) return {start:dISO.slice(0,8)+pad2(aEnd+1), end:dISO.slice(0,8)+"28", half:"B"};
+  const owner = day<=aEnd ? firstDayOfMonthISO(dISO) : addDaysISO(lastDayOfMonthISO(dISO), 1);   // เดือนเจ้าของงวด A
+  const prev28 = addDaysISO(owner,-1).slice(0,8)+"28";
+  return {start:addDaysISO(prev28,1), end:owner.slice(0,8)+pad2(aEnd), half:"A"};
+}
+function semiHalfOf(p){ if(p && p.half) return p.half; return Number(String(p.end).slice(8,10))===(Number(settings.semiAEndDay)||12) ? "A" : "B"; }
+function periodContaining(cy, dISO){ return currentPeriod(cy, dISO); }
+function stepPeriodV2(cy, cur, off){
+  let p = cur; const n = Math.abs(off);
+  for(let i=0;i<n;i++) p = off<0 ? currentPeriod(cy, addDaysISO(p.start,-1)) : currentPeriod(cy, addDaysISO(p.end,1));
+  return p;
+}
+function periodTag(cy, p){
+  if(cy==="semimonthly") return ` · งวด ${semiHalfOf(p)}`;
+  if(isTransitionPeriod(cy, p)) return " · งวดเปลี่ยนผ่าน";
+  return "";
+}
+function isCompanyDayOff(dISO){
+  const dow = new Date(dISO+"T00:00:00").getDay();
+  return weeklyOffDowsFor(null).includes(dow) || isHolidayFor(dISO, null);
+}
+function prevWorkingDayISO(iso){ let d = iso; for(let i=0;i<10 && isCompanyDayOff(d);i++) d = addDaysISO(d,-1); return d; }
+// วันจ่ายที่ระบบเสนอ (ผู้ช่วย HR/HR ยืนยันตอนสร้างรอบ)
+function payDateFor(cy, p){
+  let iso;
+  if(cy==="semimonthly") iso = semiHalfOf(p)==="A" ? String(p.end).slice(0,8)+pad2(Number(settings.semiAPayDay)||15) : lastDayOfMonthISO(p.end);
+  else if(cy==="monthly") iso = (settings.v2p2Schema && p.end >= settings.monthlyCalendarFrom) ? lastDayOfMonthISO(p.end) : monthlyPayDateISO(p);
+  else if(cy==="weekly"){ const pd = settings.weeklyPayDow!=null ? Number(settings.weeklyPayDow) : 1; const endDow = new Date(p.end+"T00:00:00").getDay(); iso = addDaysISO(p.end, (pd-endDow+7)%7); }
+  else iso = p.end;
+  if(settings.v2p2Schema && (cy==="semimonthly" || cy==="monthly")){ const w = prevWorkingDayISO(iso); if(w >= p.start) iso = w; }
+  return iso;
+}
+// ----- ประวัติรอบจ่ายรายคน -----
+let scheduleHistory = [];
+async function loadScheduleHistory(){
+  if(!loggedInEmployeeId || !settings.v2p2Schema){ scheduleHistory = []; return; }
+  const { data, error } = await sb.from("employee_pay_schedule_history").select("*").order("effective_from", {ascending:true});
+  if(error){ console.warn("loadScheduleHistory", error); scheduleHistory = []; return; }
+  scheduleHistory = (data||[]).slice().sort((a,b)=>String(a.effective_from).localeCompare(String(b.effective_from)));
+  // ถึงวันที่มีผลแล้ว → ให้ employees.payment_cycle ตรงกับรอบปัจจุบัน (HR บันทึกลง DB · คนอื่นปรับเฉพาะในหน้าจอ)
+  const today = todayISODate();
+  for(const e of employees){
+    const c = employeeCycleOn(e, today);
+    if(c && c!==e.cycle){
+      if(canSeePayroll()){ const u = await sb.from("employees").update({ payment_cycle:c }).eq("id", e.id); if(u.error) console.warn("sync payment_cycle", e.id, u.error); }
+      e.cycle = c;
+    }
+  }
+}
+function employeeCycleOn(e, dISO){
+  if(!e) return null;
+  if(!settings.v2p2Schema || !scheduleHistory.length) return e.cycle;
+  let c = null;
+  for(const h of scheduleHistory){ if(String(h.employee_id)===String(e.id) && String(h.effective_from)<=dISO) c = h.payment_cycle; }
+  return c || e.cycle;
+}
+function upcomingCycleChange(e){
+  const today = todayISODate();
+  return scheduleHistory.find(h=>String(h.employee_id)===String(e.id) && String(h.effective_from)>today) || null;
+}
+function isSemiEmp(e){ if(!e) return false; const u = upcomingCycleChange(e); return employeeCycleOn(e, todayISODate())==="semimonthly" || (u && u.payment_cycle==="semimonthly"); }
+// ช่วงข้อมูลของพนักงานในงวด P ของรอบ cy — เปลี่ยนรอบ = เริ่มต่อจากวันสุดท้ายของงวดที่รอบเดิมจ่ายให้คนนี้
+function employeeRangeFor(e, cy, P){
+  let start = P.start;
+  if(settings.v2p2Schema && scheduleHistory.length){
+    const prevDay = addDaysISO(P.start, -1);
+    const prevCy = employeeCycleOn(e, prevDay);
+    if(prevCy && prevCy!==cy){
+      let pp = periodContaining(prevCy, prevDay);
+      for(let g=0; g<8 && employeeCycleOn(e, pp.end)!==prevCy; g++) pp = periodContaining(prevCy, addDaysISO(pp.start,-1));
+      start = addDaysISO(pp.end, 1);
+    }
+  }
+  return {start, end:P.end};
+}
+function runMembersFor(cy, P){
+  return employees.filter(e=>employeeCycleOn(e, P.end)===cy && (!settings.v2p2Schema || employeeRangeFor(e, cy, P).start<=P.end));
+}
+function runMembers(cy){ return runMembersFor(cy, activePeriod(cy)); }
+// รายการหักประจำของงวดนี้ — ครึ่งเดือน: หักตามที่ HR กำหนด (A / B / แบ่งครึ่ง) · นับงวดผ่อนครั้งเดียวต่อเดือน
+function runDeductions(e){
+  const half = (e && e.runCycle==="semimonthly") ? e.semiHalf : null;
+  return activeDeductions(e).map(d=>{
+    if(!half) return {d, amount:d.amount, counts:true};
+    const h = d.deductHalf || "B";
+    if(h==="split"){ const a = Math.floor(d.amount/2); return half==="A" ? {d, amount:a, counts:false} : {d, amount:d.amount-a, counts:true}; }
+    return h===half ? {d, amount:d.amount, counts:true} : null;
+  }).filter(x=>x && x.amount>0);
+}
+function canUnlockPayroll(){ return currentRoleCode==="super_admin"; }
+async function selectPayrollCycle(cy){
+  payrollState.cycle = cy; payrollOffset = 0; runStep = 2;
+  await loadCycleStats(cy); await loadPayrollStatus();
+  subTab.payroll = "run"; render("payroll");
+}
+// อัปเดตสถานะรอบใน payroll_periods ให้ตรงกับการอนุมัติ/ยืนยันจ่าย (ไม่มีตัวเลขเงินในตารางนี้)
+async function syncPayrollPeriod(cy, p, status){
+  if(!settings.v2p2Schema || !["monthly","semimonthly","weekly"].includes(cy)) return;
+  try{
+    const { data, error } = await sb.from("payroll_periods").select("id,status").eq("cycle", cy).eq("start_date", p.start).eq("end_date", p.end).limit(1);
+    if(error){ console.warn("syncPayrollPeriod", error); return; }
+    if(data && data.length){ const u = await sb.from("payroll_periods").update({ status }).eq("id", data[0].id); if(u.error) console.warn("syncPayrollPeriod update", u.error); }
+    else if(status!=="created"){
+      const pay = payDateFor(cy, p);
+      const i = await sb.from("payroll_periods").insert({ cycle:cy, half: cy==="semimonthly"?semiHalfOf(p):null, start_date:p.start, end_date:p.end, pay_date: pay<p.start?p.end:pay, status, created_by: loggedInEmployeeId });
+      if(i.error) console.warn("syncPayrollPeriod insert", i.error);
+    }
+    payrollPeriodRows = null;
+  }catch(err){ console.warn("syncPayrollPeriod", err); }
+}
+// ข้อความกำกับงวดในหน้าทำจ่าย (HR/Super Admin เท่านั้น)
+function runPeriodNotice(cy){
+  if(!settings.v2p2Schema) return "";
+  const p = activePeriod(cy);
+  const list = runMembers(cy);
+  const box = (bg, bd, html) => `<div class="card" style="margin-bottom:16px;background:${bg};border:1px solid ${bd}">${html}</div>`;
+  let out = "";
+  if(isTransitionPeriod(cy, p)){
+    out += box("linear-gradient(135deg,#f4f7ff,#fff)", "#b9ccf5", `<b style="font-size:14px">🔁 งวดเปลี่ยนผ่าน ${periodLabel(p)}</b><div class="hint" style="margin-top:4px;line-height:1.8">ฐานเงินเดือนรายเดือน <b>เต็ม 100%</b> ตามปกติ · OT / ค่าทำงานวันหยุด / สาย / ขาด ของทุกวันในช่วงนี้คิดตามกติกาใหม่ · ตั้งแต่เดือนถัดไปเป็นรอบ 1–สิ้นเดือน</div>`);
+  }
+  if(cy==="semimonthly"){
+    const h = semiHalfOf(p);
+    out += box("linear-gradient(135deg,#eefbf4,#fff)", "#bfe8d2", `<b style="font-size:14px">🌗 ครึ่งเดือนงวด ${h} · ${periodLabel(p)} · จ่าย ${isoToThaiDisplay(payDateFor(cy,p))}</b><div class="hint" style="margin-top:4px;line-height:1.8">ฐานรายเดือน 50% ต่องวด (A+B = เต็มเดือน) · รายวันตามวันที่มีสิทธิในช่วงนี้ · OT/ค่าทำงานวันหยุดเข้าตามวันที่ทำจริง${h==="A"?" · <b>งวด A ไม่หักลาเกินโควตา</b> (โควตาเป็นรายเดือน คิดรวมในงวด B) · รายการหักเฉพาะที่ตั้งเป็น A/แบ่งครึ่ง · โบนัสเข้างวด B":" · ลาเกินโควตาคิดรวมทั้งเดือนในงวดนี้ · รายการหักที่ตั้งเป็น B/แบ่งครึ่ง · โบนัสรวมงวดนี้"}</div>`);
+  }
+  const shifted = list.filter(e=>e.runRange && e.runRange.start!==p.start);
+  if(shifted.length){
+    out += box("#fff9f0", "#f2c98a", `<b style="font-size:13.5px">🔀 เปลี่ยนรอบจ่าย — ช่วงข้อมูลไม่เท่ากับงวด</b><div class="hint" style="margin-top:4px;line-height:1.8">${shifted.map(e=>`${e.name}: ${periodLabel(e.runRange)}`).join("<br>")}</div>`);
+  }
+  const bad = list.filter(e=>e.coverage && (e.coverage.overlap || e.coverage.gapFrom));
+  if(bad.length){
+    out += box("#fff1f1", "#f3b4b4", `<b style="font-size:13.5px;color:var(--red)">⚠️ ตรวจความครบถ้วนของช่วงข้อมูล</b><div class="hint" style="margin-top:4px;line-height:1.8">${bad.map(e=>{
+      const c = e.coverage;
+      return `${e.name}: ${c.overlap?`ซ้ำกับงวด ${cycleTh(c.overlap.cycle)} ${periodLabel({start:c.overlap.cycle_start_date,end:c.overlap.cycle_end_date})}`:""}${c.overlap&&c.gapFrom?" · ":""}${c.gapFrom?`ยังไม่ถูกนับ ${periodLabel({start:c.gapFrom,end:c.gapTo})}`:""}`;
+    }).join("<br>")}</div>`);
+  }
+  return out;
 }
 const DOW_TH = ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"];
 // วันจ่ายจริงของงวดรายเดือนที่ระบุ (0 = วันสุดท้ายของเดือนที่ตัดรอบ)
@@ -1178,6 +1414,17 @@ function refreshCycleLabels(){
     CYCLES.biweekly.cut = "ตัดรอบ: ทุกวันเสาร์ที่จบรอบ (จ.–ส. 13 วัน)";
     CYCLES.biweekly.pay = off===0 ? "จ่าย: วันเสาร์ที่ตัดรอบ" : `จ่าย: ${off} วันหลังตัดรอบ`;
   }
+  // [รอบ 18.2] รอบจ่ายใหม่: เพิ่มครึ่งเดือน · ยกเลิกการสร้างรอบรายวัน/ทุก 2 สัปดาห์ (ประวัติเดิมยังเปิดดูได้)
+  CYCLES.semimonthly.disabled = !settings.v2p2Schema;
+  if(settings.v2p2Schema){
+    CYCLES.daily.disabled = true; CYCLES.biweekly.disabled = true;
+    CYCLES.monthly.cut = "ตัดรอบ: สิ้นเดือน (วันที่ 1 – วันสุดท้ายของเดือน)";
+    CYCLES.monthly.pay = "จ่าย: วันสุดท้ายของเดือน (ตรงวันหยุด → วันทำงานก่อนหน้า)";
+    CYCLES.monthly.period = periodLabel(currentPeriod("monthly"));
+    CYCLES.semimonthly.cut = `ตัดรอบ: วันที่ ${settings.semiAEndDay} (งวด A) และ 28 (งวด B)`;
+    CYCLES.semimonthly.pay = `จ่าย: วันที่ ${settings.semiAPayDay} (A) และสิ้นเดือน (B)`;
+    CYCLES.semimonthly.period = periodLabel(currentPeriod("semimonthly"));
+  }
   if(settings.cycleLabels?.biweekly) CYCLES.biweekly.name = settings.cycleLabels.biweekly;
 }
 function periodLabel(p){ return `${isoToThaiDisplay(p.start)} – ${isoToThaiDisplay(p.end)}`; }
@@ -1206,6 +1453,7 @@ function stepMonthlyPeriod(cur, off){
 function periodByOffset(cy, off){
   const cur = currentPeriod(cy);
   if(!off) return cur;
+  if(cy==="semimonthly" || (cy==="monthly" && settings.v2p2Schema)) return stepPeriodV2(cy, cur, off);
   if(cy==="monthly") return stepMonthlyPeriod(cur, off);
   const days = cy==="weekly"?7 : cy==="biweekly"?14 : 1; // รอบอื่นเดินด้วยจำนวนวันคงที่
   const s=new Date(cur.start+"T00:00:00"); s.setDate(s.getDate()+off*days);
@@ -1216,6 +1464,7 @@ function periodByOffset(cy, off){
 function activePeriod(cy){ return periodByOffset(cy, payrollOffset); }
 // เดินหน้า 1 งวดจากงวดที่กำหนด (ไม่อิง "วันนี้" — ต่างจาก periodByOffset) ใช้เลื่อนงวดเบิกล่วงหน้าที่ค้างอนุมัติจนงวดเดิมปิดจ่ายไปแล้ว
 function nextPeriodOf(cy, cur){
+  if(cy==="semimonthly" || (cy==="monthly" && settings.v2p2Schema)) return stepPeriodV2(cy, cur, 1);
   if(cy==="monthly") return stepMonthlyPeriod(cur, 1);
   const days = cy==="weekly"?7 : cy==="biweekly"?14 : 1;
   const s=new Date(cur.start+"T00:00:00"); s.setDate(s.getDate()+days);
@@ -1246,16 +1495,36 @@ async function setPayrollOffset(off){
 async function loadCycleStats(cy){
   const period = activePeriod(cy);
   const effEnd = period.end < todayISODate() ? period.end : todayISODate();
-  const [attRes, lvRes, otRes] = await Promise.all([
-    sb.from("attendances").select("employee_id,status,late_minutes,work_date").gte("work_date", period.start).lte("work_date", effEnd),
-    sb.from("leave_requests").select("employee_id,leave_date,leave_type,supervisor_status,hr_status").gte("leave_date", period.start).lte("leave_date", effEnd),
-    sb.from("ot_requests").select("employee_id,work_date,hours,status").gte("work_date", period.start).lte("work_date", period.end)
+  // [รอบ 18.2] สมาชิก = รอบจ่ายของคนนั้น ณ วันสิ้นงวด · ช่วงข้อมูลรายคน (เปลี่ยนรอบ = นับต่อจากวันสุดท้ายที่รอบเดิมจ่าย)
+  const members = runMembersFor(cy, period);
+  const ranges = new Map();
+  members.forEach(e=>ranges.set(String(e.id), employeeRangeFor(e, cy, period)));
+  let qStart = period.start;
+  ranges.forEach(r=>{ if(r.start < qStart) qStart = r.start; });
+  const half = cy==="semimonthly" ? semiHalfOf(period) : null;
+  const aPeriod = half==="B" ? semiPeriodContaining(addDaysISO(period.start,-1)) : null;   // โควตาลาเป็นรายเดือน → งวด B นับรวมงวด A ของเดือนเดียวกัน
+  const lvStart = (aPeriod && aPeriod.start < qStart) ? aPeriod.start : qStart;
+  const [attRes, lvRes, otRes, hwRes] = await Promise.all([
+    sb.from("attendances").select("employee_id,status,late_minutes,work_date").gte("work_date", qStart).lte("work_date", effEnd),
+    sb.from("leave_requests").select("employee_id,leave_date,leave_type,supervisor_status,hr_status").gte("leave_date", lvStart).lte("leave_date", effEnd),
+    sb.from("ot_requests").select("employee_id,work_date,hours,status").gte("work_date", qStart).lte("work_date", period.end),
+    // [รอบ 18.1] ค่าทำงานวันหยุดที่ HR อนุมัติแล้ว (ยังไม่รัน migration = ข้าม ไม่ทำให้เงินเดือนพัง)
+    settings.v2Schema
+      ? sb.from("holiday_work_records").select("employee_id,work_date,day_kind,normal_hours,ot_hours,status").eq("status","approved").gte("work_date", qStart).lte("work_date", period.end)
+      : Promise.resolve({ data: [] })
   ]);
+  if(hwRes && hwRes.error){ console.warn("loadCycleStats holiday_work", hwRes.error); }
   if(attRes.error||lvRes.error||otRes.error){ console.error("loadCycleStats error", attRes.error||lvRes.error||otRes.error); toastLoadError("สถิติรอบเงินเดือน"); return; }
   await ensureHolidaysLoaded();
   // Override จาก Payroll Preview (HR แก้ตัวเลขก่อนอนุมัติ)
   const ovRes = await sb.from("payroll_overrides").select("*").eq("cycle_start_date", period.start).eq("cycle_end_date", period.end);
   const overrides = ovRes.error?[]:(ovRes.data||[]);
+  // [รอบ 18.2] ตรวจความครบถ้วนของช่วงข้อมูล — งวดที่อนุมัติ/จ่ายแล้วของสมาชิก (ไม่ตกหล่น/ไม่ซ้ำ)
+  let covRows = [];
+  if(settings.v2p2Schema && canSeePayroll() && members.length){
+    const cr = await sb.from("payroll_records").select("employee_id,cycle,cycle_start_date,cycle_end_date,status").in("employee_id", members.map(e=>e.id)).gte("cycle_end_date", addDaysISO(qStart,-70));
+    covRows = cr.error ? [] : (cr.data||[]);
+  }
   // เบิกเงินล่วงหน้าที่อนุมัติแล้ว และผูกไว้กับ "งวดนี้" โดยตรง (ผูกอัตโนมัติตอนยื่นขอ) — รายการเก่าก่อนอัปเดตระบบที่ยังไม่มีงวดผูก (target_cycle_start เป็น null) จะยังคงพฤติกรรมเดิมคือรอหักในงวดถัดไปที่ปิด
   const advRes = await sb.from("salary_advances").select("*").eq("status","approved");
   const advances = advRes.error?[]:(advRes.data||[]).filter(a=>
@@ -1265,65 +1534,105 @@ async function loadCycleStats(cy){
   const holidayDow = THAI_DAYS[settings.weeklyHoliday] ?? 0;
   const isWeeklyOff = d => settings.weeklyHoliday==="เสาร์-อาทิตย์" ? (d.getDay()===0||d.getDay()===6) : d.getDay()===holidayDow;
   const workdates = [];
-  for(let d=new Date(period.start+"T00:00:00"); isoDate(d)<=effEnd; d.setDate(d.getDate()+1)){
+  const allDates = [];
+  for(let d=new Date(qStart+"T00:00:00"); isoDate(d)<=effEnd; d.setDate(d.getDate()+1)){
+    allDates.push(isoDate(d));
     if(!isWeeklyOff(d)) workdates.push(isoDate(d));
   }
+  // [รอบ 18.1] พนักงานที่ตั้งวันหยุดประจำสัปดาห์ของตัวเอง → ใช้วันทำงานของคนนั้นแทนค่าบริษัท
+  const workdatesFor = (e, from) => ((e.weeklyOffDow===null || e.weeklyOffDow===undefined) ? workdates
+    : allDates.filter(dISO=>!weeklyOffDowsFor(e).includes(new Date(dISO+"T00:00:00").getDay()))).filter(dISO=>dISO>=from);
   // "วันนี้" ยังลงเวลาได้อยู่ทั้งวัน — ห้ามนับเป็น "รอตรวจ/Missing Punch" จนกว่าจะพ้นวันไปแล้ว (นโยบายเดียวกับ loadMissingPunch() ที่ตรวจถึงแค่เมื่อวาน)
   // ไม่งั้นทุกคนที่ยังไม่ทันกดเข้างานตอนเช้าจะโดนขึ้น "Missing Punch" หลอกในเช็คลิสต์ก่อนอนุมัติเงินเดือน (หน้า ✅ อนุมัติงวดจ่าย) ทั้งที่ไปเปิด "🧐 ตรวจสอบย้อนหลัง" แล้วไม่เจออะไรเลย เพราะหน้านั้นตั้งใจไม่เอาวันนี้มานับ
   const yesterdayISO = (()=>{ const d=new Date(); d.setDate(d.getDate()-1); return isoDate(d); })();
   const missingEnd = effEnd < yesterdayISO ? effEnd : yesterdayISO;
-  employees.filter(e=>e.cycle===cy).forEach(e=>{
+  members.forEach(e=>{
+    const R = ranges.get(String(e.id));
+    const inR = dISO => !!dISO && dISO>=R.start && dISO<=R.end;
+    const wdE = workdatesFor(e, R.start);
+    e.runCycle = cy; e.runRange = R; e.semiHalf = half;
+    // ครึ่งเดือน: โบนัสเข้างวด B
+    if(cy==="semimonthly") e.extra = half==="A" ? 0 : bonusRecords.filter(b=>String(b.emp)===String(e.id) && b.status==="รวมงวดนี้").reduce((s,b)=>s+b.amount,0);
+    if(settings.v2p2Schema){
+      const others = covRows.filter(r=>String(r.employee_id)===String(e.id) && (r.status==="approved"||r.status==="paid") && !(r.cycle===cy && r.cycle_start_date===period.start && r.cycle_end_date===period.end));
+      const overlap = others.find(r=>r.cycle_start_date<=R.end && r.cycle_end_date>=R.start) || null;
+      const before = others.filter(r=>r.cycle_end_date<R.start).map(r=>r.cycle_end_date).sort().pop() || null;
+      const gapFrom = (before && addDaysISO(before,1) < R.start) ? addDaysISO(before,1) : null;
+      e.coverage = { overlap, gapFrom, gapTo: gapFrom ? addDaysISO(R.start,-1) : null };
+    } else e.coverage = null;
     // ตัดวันก่อนวันเริ่มงานออกด้วย (เหมือนที่ loadMissingPunch ทำ) ไม่งั้นพนักงานที่เพิ่งเข้าใหม่กลางงวดจะโดนนับ "รอตรวจ" ของวันก่อนเข้างานจริงด้วย
-    const expected = workdates.filter(dISO=>{
+    const expected = wdE.filter(dISO=>{
       if(isHolidayFor(dISO, e)) return false;
       if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
       return true;
     }).length;
     // ใช้แยกจาก expected ด้านบน — expected/fullExpected ยังคงรวม "วันนี้" ไว้ตามเดิม (มีผลแค่กับตัวหารเฉลี่ยเงินเดือนคนเข้ากลางรอบตอนงวดยังไม่ปิด ซึ่งเขยิบทุกวันอยู่แล้วเป็นเรื่องปกติ) ส่วน missing เท่านั้นที่ต้องตัดวันนี้ออก
-    const expectedForMissing = workdates.filter(dISO=>{
+    const expectedForMissing = wdE.filter(dISO=>{
       if(dISO>missingEnd) return false;
       if(isHolidayFor(dISO, e)) return false;
       if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
       return true;
     }).length;
-    const fullExpected = workdates.filter(dISO=>!isHolidayFor(dISO, e)).length; // วันทำงานทั้งรอบ (ไม่คิดวันเริ่มงาน) — ใช้เฉลี่ยเงินเดือนคนเข้ากลางรอบ
+    const fullExpected = wdE.filter(dISO=>!isHolidayFor(dISO, e)).length; // วันทำงานทั้งรอบ (ไม่คิดวันเริ่มงาน) — ใช้เฉลี่ยเงินเดือนคนเข้ากลางรอบ
     // #1 คนเข้างานกลางรอบ (รายเดือน): เฉลี่ยเงินเดือนงวดแรกตามสัดส่วน "วันทำงานที่อยู่จริง ÷ วันทำงานทั้งรอบ"
     e.prorateFactor = (fullExpected>0 && expected<fullExpected) ? (expected/fullExpected) : 1;
     e.override = overrides.find(o=>String(o.employee_id)===String(e.id)) || null;
     e.advances = advances.filter(a=>String(a.employee_id)===String(e.id));
-    const att = (attRes.data||[]).filter(a=>String(a.employee_id)===String(e.id));
+    const att = (attRes.data||[]).filter(a=>String(a.employee_id)===String(e.id) && inR(a.work_date));
     // วันทำงานที่นับจ่าย: ลงเวลาปกติ/สาย + วันที่ HR ยืนยันย้อนหลังว่ามาทำงาน (manual — กรณีลืมลงเวลา)
     const workDays = att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").length;
     // #1b รายเดือนกลางรอบ: วันหยุดบริษัทในช่วงที่ทำงานอยู่ ต้องนับเป็น "วันที่จ่ายเงินให้" ด้วย (ไม่ต้องลงเวลา แต่ไม่เสียเงิน)
     // กันนับซ้ำกรณีมาทำงานจริงในวันหยุด (มีบันทึก attendance อยู่แล้ว → นับจาก workDays ไปแล้ว ไม่ต้องนับซ้ำตรงนี้)
     const workedDates = new Set(att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").map(a=>a.work_date));
-    const paidHolidayDays = workdates.filter(dISO=>{
+    const paidHolidayDays = wdE.filter(dISO=>{
       if(!isHolidayFor(dISO, e)) return false;
       if(workedDates.has(dISO)) return false;
       if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
       return true;
     }).length;
-    const paidDays = workDays + paidHolidayDays; // ใช้คิดเงินเดือนคนเข้ากลางรอบ (calcPay) — workDays เฉยๆ ยังใช้แสดงผล "มาทำงาน" ตามเดิม
+    const paidDays = workDays + paidHolidayDays;
+    // [รอบ 18.1] ค่าจ้างรายวัน: วันหยุดบริษัท (ที่ปิด) ตั้งแต่วันเริ่มกติกาใหม่ ได้ค่าจ้างตามปกติแม้ไม่ได้มาทำงาน
+    const dailyHolidayDays = e.type==="monthly" ? 0 : wdE.filter(dISO=>{
+      if(!payV2On(dISO) || !isHolidayFor(dISO, e) || workedDates.has(dISO)) return false;
+      if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
+      return true;
+    }).length; // ใช้คิดเงินเดือนคนเข้ากลางรอบ (calcPay) — workDays เฉยๆ ยังใช้แสดงผล "มาทำงาน" ตามเดิม
     const lateMin = att.reduce((s,a)=>s+(a.late_minutes||0),0);
     const lateCount = att.filter(a=>(a.late_minutes||0)>0).length;
     // #6 ผ่อนผันมาสาย: หักเฉพาะนาทีที่เกินโควตาฟรี และต้องคิด "แยกรายวัน" (สาย 8 น. สองวัน = ไม่หักเลย ไม่ใช่รวมเป็น 16 แล้วหัก 6)
     const graceMin = Number(settings.lateGraceMinutes)||0;
     const lateBillableMin = att.reduce((s,a)=>s+Math.max(0,(a.late_minutes||0)-graceMin),0);
-    const apprLeaves = (lvRes.data||[]).filter(l=>String(l.employee_id)===String(e.id)&&l.supervisor_status==="approved"&&l.hr_status==="approved");
+    const apprLeavesAll = (lvRes.data||[]).filter(l=>String(l.employee_id)===String(e.id)&&l.supervisor_status==="approved"&&l.hr_status==="approved");
+    const apprLeaves = apprLeavesAll.filter(l=>inR(l.leave_date));
     const leaveDays = apprLeaves.length;
-    e.leaveUsed = apprLeaves.filter(l=>LT(l.leave_type)?.paid==="quota").length;
+    const quotaFrom = aPeriod ? employeeRangeFor(e, cy, aPeriod).start : R.start;   // งวด B: นับโควตาทั้งเดือน (A+B)
+    e.leaveUsed = apprLeavesAll.filter(l=>l.leave_date>=quotaFrom && l.leave_date<=R.end && LT(l.leave_type)?.paid==="quota").length;
     // #3 ลาไม่รับค่าจ้าง (paid==="unpaid" เช่น "ลาไม่รับค่าจ้าง"/พักร้อนที่ยังไม่เปิด) — หักตามวันสำหรับรายเดือน (เดิมไม่ถูกหักเลย)
     const unpaidLeave = apprLeaves.filter(l=>LT(l.leave_type)?.paid==="unpaid").length;
     // ขาดงาน = เฉพาะวันที่ HR "ยืนยันขาด" แล้วเท่านั้น (Exception-based) — การลืมลงเวลาไม่ถูกหักอัตโนมัติ
     const absentConfirmed = att.filter(a=>a.status==="absent").length;
     // missing = วันที่ควรมาแต่ไม่มีบันทึกใดๆ เลย (ไม่รวมวันนี้) → รอ HR ตรวจสอบในแท็บ "ตรวจสอบย้อนหลัง"
     const missing = Math.max(0, expectedForMissing - workDays - leaveDays - absentConfirmed);
-    e.att = { workDays, paidDays, lateMin, lateBillableMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected };
+    e.att = { workDays, paidDays, lateMin, lateBillableMin, lateCount, leaveDays, absent: absentConfirmed, unpaidLeave, missing, expected, fullExpected, dailyHolidayDays };
     // OT: ถ้าตั้งค่า "ต้องอนุมัติก่อน" → นับเฉพาะที่อนุมัติแล้ว · ถ้าปิด → นับทุกใบที่ไม่ถูกปฏิเสธ
-    const myOt = (otRes.data||[]).filter(o=>String(o.employee_id)===String(e.id));
+    const myOt = (otRes.data||[]).filter(o=>String(o.employee_id)===String(e.id) && inR(o.work_date));
     const countable = myOt.filter(o=> settings.otRequiresApproval ? o.status==="approved" : o.status!=="rejected");
     e.otHours = countable.reduce((s,o)=>s+(Number(o.hours)||0),0);
-    e.otPay = Math.round(e.otHours * calcOTHourlyFor(e));
+    // [รอบ 18.1] แยกตามวันที่ทำ: ก่อนวันเริ่มกติกาใหม่ = สูตรเดิม · ตั้งแต่นั้น = วันทำงาน ×1.5 / วันหยุด ×3
+    let otOld = 0, otNew = 0; e.otHoursOld = 0; e.otHoursWork = 0; e.otHoursHoliday = 0;
+    countable.forEach(o=>{
+      const h = Number(o.hours)||0;
+      if(payV2On(o.work_date)){
+        const hol = !!dayOffKindFor(e, o.work_date);
+        otNew += h*hourlyRateV2(e)*(hol ? settings.otMultHoliday : settings.otMultWorkday);
+        if(hol) e.otHoursHoliday += h; else e.otHoursWork += h;
+      } else { otOld += h*calcOTHourlyFor(e); e.otHoursOld += h; }
+    });
+    e.otPay = Math.round(otOld) + payCeil(otNew);
+    // [รอบ 18.1] ค่าทำงานวันหยุด (บันทึกโดยผู้ช่วย HR · HR อนุมัติแล้ว) — 1 คน 1 วัน 1 รายการ (DB กันซ้ำ)
+    e.hwRecords = ((hwRes && hwRes.data) || []).filter(r=>String(r.employee_id)===String(e.id) && inR(r.work_date));
+    e.hwHours = e.hwRecords.reduce((s,r)=>s+(Number(r.normal_hours)||0)+(Number(r.ot_hours)||0),0);
+    e.hwPay = payCeil(e.hwRecords.reduce((s,r)=>s+holidayWorkAmount(e, r),0));
   });
 }
 
@@ -1331,8 +1640,8 @@ async function loadCycleStats(cy){
 async function loadPayrollStatus(){
   await Promise.all(Object.keys(CYCLES).map(async cy=>{
     const p = activePeriod(cy);
-    CYCLES[cy].period = periodLabel(p); // อัปเดตป้ายช่วงงวดใน UI ให้เป็นวันที่จริง (ตามงวดที่เลือก)
-    const { data, error } = await sb.from("payroll_records").select("status").eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
+    CYCLES[cy].period = periodLabel(p) + periodTag(cy, p); // อัปเดตป้ายช่วงงวดใน UI ให้เป็นวันที่จริง (ตามงวดที่เลือก)
+    const { data, error } = await sb.from("payroll_records").select("status").eq("cycle", cy).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
     if(error){ console.error("loadPayrollStatus", cy, error); toastLoadError("สถานะรอบจ่ายเงินเดือน"); return; }
     payrollState.status[cy] = (data||[]).some(r=>r.status==="paid") ? "paid" : (data||[]).length ? "approved" : "draft";
   }));
@@ -1345,30 +1654,43 @@ async function recalcCycle(cy){
 
 // อนุมัติงวด: บันทึกตัวเลขที่แสดงอยู่ (รวมที่ HR แก้ไขย้อนหลัง) เป็นแถวใน payroll_records (สถานะ approved)
 // หมายเหตุ: ไม่ recalc ทับอัตโนมัติ เพื่อรักษาการแก้ไขย้อนหลังของ HR — ถ้าต้องการดึงข้อมูลลงเวลาล่าสุด กด "↻ คำนวณงวดนี้" ก่อน
+// [รอบ 18.1] ข้อความ OT ในสลิป: แยกวันทำงาน/วันหยุด พร้อมตัวคูณ (ไม่ปกปิดอัตรา)
+function otRemarkFor(e, pay){
+  const parts = [];
+  if(e.otHoursOld) parts.push(`OT ${fmtHrs(e.otHoursOld)} ชม.`);
+  if(e.otHoursWork) parts.push(`OT วันทำงาน ${fmtHrs(e.otHoursWork)} ชม. ×${settings.otMultWorkday}`);
+  if(e.otHoursHoliday) parts.push(`OT วันหยุด ${fmtHrs(e.otHoursHoliday)} ชม. ×${settings.otMultHoliday}`);
+  if(!parts.length) parts.push(`OT ${fmtHrs(pay.otHours)} ชม.`);
+  return parts.join(" · ") + ` (฿${fmt(pay.otPay)})`;
+}
 async function approvePayroll(cy){
   const p = activePeriod(cy);
-  const list = employees.filter(e=>e.cycle===cy && e.status!=="terminated");
+  const list = runMembers(cy).filter(e=>e.status!=="terminated");
   if(!list.length){ toast("ไม่มีพนักงานในรอบจ่ายนี้"); return; }
+  if(list.some(e=>e.runCycle!==cy)) await loadCycleStats(cy);   // [รอบ 18.2] กันตัวเลขค้างจากรอบอื่น
   if(!confirm(`ยืนยันอนุมัติงวด ${CYCLES[cy].name} (${periodLabel(p)}) จำนวน ${list.length} คน?`)) return;
   // ลบร่าง/อนุมัติเดิมของงวดเดียวกัน (กรณีกดอนุมัติซ้ำหลังแก้ข้อมูล) — งวดที่จ่ายแล้วจะถูกบล็อกที่ปุ่มอยู่แล้ว
-  const del = await sb.from("payroll_records").delete().eq("cycle_start_date", p.start).eq("cycle_end_date", p.end).neq("status","paid");
+  const del = await sb.from("payroll_records").delete().eq("cycle", cy).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end).neq("status","paid");
   if(del.error){ toast("เกิดข้อผิดพลาด: " + del.error.message); return; }
   const rows = list.map(e=>{
     const pay = calcPay(e);
-    const dedNotes = activeDeductions(e).map(d=>`${d.label} (งวดที่ ${d.monthsPaid+1}/${d.monthsTotal})`).join(", ");
-    const bonusNotes = bonusRecords.filter(b=>String(b.emp)===String(e.id)&&b.status==="รวมงวดนี้").map(b=>`${b.type}: ${b.reason||"-"}`).join(", ");
-    const otNote = pay.otHours ? `OT ${pay.otHours} ชม. (฿${fmt(pay.otPay)})` : "";
+    const dedNotes = runDeductions(e).map(x=>`${x.d.label}${x.amount!==x.d.amount?` ฿${fmt(x.amount)} (แบ่งหักสองงวด)`:""} (งวดที่ ${x.d.monthsPaid+1}/${x.d.monthsTotal})`).join(", ");
+    const bonusNotes = (e.runCycle==="semimonthly" && e.semiHalf==="A") ? "" : bonusRecords.filter(b=>String(b.emp)===String(e.id)&&b.status==="รวมงวดนี้").map(b=>`${b.type}: ${b.reason||"-"}`).join(", ");
+    const otNote = pay.otHours ? otRemarkFor(e, pay) : "";
+    const hwNote = pay.hwPay ? `ค่าทำงานวันหยุด ${fmtHrs(pay.hwHours)} ชม. (฿${fmt(pay.hwPay)})` : "";
+    const dhNote = (e.att && e.att.dailyHolidayDays) ? `ค่าจ้างวันหยุดบริษัท ${e.att.dailyHolidayDays} วัน` : "";
     // รายการหักแบบแยกบรรทัด (ชื่อ + จำนวนเงิน + งวดผ่อน) — เก็บเป็น JSON เพื่อโชว์รายละเอียดในสลิปให้พนักงานเข้าใจว่าถูกหักอะไรบ้าง
     const dedItems = [];
     if(pay.absentDeduct) dedItems.push({label:"หักขาดงาน/ลาเกินโควตา", amount: pay.absentDeduct});
     if(pay.unpaidLeaveDeduct) dedItems.push({label:`หักลาไม่รับค่าจ้าง (${e.att.unpaidLeave} วัน)`, amount: pay.unpaidLeaveDeduct});
     if(pay.lateDeduct)   dedItems.push({label:`หักมาสาย (${pay.lateBillable} นาทีที่เกินผ่อนผัน ${settings.lateGraceMinutes} นาที/วัน)`, amount: pay.lateDeduct});
     if(pay.advanceDeduct) dedItems.push({label:"หักเบิกเงินล่วงหน้า (หักครั้งเดียวงวดนี้)", amount: pay.advanceDeduct});
-    activeDeductions(e).forEach(d=>{
+    runDeductions(e).forEach(x=>{
+      const d = x.d;
       dedItems.push({
         label: d.label,
-        amount: d.amount,
-        note: [d.note||"", d.monthsTotal>1 ? `ผ่อนงวดที่ ${d.monthsPaid+1}/${d.monthsTotal}` : ""].filter(Boolean).join(" · ")
+        amount: x.amount,
+        note: [d.note||"", x.amount!==d.amount ? "แบ่งหักสองงวด" : "", d.monthsTotal>1 ? `ผ่อนงวดที่ ${d.monthsPaid+1}/${d.monthsTotal}` : ""].filter(Boolean).join(" · ")
       });
     });
     return {
@@ -1378,7 +1700,7 @@ async function approvePayroll(cy){
       other_deductions: pay.lateDeduct + pay.otherDeduct,
       deduction_remarks: [pay.unpaidLeaveDeduct?`หักลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน ฿${fmt(pay.unpaidLeaveDeduct)}`:"", pay.lateDeduct?`หักมาสาย ${pay.lateBillable} นาที (สายรวม ${e.att.lateMin} น. ผ่อนผัน ${settings.lateGraceMinutes} น./วัน) ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
       deduction_items: dedItems.length ? JSON.stringify(dedItems) : null,
-      addition_amount: pay.extra, addition_remarks: [otNote, bonusNotes].filter(Boolean).join(" · ") || null,
+      addition_amount: pay.extra, addition_remarks: [otNote, hwNote, dhNote, bonusNotes].filter(Boolean).join(" · ") || null,
       net_pay: pay.net, status: "approved"
     };
   });
@@ -1386,6 +1708,7 @@ async function approvePayroll(cy){
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   payrollState.status[cy] = "approved";
   payrollHistLoaded = false; // ให้ประวัติงวด/สลิปย้อนหลังโหลดใหม่
+  await syncPayrollPeriod(cy, p, "approved");
   logAudit("payroll", `อนุมัติงวดจ่าย ${CYCLES[cy].name}`, `งวด ${periodLabel(p)} · ${rows.length} คน · รวม ฿${fmt(rows.reduce((s,r)=>s+r.net_pay,0))}`);
   goRunStep(5);
   toast(`อนุมัติงวดแล้ว ✓ บันทึก ${rows.length} รายการ — ขั้นต่อไป: โอนเงิน & ปิดงวด`);
@@ -1409,8 +1732,9 @@ async function autoDisposeFullyPaidAssets(){
 // ยืนยันจ่าย: ล็อกงวด (status=paid) + ตัดงวดผ่อนของรายการหักประจำ + ปิดโบนัสงวดนี้เป็น "มีผลแล้ว"
 async function confirmPayroll(cy){
   const p = activePeriod(cy);
-  const list = employees.filter(e=>e.cycle===cy && e.status!=="terminated");
-  const { error } = await sb.from("payroll_records").update({status:"paid", paid_at: new Date().toISOString()}).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end).eq("status","approved");
+  const list = runMembers(cy).filter(e=>e.status!=="terminated");
+  if(list.some(e=>e.runCycle!==cy)) await loadCycleStats(cy);   // [รอบ 18.2] งวดหัก/โบนัสต้องเป็นของรอบนี้
+  const { error } = await sb.from("payroll_records").update({status:"paid", paid_at: new Date().toISOString()}).eq("cycle", cy).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end).eq("status","approved");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   payrollHistLoaded = false;
   logAudit("payroll", `ยืนยันจ่ายเงินงวด ${CYCLES[cy].name}`, `งวด ${periodLabel(p)} — ล็อกงวดแล้ว`);
@@ -1425,12 +1749,12 @@ async function confirmPayroll(cy){
   // ตัดงวดผ่อน: เพิ่ม months_paid ให้รายการหักที่ยังหักไม่ครบของพนักงานในรอบนี้
   const writeFails = []; // เก็บรายการที่ตัดงวดไม่สำเร็จ ไว้แจ้งเตือน HR ท้ายสุด (ไม่ให้ error เงียบเหมือนบั๊กเบิกล่วงหน้าที่เจอก่อนหน้านี้)
   for(const e of list){
-    for(const d of activeDeductions(e)){
+    for(const d of runDeductions(e).filter(x=>x.counts).map(x=>x.d)){   // ครึ่งเดือนแบ่งหัก = นับงวดผ่อนครั้งเดียวที่งวด B
       const r = await sb.from("employee_deductions").update({months_paid: d.monthsPaid+1, last_deducted_cycle_start:p.start, last_deducted_cycle_end:p.end}).eq("id", d.id);
       if(r.error){ console.error("confirmPayroll deduction cut", e.id, d.id, r.error); writeFails.push(`${e.name}: ${d.label}`); }
     }
     // โบนัสที่รวมงวดนี้ → มีผลแล้ว (จะไม่ถูกนับซ้ำงวดหน้า)
-    const bIds = bonusRecords.filter(b=>String(b.emp)===String(e.id)&&b.status==="รวมงวดนี้").map(b=>b.id);
+    const bIds = (e.runCycle==="semimonthly" && e.semiHalf==="A") ? [] : bonusRecords.filter(b=>String(b.emp)===String(e.id)&&b.status==="รวมงวดนี้").map(b=>b.id);
     if(bIds.length){
       const rb = await sb.from("bonuses").update({status:"มีผลแล้ว", applied_cycle_start:p.start, applied_cycle_end:p.end}).in("id", bIds);
       if(rb.error){ console.error("confirmPayroll bonus apply", e.id, rb.error); writeFails.push(`${e.name}: โบนัส`); }
@@ -1441,6 +1765,7 @@ async function confirmPayroll(cy){
   await loadAssets();
   list.forEach(e=>notifyLineBestEffort(e.id, `💰 เงินเดือนงวด ${periodLabel(p)} ของคุณจ่ายเรียบร้อยแล้ว ดูสลิปได้ที่แอป HRMS CENTER`));
   payrollState.status[cy] = "paid";
+  await syncPayrollPeriod(cy, p, "paid");
   goRunStep(6); // → ขั้นแจกสลิปพนักงาน
   if(writeFails.length) toast(`⚠️ บันทึกจ่ายเงินแล้ว แต่มี ${writeFails.length} รายการตัดงวดผ่อน/โบนัสไม่สำเร็จ (${writeFails.slice(0,3).join(", ")}${writeFails.length>3?" ...":""}) — แจ้งผู้ดูแลระบบตรวจสอบ`);
   else toast("บันทึกจ่ายเงินแล้ว 💸 งวดถูกล็อก · สลิปพร้อมแจกจ่าย — พนักงานเห็นของตัวเองใน Self-Service ทันที");
@@ -1538,7 +1863,7 @@ async function doClockOut(){
   toast("บันทึกเวลาออกงานแล้ว ✓");
 }
 
-let payrollState = { cycle:"monthly", status:{monthly:"draft", weekly:"draft", daily:"draft"} };
+let payrollState = { cycle:"monthly", status:{monthly:"draft", semimonthly:"draft", weekly:"draft", daily:"draft"} };
 /* ============ ประวัติงวดเงินเดือนย้อนหลัง (payroll_records จริงทั้งหมด) ============ */
 let payrollHistRows = [];
 let payrollHistLoaded = false, payrollHistLoading = false;
@@ -1874,8 +2199,11 @@ function calcPay(e){
   // "วันที่ทำงานจริง" ของรายเดือน นับรวมวันหยุดบริษัทที่อยู่ในช่วงที่ทำงานด้วย (ไม่ต้องลงเวลาแต่ไม่เสียเงิน) — ต่างจาก effWorkDays เฉยๆ ที่ใช้กับรายวัน/รายสัปดาห์ (ไม่มา = ไม่นับ)
   const paidWorkDays = (ov && ov.work_days!=null && ov.work_days!=="") ? Number(ov.work_days) : (e.att.paidDays!=null ? e.att.paidDays : e.att.workDays);
   const prorate = (e.type==="monthly" && e.prorateFactor!=null) ? e.prorateFactor : 1;
-  const base = e.type==="monthly" ? (prorate<1 ? Math.round(dayRate*paidWorkDays) : e.rate) : e.rate*effWorkDays;
-  const overQuota = e.type==="monthly" ? Math.max(0, e.leaveUsed - settings.paidLeaveQuota) : 0;
+  // [รอบ 18.2] ครึ่งเดือน: ฐานรายเดือนแบ่ง 50/50 (A ปัดลงเป็นบาท · B = ส่วนที่เหลือ → A+B = เต็มเดือนพอดี) · เข้ากลางงวดคิดตามวันจริงแต่ไม่เกินครึ่ง
+  const semiHalf = (e.runCycle==="semimonthly") ? (e.semiHalf||null) : null;
+  const fullBase = semiHalf ? (semiHalf==="A" ? Math.floor(e.rate/2) : e.rate - Math.floor(e.rate/2)) : e.rate;
+  const base = e.type==="monthly" ? (prorate<1 ? Math.min(fullBase, Math.round(dayRate*paidWorkDays)) : fullBase) : e.rate*effWorkDays + e.rate*((e.att && e.att.dailyHolidayDays)||0); // [รอบ 18.1] รายวันได้ค่าจ้างวันหยุดบริษัท
+  const overQuota = (e.type==="monthly" && semiHalf!=="A") ? Math.max(0, e.leaveUsed - settings.paidLeaveQuota) : 0;   // ครึ่งเดือน: ลาเกินโควตาคิดรวมทั้งเดือนในงวด B
   const isWfhExempt = e.type==="monthly" && e.wfh;
   const absentDeduct = (e.type==="monthly" && !isWfhExempt) ? Math.round((e.att.absent+overQuota)*dayRate) : 0;
   // #3 ลาไม่รับค่าจ้าง: หักตามวันสำหรับรายเดือนเสมอ (แม้เป็น WFH ก็หัก เพราะเลือกลาไม่รับค่าจ้างเอง)
@@ -1890,12 +2218,12 @@ function calcPay(e){
     : Math.max(0, (e.att.lateMin||0) - (Number(settings.lateGraceMinutes)||0)); // fallback กรณี e.att ถูกแก้มือ (saveFixAttendance)
   const lateDeduct = settings.latePolicy==="deduct" ? lateBillable*settings.latePerMin : 0;
   const advanceDeduct = (e.advances||[]).reduce((s,a)=>s+(Number(a.amount)||0),0); // เบิกล่วงหน้าที่อนุมัติแล้ว รอหักงวดนี้
-  const otherDeduct = (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal).reduce((s,d)=>s+d.amount,0)
+  const otherDeduct = runDeductions(e).reduce((s,x)=>s+x.amount,0)
     + advanceDeduct
     + (ov ? (Number(ov.extra_deduction)||0) : 0);
-  const extra = (e.extra||0) + (e.otPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);
+  const extra = (e.extra||0) + (e.otPay||0) + (e.hwPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);
   const net = base + extra - absentDeduct - unpaidLeaveDeduct - lateDeduct - otherDeduct;
-  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, paidWorkDays, ov, prorate};
+  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, hwPay:e.hwPay||0, hwHours:e.hwHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, paidWorkDays, ov, prorate, semiHalf};
 }
 function activeDeductions(e){return (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal);}
 const THAI_BANKS = ["KBANK (กสิกรไทย)","SCB (ไทยพาณิชย์)","BBL (กรุงเทพ)","KTB (กรุงไทย)","BAY (กรุงศรีอยุธยา)","TTB (ทหารไทยธนชาต)","GSB (ออมสิน)","BAAC (ธ.ก.ส.)","UOB (ยูโอบี)","CIMB (ซีไอเอ็มบี)"];
@@ -1994,7 +2322,9 @@ function liveSignature(){
     j(otRequests.map(o=>`O${o.id}:${o.status}:${o.hours}`)),
     j((Array.isArray(adjustRows)?adjustRows:[]).map(a=>`J${a.id}:${a.status}`)),
     j((Array.isArray(advanceRows)?advanceRows:[]).map(a=>`V${a.id}:${a.status}`)),
-    j(attendanceToday.map(a=>`A${a.id}:${a.in}:${a.out}:${a.status}`))
+    j(attendanceToday.map(a=>`A${a.id}:${a.in}:${a.out}:${a.status}`)),
+    j((Array.isArray(holidayWorkRows)?holidayWorkRows:[]).map(r=>`H${r.id}:${r.status}:${r.updated_at}`)),
+    j((Array.isArray(payScheduleReqRows)?payScheduleReqRows:[]).map(r=>`S${r.id}:${r.status}`))
   ]);
 }
 // ปลอดภัยที่จะวาดหน้าใหม่ไหม (ห้ามทับตอนผู้ใช้กำลังพิมพ์/เปิดโมดัล/เปิดพาเนลแจ้งเตือน)
@@ -2014,7 +2344,7 @@ async function refreshLiveData(opts){
   _liveBusy = true;
   const before = liveSignature();
   try{
-    await Promise.all([loadLeaves(), loadOtRequests(), loadAdjustments(), loadAdvances(), loadAttendanceToday()]);
+    await Promise.all([loadLeaves(), loadOtRequests(), loadAdjustments(), loadAdvances(), loadAttendanceToday(), loadHolidayWork(), loadPayScheduleRequests()]);
   }catch(err){ console.warn("refreshLiveData", err); }
   _liveBusy = false;
   const changed = liveSignature() !== before;
@@ -2076,6 +2406,39 @@ function computeNotifications(){
         title:`คำขอแก้เวลารออนุมัติ: ${emp?emp.name:'พนักงาน #'+a.employee_id}`,
         sub:`${isoToThaiDisplay(a.work_date)} · ${fmtHM(a.new_check_in)}–${fmtHM(a.new_check_out)}${a.reason?' · '+a.reason:''}`,
         nav: goTo('attendance','attendance','adjust',`adj-${a.id}`)
+      });
+    });
+  }
+  // [รอบ 18.1] บันทึกทำงานวันหยุด — HR/Super Admin: รออนุมัติ (ไม่รวมของตัวเอง) · ผู้ช่วย HR: ถูกส่งกลับให้แก้
+  if(Array.isArray(holidayWorkRows)){
+    if(canSeePayroll()){
+      holidayWorkRows.filter(r=>r.status==="pending" && String(r.employee_id)!==String(loggedInEmployeeId)).forEach(r=>{
+        items.push({
+          key:`hw_${r.id}_${r.status}_${r.updated_at||''}`, icon:"🗓️",
+          title:`ทำงานวันหยุดรออนุมัติ: ${hwRecordedName(r.employee_id)}`,
+          sub:`${isoToThaiDisplay(r.work_date)} · ${hhmm(r.start_time)}–${hhmm(r.end_time)} · ${fmtHrs(Number(r.normal_hours)+Number(r.ot_hours))} ชม.`,
+          nav: goTo('attendance','attendance','holiday',`hw-${r.id}`)
+        });
+      });
+    } else if(canEditAttendance()){
+      holidayWorkRows.filter(r=>r.status==="returned").forEach(r=>{
+        items.push({
+          key:`hw_${r.id}_${r.status}_${r.updated_at||''}`, icon:"↩️",
+          title:`HR ส่งกลับให้แก้ไข: ทำงานวันหยุดของ ${hwRecordedName(r.employee_id)}`,
+          sub:`${isoToThaiDisplay(r.work_date)}${r.review_note?' · '+r.review_note:''}`,
+          nav: goTo('attendance','attendance','holiday',`hw-${r.id}`)
+        });
+      });
+    }
+  }
+  // [รอบ 18.2] คำขอเปลี่ยนรอบจ่าย — HR/Super Admin
+  if(canSeePayroll() && Array.isArray(payScheduleReqRows)){
+    payScheduleReqRows.filter(r=>r.status==="pending").forEach(r=>{
+      items.push({
+        key:`ps_${r.id}_${r.status}`, icon:"🔁",
+        title:`ขอเปลี่ยนรอบจ่าย: ${(E(r.employee_id)||{}).name||r.employee_id}`,
+        sub:`เป็น${cycleTh(r.requested_cycle)} · มีผล ${isoToThaiDisplay(r.effective_from)}`,
+        nav: goTo('attendance','attendance','paysched',null)
       });
     });
   }
@@ -3147,8 +3510,10 @@ function empInfoForm(e){
     <div class="field" style="grid-column:span 2"><label>ชื่อเจ้าของบัญชี/พร้อมเพย์ที่รับเงิน <span class="hint">(เว้นว่างได้ถ้าเป็นชื่อพนักงานเอง)</span></label><input id="empPayeeName" value="${e.payeeName||''}" placeholder="เช่น กรณีใช้บัญชีครอบครัว ใส่ชื่อเจ้าของบัญชีจริง"></div>
     <div class="field"><label>ความสัมพันธ์กับผู้รับเงิน</label><select id="empPayeeRelation">
       ${["","ตัวเอง","คู่สมรส","บิดา","มารดา","บุตร","พี่/น้อง","ญาติ","อื่นๆ"].map(r=>`<option value="${r}" ${(e.payeeRelation||'')===r?'selected':''}>${r||'-- ไม่ระบุ (ตัวเอง) --'}</option>`).join("")}</select></div>
-    <div class="field"><label>รอบจ่ายเงิน *</label><select id="empCycle">${activeCycleKeys().map(k=>`<option value="${k}" ${e.cycle===k?'selected':''}>${CYCLES[k].name.split(" ")[0]}</option>`).join("")}</select></div>
+    <div class="field"><label>รอบจ่ายเงิน *</label><select id="empCycle" ${(settings.v2p2Schema && !!e.id)?'disabled style="background:#f3f5f9"':''}>${(settings.v2p2Schema && !!e.id && !activeCycleKeys().includes(e.cycle) ? [e.cycle] : []).concat(activeCycleKeys()).map(k=>`<option value="${k}" ${e.cycle===k?'selected':''}>${CYCLES[k]?CYCLES[k].name.split(" ")[0]:k}</option>`).join("")}</select>${(settings.v2p2Schema && !!e.id)?`<div class="hint" style="font-size:11px">เปลี่ยนรอบจ่ายที่ ลงเวลาทำงาน → 📆 รอบจ่าย (มีผลวันที่ 1 ของเดือน)${(()=>{ const u = upcomingCycleChange(e); return u?` · <b>นัดเปลี่ยนเป็น${cycleTh(u.payment_cycle)} ${isoToThaiDisplay(u.effective_from)}</b>`:""; })()}</div>`:''}</div>
     <div class="field"><label>อัตราค่าจ้าง (บาท) *</label><input id="empRate" type="number" value="${e.rate||0}"></div>
+    ${settings.v2Schema?`<div class="field"><label>ชั่วโมงทำงานปกติ/วัน</label><input id="empNormalHours" type="number" min="1" max="12" step="0.5" value="${fmtHrs(normalHoursOf(e))}"></div>
+    <div class="field"><label>วันหยุดประจำสัปดาห์</label><select id="empWeeklyOff"><option value="">ตามบริษัท (${settings.weeklyHoliday})</option>${["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"].map((d,i)=>`<option value="${i}" ${e.weeklyOffDow===i?'selected':''}>${d}</option>`).join("")}</select></div>`:''}
     <div class="field"><label>วันเริ่มงาน *</label><input id="empStart" type="date" value="${beToISO(e.start)}"></div>
     <div class="field"><label>อายุงาน</label><input value="${tenureText(e)}" disabled style="background:#f3f5f9;color:var(--muted)"></div>
     <div class="field" id="wfhWrap" style="grid-column:span 2;display:${e.type==='monthly'?'flex':'none'};align-items:center;gap:10px;background:#f8f9fc;padding:10px 12px;border-radius:9px">
@@ -3283,6 +3648,14 @@ async function saveEmp(id,isNew){
     wfh: document.getElementById("empWfh")?.checked || false,
     is_system_test: document.getElementById("empIsTest")?.checked || false
   };
+  // [รอบ 18.1] ส่งคอลัมน์ใหม่เฉพาะเมื่อฐานข้อมูลรองรับแล้ว (กันบันทึกพนักงานพังถ้ายังไม่รัน migration)
+  if(settings.v2Schema && document.getElementById("empNormalHours")){
+    const nh = Number(val("empNormalHours"));
+    if(!(nh>0 && nh<=12)){ toast("ชั่วโมงทำงานปกติต้องอยู่ระหว่าง 1–12"); return; }
+    payload.normal_hours_per_day = nh;
+    const wo = val("empWeeklyOff");
+    payload.weekly_off_dow = wo==="" ? null : Number(wo);
+  }
   if(isNew) payload.color = randomEmpColor();
 
   setBusy(true);
@@ -3391,6 +3764,443 @@ function pgOrg(){
 }
 
 /* ================== PAGE: ATTENDANCE ================== */
+/* ================== [รอบ 18.1] บันทึกทำงานวันหยุด (Holiday Work) ==================
+   วันหยุดที่พนักงานถูกเรียกมาทำงาน — พนักงานไม่ลงเวลาเอง · ผู้ช่วย HR บันทึกเวลา · HR อนุมัติ / ส่งกลับแก้ไข / ไม่อนุมัติ
+   ตาราง holiday_work_records: trigger ฝั่ง DB คำนวณชั่วโมงเอง + บังคับสิทธิ์ + unique(พนักงาน, วันที่) กันจ่ายซ้ำ
+   อนุมัติแล้ว → DB เขียน attendances สถานะ holiday_work ให้เอง · งวดเงินเดือนดึงไปคิดใน loadCycleStats()
+   ⚠️ หน้าจอผู้ช่วย HR ห้ามแสดงตัวเลขเงินของคนอื่น — แสดงเฉพาะชั่วโมง */
+let holidayWorkRows = null;   // null = ยังไม่โหลด
+let hwMonth = null;           // "YYYY-MM" ที่เลือกดู
+let hwEditId = null;          // กำลังแก้ไขรายการไหน (null = บันทึกใหม่)
+async function loadHolidayWork(){
+  if(!loggedInEmployeeId || !settings.v2Schema){ holidayWorkRows = []; return; }
+  const { data, error } = await sb.from("holiday_work_records").select("*").order("work_date",{ascending:false}).limit(1000);
+  if(error){ console.warn("loadHolidayWork", error); holidayWorkRows = []; return; }
+  holidayWorkRows = data || [];
+}
+function hwNeedsAction(){
+  if(!Array.isArray(holidayWorkRows)) return false;
+  if(canSeePayroll()) return holidayWorkRows.some(r=>r.status==="pending" && String(r.employee_id)!==String(loggedInEmployeeId));
+  if(canEditAttendance()) return holidayWorkRows.some(r=>r.status==="returned");
+  return false;
+}
+function hwStatusPill(st){
+  return st==="approved" ? '<span class="pill green">✓ อนุมัติแล้ว</span>'
+    : st==="rejected" ? '<span class="pill red">✕ ไม่อนุมัติ</span>'
+    : st==="returned" ? '<span class="pill amber">↩ ส่งกลับแก้ไข</span>'
+    : '<span class="pill blue">⏳ รอ HR อนุมัติ</span>';
+}
+function hwSplitHours(e, start, end, brk){
+  if(!start || !end) return null;
+  const [sh,sm] = start.split(":").map(Number), [eh,em] = end.split(":").map(Number);
+  let total = ((eh*60+em) - (sh*60+sm)) / 60;
+  if(total <= 0) total += 24;                         // ข้ามเที่ยงคืน
+  total -= (Number(brk)||0) / 60;
+  if(!(total > 0) || total > 16) return null;
+  const nh = normalHoursOf(e);
+  return { total, normal: Math.min(total, nh), ot: Math.max(0, total - nh) };
+}
+function hwDefaultDate(){
+  // วันหยุดประจำสัปดาห์ล่าสุดที่ผ่านมา (หรือวันนี้ถ้าเป็นวันหยุด) แต่ไม่ก่อนวันเริ่มกติกาใหม่
+  const offs = weeklyOffDowsFor(null);
+  const d = new Date();
+  for(let i=0;i<7;i++){ if(offs.includes(d.getDay())) break; d.setDate(d.getDate()-1); }
+  const iso = isoDate(d);
+  return iso < settings.payRulesV2From ? settings.payRulesV2From : iso;
+}
+function hwRecordedName(id){ const x = ED(id) || E(id); return x ? x.name : (id ? "#"+id : "—"); }
+
+/* ================== [รอบ 18.2] รอบจ่าย (payroll_periods) + คำขอเปลี่ยนรอบจ่าย ==================
+   ผู้ช่วย HR: สร้างรอบ · แก้วันจ่ายก่อน HR ดำเนินการ · ยื่นคำขอเปลี่ยนรอบ — ไม่มีตัวเลขเงินในหน้านี้เลย
+   HR/Super Admin: ทำได้ทุกอย่าง + อนุมัติคำขอ / บันทึกเปลี่ยนรอบโดยตรง (DB บังคับซ้ำด้วย RLS + trigger) */
+let payrollPeriodRows = null, payScheduleReqRows = null;
+let psForm = { cycle:"monthly", off:0 };
+const CYCLE_TH = { monthly:"รายเดือน", semimonthly:"ครึ่งเดือน", weekly:"รายสัปดาห์", daily:"รายวัน (ยกเลิกแล้ว)", biweekly:"ทุก 2 สัปดาห์ (ยกเลิกแล้ว)" };
+function cycleTh(c){ return CYCLE_TH[c] || c || "—"; }
+async function loadPayrollPeriods(){
+  if(!settings.v2p2Schema || !canViewAll()){ payrollPeriodRows = []; return; }
+  const { data, error } = await sb.from("payroll_periods").select("*").order("start_date", {ascending:false}).limit(60);
+  if(error){ console.warn("loadPayrollPeriods", error); payrollPeriodRows = []; return; }
+  payrollPeriodRows = data || [];
+}
+async function loadPayScheduleRequests(){
+  if(!loggedInEmployeeId || !settings.v2p2Schema){ payScheduleReqRows = []; return; }
+  const { data, error } = await sb.from("pay_schedule_requests").select("*").order("requested_at", {ascending:false}).limit(100);
+  if(error){ console.warn("loadPayScheduleRequests", error); payScheduleReqRows = []; return; }
+  payScheduleReqRows = data || [];
+}
+function payReqNeedsAction(){ return Array.isArray(payScheduleReqRows) && payScheduleReqRows.some(r=>r.status==="pending"); }
+// เดือนแรกที่เปลี่ยนรอบได้: ต้นเดือนหน้า และต้องหลังงวดเปลี่ยนผ่าน
+function psMinEffective(){
+  const nextFirst = addDaysISO(lastDayOfMonthISO(todayISODate()), 1);
+  const afterTrans = hasTransitionPeriod() ? addDaysISO(transitionEndISO(), 1) : settings.monthlyCalendarFrom;
+  return nextFirst > afterTrans ? nextFirst : afterTrans;
+}
+function psStatusPill(st){
+  return st==="paid" ? '<span class="pill green">จ่ายแล้ว</span>' : st==="approved" ? '<span class="pill blue">HR อนุมัติแล้ว</span>' : '<span class="pill amber">สร้างแล้ว</span>';
+}
+function attPaySchedule(){
+  if(!settings.v2p2Schema){
+    return `<div class="card" style="text-align:center;padding:40px"><div style="font-size:34px">📆</div><h3 style="justify-content:center;margin-top:8px">รอบจ่าย</h3><div class="hint">ยังไม่เปิดใช้งาน — รอผู้ดูแลระบบอัปเดตฐานข้อมูล</div></div>`;
+  }
+  if(payrollPeriodRows===null || payScheduleReqRows===null){
+    Promise.all([loadPayrollPeriods(), loadPayScheduleRequests()]).then(()=>{ if(currentPage==="attendance" && subTab.attendance==="paysched") render("attendance"); });
+    return `<div class="card" style="text-align:center;padding:40px"><div class="hint">⏳ กำลังโหลด...</div></div>`;
+  }
+  const isHR = canSeePayroll();
+  const today = todayISODate();
+  const cys = activeCycleKeys().filter(k=>["monthly","semimonthly","weekly"].includes(k));
+  if(!cys.includes(psForm.cycle)) psForm.cycle = cys[0] || "monthly";
+  const P = periodByOffset(psForm.cycle, psForm.off);
+  const suggested = payDateFor(psForm.cycle, P);
+  const exists = payrollPeriodRows.find(r=>r.cycle===psForm.cycle && r.start_date===P.start && r.end_date===P.end);
+  const countIn = (cy, p) => runMembersFor(cy, p).filter(e=>e.status!=="terminated").length;
+  const actives = employees.filter(e=>e.status!=="terminated").slice().sort((a,b)=>String(a.code||"").localeCompare(String(b.code||"")));
+  const minEff = psMinEffective();
+  const reqs = payScheduleReqRows.slice().sort((a,b)=>(a.status==="pending"?0:1)-(b.status==="pending"?0:1));
+  const upcoming = scheduleHistory.filter(h=>String(h.effective_from)>today);
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <h3>📆 สร้างรอบจ่าย</h3>
+    <div class="hint">เลือกประเภทรอบ → ระบบเติมช่วงข้อมูลและวันจ่ายให้ (วันจ่ายตรงวันหยุด → เลื่อนเป็นวันทำงานก่อนหน้า) ตรวจวันจ่ายแล้วกดสร้าง</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:12px">
+      <div class="field"><label>ประเภทรอบ</label><select onchange="psForm.cycle=this.value;psForm.off=0;render('attendance')">${cys.map(k=>`<option value="${k}" ${psForm.cycle===k?'selected':''}>${cycleTh(k)}</option>`).join("")}</select></div>
+      <div class="field"><label>งวด</label><select onchange="psForm.off=Number(this.value);render('attendance')">${[-1,0,1,2].map(o=>{ const q = periodByOffset(psForm.cycle, o); return `<option value="${o}" ${psForm.off===o?'selected':''}>${o===0?'งวดปัจจุบัน':o<0?'งวดก่อนหน้า':'ถัดไป '+o+' งวด'} · ${periodLabel(q)}${periodTag(psForm.cycle, q)}</option>`; }).join("")}</select></div>
+      <div class="field"><label>วันจ่าย</label><input id="psPayDate" type="date" value="${exists?exists.pay_date:suggested}" ${exists?'disabled':''}></div>
+      <button class="btn primary" onclick="psCreate()" ${exists?'disabled':''}>${exists?'✓ สร้างแล้ว':'➕ สร้างรอบ'}</button>
+    </div>
+    <div class="hint" style="margin-top:8px">ช่วงข้อมูล <b>${periodLabel(P)}</b>${periodTag(psForm.cycle, P)} · วันจ่ายที่ระบบเสนอ ${isoToThaiDisplay(suggested)} (วัน${DOW_TH[new Date(suggested+"T00:00:00").getDay()]}) · พนักงานในรอบ <b>${countIn(psForm.cycle, P)} คน</b></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>🗂️ รอบจ่ายที่สร้างแล้ว</h3>
+    ${payrollPeriodRows.length===0?'<div class="hint" style="text-align:center;padding:18px">ยังไม่มีรอบจ่าย</div>':`
+    <table style="margin-top:10px">
+      <tr><th>รอบ</th><th>ช่วงข้อมูล</th><th>วันจ่าย</th><th class="num">พนักงาน</th><th>สถานะ</th><th>ผู้สร้าง</th><th style="text-align:center">จัดการ</th></tr>
+      ${payrollPeriodRows.map(r=>{ const p = {start:r.start_date, end:r.end_date}; const editable = r.status==="created"; return `<tr>
+        <td><b>${cycleTh(r.cycle)}</b>${r.half?` <span class="pill gray">งวด ${r.half}</span>`:''}${isTransitionPeriod(r.cycle,p)?' <span class="pill blue">เปลี่ยนผ่าน</span>':''}</td>
+        <td style="font-size:12.5px">${periodLabel(p)}</td>
+        <td>${editable?`<input type="date" id="psPay_${r.id}" value="${r.pay_date}" style="padding:5px 8px;border:1.5px solid var(--line);border-radius:8px;font-size:12px">`:isoToThaiDisplay(r.pay_date)}</td>
+        <td class="num">${countIn(r.cycle, p)} คน</td>
+        <td>${psStatusPill(r.status)}</td>
+        <td style="font-size:12px">${(E(r.created_by)||{}).name||'—'}</td>
+        <td style="text-align:center;white-space:nowrap">${editable?`<button class="btn ghost xs" onclick="psSavePayDate(${r.id})">💾 วันจ่าย</button>${isHR?` <button class="btn ghost xs" onclick="psDelete(${r.id})">🗑️</button>`:''}`:'<span class="hint">—</span>'}</td>
+      </tr>`; }).join("")}
+    </table>`}
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>🔁 เปลี่ยนรอบจ่ายพนักงาน</h3>
+    <div class="hint">มีผลวันที่ 1 ของเดือน (เร็วที่สุด ${isoToThaiDisplay(minEff)}) · ก่อนวันที่มีผลจ่ายตามรอบเดิมจนจบงวด — ระบบนับต่อจากวันสุดท้ายที่รอบเดิมจ่ายให้ ไม่ซ้ำ ไม่ตกหล่น${isHR?'':' · ส่งคำขอแล้วรอ HR อนุมัติ'}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:12px">
+      <div class="field"><label>พนักงาน</label><select id="psEmp"><option value="">— เลือก —</option>${actives.map(e=>`<option value="${e.id}">${e.name} (${e.code}) · ${cycleTh(employeeCycleOn(e, today))}</option>`).join("")}</select></div>
+      <div class="field"><label>เปลี่ยนเป็น</label><select id="psCycle">${cys.map(k=>`<option value="${k}">${cycleTh(k)}</option>`).join("")}</select></div>
+      <div class="field"><label>มีผลเดือน</label><input id="psMonth" type="month" min="${minEff.slice(0,7)}" value="${minEff.slice(0,7)}"></div>
+      <div class="field" style="flex:1;min-width:180px"><label>หมายเหตุ</label><input id="psNote" placeholder="เช่น พนักงานแจ้งขอรับเงินวันที่ 15 และสิ้นเดือน"></div>
+      <button class="btn primary" onclick="psSubmitRequest()">${isHR?'💾 บันทึกและอนุมัติ':'📨 ส่งคำขอให้ HR'}</button>
+    </div>
+    ${reqs.length?`<table style="margin-top:14px">
+      <tr><th>พนักงาน</th><th>เปลี่ยนเป็น</th><th>มีผล</th><th>ผู้ยื่น</th><th>สถานะ</th>${isHR?'<th style="text-align:center">จัดการ</th>':''}</tr>
+      ${reqs.map(r=>{ const e = E(r.employee_id); return `<tr>
+        <td>${e?e.name:'#'+r.employee_id}</td>
+        <td>${cycleTh(r.requested_cycle)}</td>
+        <td>${isoToThaiDisplay(r.effective_from)}</td>
+        <td style="font-size:12px">${(E(r.requested_by)||{}).name||'—'}${r.note?`<div class="hint" style="font-size:11px">${escHtml(r.note)}</div>`:''}</td>
+        <td>${r.status==="pending"?'<span class="pill amber">รอ HR อนุมัติ</span>':r.status==="approved"?'<span class="pill green">อนุมัติแล้ว</span>':`<span class="pill red">ไม่อนุมัติ</span>${r.review_note?`<div class="hint" style="font-size:11px">${escHtml(r.review_note)}</div>`:''}`}</td>
+        ${isHR?`<td style="text-align:center;white-space:nowrap">${r.status==="pending"?`<button class="btn green xs" onclick="psReview(${r.id},'approved')">✅ อนุมัติ</button> <button class="btn ghost xs" onclick="psReview(${r.id},'rejected')">✖ ไม่อนุมัติ</button>`:'—'}</td>`:''}
+      </tr>`; }).join("")}
+    </table>`:''}
+  </div>
+
+  <div class="card">
+    <h3>👥 พนักงานแต่ละรอบจ่าย (วันนี้)</h3>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:10px">
+      ${cys.map(k=>{ const ms = actives.filter(e=>employeeCycleOn(e, today)===k); return `<div style="border:1px solid var(--line);border-radius:12px;padding:12px"><b>${cycleTh(k)}</b> <span class="pill gray">${ms.length} คน</span><div class="hint" style="margin-top:6px;line-height:1.7">${ms.map(e=>e.name).join(", ")||'—'}</div></div>`; }).join("")}
+    </div>
+    ${upcoming.length?`<div class="hint" style="margin-top:12px;line-height:1.8"><b>นัดเปลี่ยนรอบ:</b><br>${upcoming.map(h=>{ const e = E(h.employee_id); return `${e?e.name:'#'+h.employee_id}: ${cycleTh(employeeCycleOn(e, addDaysISO(h.effective_from,-1)))} → ${cycleTh(h.payment_cycle)} ตั้งแต่ ${isoToThaiDisplay(h.effective_from)}`; }).join("<br>")}</div>`:''}
+  </div>`;
+}
+function escHtml(t){ return String(t==null?"":t).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+async function psCreate(){
+  if(!canViewAll()){ toast("🔒 ไม่มีสิทธิ์สร้างรอบจ่าย"); return; }
+  const cy = psForm.cycle; const P = periodByOffset(cy, psForm.off);
+  const pay = (document.getElementById("psPayDate")||{}).value;
+  if(!pay){ toast("กรุณาระบุวันจ่าย"); return; }
+  if(pay < P.start){ toast("วันจ่ายต้องไม่ก่อนวันเริ่มงวด"); return; }
+  if((payrollPeriodRows||[]).some(r=>r.cycle===cy && r.start_date===P.start && r.end_date===P.end)){ toast("รอบนี้ถูกสร้างไว้แล้ว"); return; }
+  const { error } = await sb.from("payroll_periods").insert({ cycle:cy, half: cy==="semimonthly"?semiHalfOf(P):null, start_date:P.start, end_date:P.end, pay_date:pay, status:"created", created_by: loggedInEmployeeId });
+  if(error){ toast(/duplicate|unique/i.test(error.message) ? "รอบนี้ถูกสร้างไว้แล้ว" : "เกิดข้อผิดพลาด: " + error.message); await loadPayrollPeriods(); render("attendance"); return; }
+  logAudit("payroll", "สร้างรอบจ่าย", `${cycleTh(cy)} ${periodLabel(P)}${periodTag(cy,P)} · จ่าย ${isoToThaiDisplay(pay)}`);
+  await loadPayrollPeriods(); render("attendance");
+  toast(`สร้างรอบ${cycleTh(cy)} ${periodLabel(P)} แล้ว ✓`);
+}
+async function psSavePayDate(id){
+  const r = (payrollPeriodRows||[]).find(x=>String(x.id)===String(id)); if(!r) return;
+  const v = (document.getElementById("psPay_"+id)||{}).value;
+  if(!v){ toast("กรุณาระบุวันจ่าย"); return; }
+  if(v < r.start_date){ toast("วันจ่ายต้องไม่ก่อนวันเริ่มงวด"); return; }
+  const { data, error } = await sb.from("payroll_periods").update({ pay_date:v }).eq("id", id).eq("status","created").select("id");
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  if(!data || !data.length){ toast("รอบนี้ HR ดำเนินการแล้ว แก้วันจ่ายไม่ได้"); }
+  else { logAudit("payroll", "แก้วันจ่ายรอบจ่าย", `${cycleTh(r.cycle)} ${periodLabel({start:r.start_date,end:r.end_date})} → ${isoToThaiDisplay(v)}`); toast("บันทึกวันจ่ายแล้ว ✓"); }
+  await loadPayrollPeriods(); render("attendance");
+}
+async function psDelete(id){
+  if(!canSeePayroll()){ toast("🔒 เฉพาะ HR หรือ Super Admin"); return; }
+  const r = (payrollPeriodRows||[]).find(x=>String(x.id)===String(id)); if(!r) return;
+  if(!confirm(`ลบรอบ${cycleTh(r.cycle)} ${periodLabel({start:r.start_date,end:r.end_date})}?`)) return;
+  const { error } = await sb.from("payroll_periods").delete().eq("id", id).eq("status","created");
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  logAudit("payroll", "ลบรอบจ่าย", `${cycleTh(r.cycle)} ${periodLabel({start:r.start_date,end:r.end_date})}`);
+  await loadPayrollPeriods(); render("attendance");
+}
+// บันทึกประวัติรอบจ่าย (ครั้งแรกของคนนั้น = เก็บรอบเดิมไว้เป็นจุดตั้งต้นก่อน)
+async function applyScheduleChange(e, cy, eff, note){
+  if(!scheduleHistory.some(h=>String(h.employee_id)===String(e.id))){
+    const b = await sb.from("employee_pay_schedule_history").insert({ employee_id:e.id, payment_cycle: e.cycle || "monthly", effective_from:"2000-01-01", note:"รอบจ่ายเดิมก่อนเปลี่ยนรอบ (บันทึกอัตโนมัติ)", changed_by: loggedInEmployeeId });
+    if(b.error){ toast("บันทึกประวัติรอบจ่ายไม่สำเร็จ: " + b.error.message); return false; }
+  }
+  const r = await sb.from("employee_pay_schedule_history").upsert({ employee_id:e.id, payment_cycle:cy, effective_from:eff, note: note||null, changed_by: loggedInEmployeeId, changed_at: new Date().toISOString() }, { onConflict:"employee_id,effective_from" });
+  if(r.error){ toast("บันทึกประวัติรอบจ่ายไม่สำเร็จ: " + r.error.message); return false; }
+  return true;
+}
+async function psSubmitRequest(){
+  if(!canViewAll()){ toast("🔒 ไม่มีสิทธิ์"); return; }
+  const empId = (document.getElementById("psEmp")||{}).value;
+  const cy = (document.getElementById("psCycle")||{}).value;
+  const month = (document.getElementById("psMonth")||{}).value;
+  const note = ((document.getElementById("psNote")||{}).value||"").trim();
+  const e = E(empId);
+  if(!e){ toast("กรุณาเลือกพนักงาน"); return; }
+  if(!month){ toast("กรุณาเลือกเดือนที่มีผล"); return; }
+  const eff = month + "-01";
+  const minEff = psMinEffective();
+  if(eff < minEff){ toast(`เลือกเดือนที่มีผลได้ตั้งแต่ ${isoToThaiDisplay(minEff)}`); return; }
+  if(employeeCycleOn(e, addDaysISO(eff,-1))===cy && !scheduleHistory.some(h=>String(h.employee_id)===String(e.id) && String(h.effective_from)>=eff)){ toast(`${e.name} อยู่รอบ${cycleTh(cy)}อยู่แล้ว`); return; }
+  if((payScheduleReqRows||[]).some(r=>String(r.employee_id)===String(e.id) && r.status==="pending")){ toast("มีคำขอของพนักงานคนนี้รอ HR อยู่แล้ว"); return; }
+  const isHR = canSeePayroll();
+  const row = { employee_id:e.id, requested_cycle:cy, effective_from:eff, note: note||null, status: isHR?"approved":"pending", requested_by: loggedInEmployeeId };
+  if(isHR) Object.assign(row, { reviewed_by: loggedInEmployeeId, reviewed_at: new Date().toISOString(), review_note:"HR บันทึกโดยตรง" });
+  if(isHR){ const ok = await applyScheduleChange(e, cy, eff, note); if(!ok) return; }
+  const { error } = await sb.from("pay_schedule_requests").insert(row);
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  logAudit("payroll", isHR ? "เปลี่ยนรอบจ่าย (HR บันทึก)" : "ยื่นคำขอเปลี่ยนรอบจ่าย", `${e.name} → ${cycleTh(cy)} มีผล ${isoToThaiDisplay(eff)}`);
+  await Promise.all([loadPayScheduleRequests(), loadScheduleHistory()]);
+  updateNotifBell(); render("attendance");
+  toast(isHR ? `บันทึกแล้ว ✓ ${e.name} รับเงินรอบ${cycleTh(cy)}ตั้งแต่ ${isoToThaiDisplay(eff)}` : "ส่งคำขอให้ HR แล้ว ✓");
+}
+async function psReview(id, decision){
+  if(!canSeePayroll()){ toast("🔒 เฉพาะ HR หรือ Super Admin"); return; }
+  const r = (payScheduleReqRows||[]).find(x=>String(x.id)===String(id));
+  if(!r || r.status!=="pending") return;
+  const e = E(r.employee_id);
+  let note = null;
+  if(decision==="rejected"){ note = prompt("เหตุผลที่ไม่อนุมัติ"); if(note===null) return; note = note.trim() || null; }
+  if(decision==="approved"){
+    if(!e){ toast("ไม่พบพนักงาน"); return; }
+    if(r.effective_from < psMinEffective()){ toast("เดือนที่มีผลเลยกำหนดแล้ว — ให้ยื่นใหม่เป็นเดือนถัดไป"); return; }
+    const ok = await applyScheduleChange(e, r.requested_cycle, r.effective_from, r.note); if(!ok) return;
+  }
+  const { data, error } = await sb.from("pay_schedule_requests").update({ status:decision, reviewed_by: loggedInEmployeeId, reviewed_at: new Date().toISOString(), review_note: note }).eq("id", id).eq("status","pending").select("id");
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  if(!data || !data.length) toast("คำขอนี้ถูกดำเนินการไปแล้ว");
+  else { logAudit("payroll", decision==="approved"?"อนุมัติเปลี่ยนรอบจ่าย":"ไม่อนุมัติเปลี่ยนรอบจ่าย", `${e?e.name:r.employee_id} → ${cycleTh(r.requested_cycle)} มีผล ${isoToThaiDisplay(r.effective_from)}${note?" · "+note:""}`); toast(decision==="approved"?"อนุมัติแล้ว ✓":"บันทึกไม่อนุมัติแล้ว"); }
+  await Promise.all([loadPayScheduleRequests(), loadScheduleHistory()]);
+  updateNotifBell(); render("attendance");
+}
+function attHolidayWork(){
+  if(!settings.v2Schema){
+    return `<div class="card" style="text-align:center;padding:40px"><div style="font-size:34px">🗓️</div><h3 style="justify-content:center;margin-top:8px">บันทึกทำงานวันหยุด</h3><div class="hint">ยังไม่เปิดใช้งาน — รอผู้ดูแลระบบเปิดใช้ฐานข้อมูลส่วนนี้</div></div>`;
+  }
+  if(holidayWorkRows===null){
+    loadHolidayWork().then(()=>{ if(currentPage==="attendance" && subTab.attendance==="holiday") render("attendance"); });
+    return `<div class="card" style="text-align:center;padding:40px"><div class="hint">⏳ กำลังโหลด...</div></div>`;
+  }
+  const canRecord = canEditAttendance();   // HR · Super Admin · ผู้ช่วย HR
+  const canReview = canSeePayroll();       // HR · Super Admin
+  const month = hwMonth || todayISODate().slice(0,7);
+  const rows = holidayWorkRows.filter(r=>String(r.work_date).slice(0,7)===month);
+  const pendingCnt = holidayWorkRows.filter(r=>r.status==="pending").length;
+  const returnedCnt = holidayWorkRows.filter(r=>r.status==="returned").length;
+  const editing = hwEditId ? holidayWorkRows.find(r=>String(r.id)===String(hwEditId)) : null;
+  const actives = employees.filter(e=>e.status!=="terminated" && !e.isSystemTest).sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+  const dateVal = editing ? editing.work_date : hwDefaultDate();
+  const projOpts = (Array.isArray(projects)?projects:[]).filter(p=>p.status!=="done").map(p=>`<option value="${p.id}" ${editing&&String(editing.project_id)===String(p.id)?'selected':''}>${esc(p.name)}</option>`).join("");
+
+  const formCard = !canRecord ? "" : `
+  <div class="card" style="margin-bottom:16px">
+    <h3>🗓️ ${editing?'แก้ไขบันทึกทำงานวันหยุด':'บันทึกทำงานวันหยุด'}</h3>
+    <div class="hint">วันหยุดที่พนักงานถูกเรียกมาทำงาน พนักงานไม่ต้องลงเวลาเอง — บันทึกตามเวลาจริงที่หัวหน้าทีมแจ้ง แล้วส่งให้ HR อนุมัติ${isHrAssistant()?' (ผู้ช่วย HR บันทึก/แก้ไขได้ แต่อนุมัติไม่ได้)':''}</div>
+    ${editing&&editing.status==="returned"&&editing.review_note?`<div style="margin-top:10px;padding:10px 12px;background:#fff6e6;border:1px solid #ffd9a8;border-radius:10px;font-size:13px">↩ HR ส่งกลับ: <b>${esc(editing.review_note)}</b></div>`:''}
+    <div class="grid" style="grid-template-columns:1fr 1fr 1fr 1fr;margin-top:12px">
+      <div class="field"><label>วันที่ *</label><input id="hwDate" type="date" min="${settings.payRulesV2From}" value="${dateVal}" onchange="hwRefreshPreview()"></div>
+      <div class="field"><label>เวลาเริ่ม *</label><input id="hwStart" type="time" value="${editing?hhmm(editing.start_time):(settings.shiftIn||'08:30')}" oninput="hwRefreshPreview()"></div>
+      <div class="field"><label>เวลาสิ้นสุด *</label><input id="hwEnd" type="time" value="${editing?hhmm(editing.end_time):(settings.shiftOut||'17:30')}" oninput="hwRefreshPreview()"></div>
+      <div class="field"><label>พัก (นาที)</label><input id="hwBreak" type="number" min="0" max="240" step="15" value="${editing?editing.break_minutes:60}" oninput="hwRefreshPreview()"></div>
+      <div class="field" style="grid-column:span 2"><label>โครงการ</label><select id="hwProject"><option value="">— ไม่ระบุ —</option>${projOpts}</select></div>
+      <div class="field" style="grid-column:span 2"><label>งานที่ทำ / ผู้รับรอง</label><input id="hwNote" value="${editing?esc(editing.note||''):''}" placeholder="เช่น ติดตั้งกระจกชั้น 3 · รับรองโดยหัวหน้าทีม..."></div>
+    </div>
+    <div class="field" style="margin-top:4px"><label>พนักงานที่มาทำงาน *${editing?'':' (เลือกได้หลายคน)'}</label>
+      <div id="hwEmpList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px;margin-top:4px">
+        ${actives.map(e=>{
+          const checked = editing ? String(editing.employee_id)===String(e.id) : false;
+          const dis = editing && !checked;
+          return `<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1.5px solid var(--line);border-radius:9px;font-size:13px;${dis?'opacity:.45':''}">
+            <input type="checkbox" class="hwEmp" value="${e.id}" ${checked?'checked':''} ${dis?'disabled':''} onchange="hwRefreshPreview()" style="margin-top:2px">
+            <span><b>${esc(e.code)}</b> ${esc(e.name)}<div class="hint hwEmpHint" data-emp="${e.id}" style="font-size:11px"></div></span></label>`;
+        }).join("")}
+      </div>
+    </div>
+    <div id="hwPreview" style="margin-top:10px;padding:10px 12px;background:#f8f9fc;border-radius:10px;font-size:13px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn primary" id="hwSubmitBtn" onclick="hwSubmit()">${editing?'💾 บันทึกแล้วส่งให้ HR อีกครั้ง':'📤 บันทึกและส่งให้ HR อนุมัติ'}</button>
+      ${editing?'<button class="btn ghost" onclick="hwCancelEdit()">ยกเลิกการแก้ไข</button>':''}
+    </div>
+  </div>`;
+
+  const showMoney = r => canReview || String(r.employee_id)===String(loggedInEmployeeId);
+  const listCard = `
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <h3>📋 รายการทำงานวันหยุด ${canRecord||isTeamLead()?'':'ของฉัน'}</h3>
+      ${canReview&&pendingCnt?`<span class="pill blue">รออนุมัติ ${pendingCnt}</span>`:''}
+      ${canRecord&&returnedCnt?`<span class="pill amber">ส่งกลับแก้ไข ${returnedCnt}</span>`:''}
+      <div style="margin-left:auto"><input type="month" value="${month}" onchange="hwMonth=this.value;render('attendance')" style="padding:6px 10px;border:1.5px solid var(--line);border-radius:8px"></div>
+    </div>
+    ${!canRecord?`<div class="hint" style="margin-top:6px">วันหยุดที่ได้รับแจ้งให้ทำงาน ไม่ต้องลงเวลาเอง ผู้ช่วย HR จะบันทึกให้ · ชั่วโมงปกติ (ไม่เกิน ${fmtHrs(normalHoursOf(myEmp()))} ชม.) พนักงานรายเดือนได้เพิ่ม ×${settings.hwMultMonthly} · รายวันได้ ×${settings.hwMultDaily} · ชั่วโมงที่เกินคิด ×${settings.otMultHoliday}</div>`:''}
+    <table style="margin-top:10px">
+      <tr><th>วันที่</th><th>พนักงาน</th><th>เวลา</th><th class="num">ชม.ปกติ</th><th class="num">ชม.เกิน</th>${(canReview||!canRecord)?'<th class="num">ค่าทำงานวันหยุด</th>':''}<th>งาน / โครงการ</th><th>สถานะ</th><th style="text-align:center">ดำเนินการ</th></tr>
+      ${rows.length===0?`<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px">ไม่มีรายการในเดือนนี้</td></tr>`:rows.map(r=>{
+        const e = E(r.employee_id) || ED(r.employee_id);
+        const mine = String(r.employee_id)===String(loggedInEmployeeId);
+        const p = (Array.isArray(projects)?projects:[]).find(x=>String(x.id)===String(r.project_id));
+        const money = (showMoney(r) && e && e.rate) ? '฿'+fmt(payCeil(holidayWorkAmount(e, r))) : '—';
+        const canEditRow = canRecord && (r.status==="pending" || r.status==="returned") && !(mine && canReview);   // HR ห้ามแก้รายการของตัวเอง
+        const canDecide = canReview && !mine;
+        return `<tr id="hw-${r.id}">
+          <td style="white-space:nowrap"><b>${isoToThaiDisplay(r.work_date)}</b><div class="hint" style="font-size:10.5px">${r.day_kind==="company_holiday"?'🎌 วันหยุดบริษัท':'วันหยุดประจำสัปดาห์'}</div></td>
+          <td>${e?empCell(e,true):'#'+r.employee_id}</td>
+          <td style="white-space:nowrap;font-size:12.5px">${hhmm(r.start_time)}–${hhmm(r.end_time)}<div class="hint" style="font-size:10.5px">พัก ${r.break_minutes} นาที</div></td>
+          <td class="num"><b>${fmtHrs(r.normal_hours)}</b></td>
+          <td class="num">${Number(r.ot_hours)?'<b>'+fmtHrs(r.ot_hours)+'</b>':'—'}</td>
+          ${(canReview||!canRecord)?`<td class="num">${showMoney(r)?money:'—'}</td>`:''}
+          <td style="font-size:12px;max-width:200px">${p?'📁 '+esc(p.name)+'<br>':''}<span class="hint">${esc(r.note||'')}</span></td>
+          <td>${hwStatusPill(r.status)}${r.review_note?`<div class="hint" style="font-size:10.5px;max-width:160px">${esc(r.review_note)}</div>`:''}<div class="hint" style="font-size:10px">บันทึกโดย ${esc(hwRecordedName(r.recorded_by))}${r.reviewed_by?' · ตรวจโดย '+esc(hwRecordedName(r.reviewed_by)):''}</div></td>
+          <td style="text-align:center;white-space:nowrap">
+            ${canDecide && r.status==="pending" ? `<button class="btn green xs" onclick="hwReview(${r.id},'approved')">✓ อนุมัติ</button>
+              <button class="btn ghost xs" onclick="hwReview(${r.id},'returned')">↩ ส่งกลับ</button>
+              <button class="btn danger xs" onclick="hwReview(${r.id},'rejected')">✕</button>` : ''}
+            ${canDecide && r.status==="approved" ? `<button class="btn ghost xs" onclick="hwReview(${r.id},'pending')">↺ ยกเลิกอนุมัติ</button>` : ''}
+            ${canReview && mine && r.status==="pending" ? '<span class="hint" style="font-size:11px">รอผู้อื่นอนุมัติ<br>(อนุมัติรายการของตัวเองไม่ได้)</span>' : ''}
+            ${canEditRow ? `<button class="btn ghost xs" onclick="hwEdit(${r.id})">✏️</button><button class="btn ghost xs" onclick="hwDelete(${r.id})">🗑</button>` : ''}
+          </td>
+        </tr>`;}).join("")}
+    </table>
+    ${canReview?`<div class="hint" style="margin-top:10px">💰 รายการที่อนุมัติแล้วถูกรวมเข้า "OT/เพิ่มพิเศษ" ของงวดที่วันนั้นอยู่ (กด "ดึงข้อมูลต้นทาง" ในหน้าทำจ่าย) · ชั่วโมงปกติ: รายเดือน +${settings.hwMultMonthly} เท่า · รายวัน ${settings.hwMultDaily} เท่า (วันหยุดบริษัท +${settings.hwMultDaily-1} เพราะได้ค่าจ้างวันหยุดแล้ว) · ชั่วโมงที่เกินเวลาปกติ ×${settings.otMultHoliday}</div>`:''}
+  </div>`;
+  setTimeout(hwRefreshPreview, 0);
+  return formCard + listCard;
+}
+function hwSelectedIds(){ return [...document.querySelectorAll(".hwEmp:checked")].map(x=>Number(x.value)); }
+function hwRefreshPreview(){
+  const box = document.getElementById("hwPreview"); if(!box) return;
+  const dISO = document.getElementById("hwDate").value;
+  const st = document.getElementById("hwStart").value, en = document.getElementById("hwEnd").value, br = document.getElementById("hwBreak").value;
+  document.querySelectorAll(".hwEmpHint").forEach(el=>{
+    const e = E(Number(el.dataset.emp)); if(!e || !dISO){ el.textContent=""; return; }
+    const k = dayOffKindFor(e, dISO);
+    el.innerHTML = k==="company_holiday" ? '🎌 วันหยุดบริษัท' : k==="weekly_off" ? 'วันหยุดประจำสัปดาห์' : '<span style="color:var(--red)">⚠️ เป็นวันทำงานของคนนี้</span>';
+  });
+  const ids = hwSelectedIds();
+  if(!dISO){ box.innerHTML = '<span class="hint">เลือกวันที่</span>'; return; }
+  if(dISO < settings.payRulesV2From){ box.innerHTML = `<span style="color:var(--red)">⚠️ บันทึกได้ตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)} เป็นต้นไป</span>`; return; }
+  if(!ids.length){ box.innerHTML = '<span class="hint">เลือกพนักงานที่มาทำงาน — ระบบจะแสดงชั่วโมงปกติ/ชั่วโมงเกินของแต่ละคน</span>'; return; }
+  box.innerHTML = ids.map(id=>{
+    const e = E(id); if(!e) return '';
+    const sp = hwSplitHours(e, st, en, br);
+    if(!sp) return `<div>• ${esc(e.name)} — <span style="color:var(--red)">ช่วงเวลาไม่ถูกต้อง</span></div>`;
+    return `<div>• <b>${esc(e.name)}</b> — รวม ${fmtHrs(sp.total)} ชม. = ปกติ <b>${fmtHrs(sp.normal)}</b> ชม.${sp.ot?` + เกินเวลาปกติ <b>${fmtHrs(sp.ot)}</b> ชม.`:''}</div>`;
+  }).join("");
+}
+function hwCleanErr(msg){ return String(msg||"").replace(/^insufficient_privilege:\s*/,""); }
+async function hwSubmit(){
+  const dISO = document.getElementById("hwDate").value;
+  const start = document.getElementById("hwStart").value, end = document.getElementById("hwEnd").value;
+  const brk = Number(document.getElementById("hwBreak").value)||0;
+  const project_id = Number(document.getElementById("hwProject").value) || null;
+  const note = document.getElementById("hwNote").value.trim() || null;
+  const ids = hwSelectedIds();
+  if(!dISO){ toast("กรุณาเลือกวันที่"); return; }
+  if(dISO < settings.payRulesV2From){ toast(`บันทึกได้ตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)} เป็นต้นไป`); return; }
+  if(!start || !end){ toast("กรุณากรอกเวลาเริ่มและเวลาสิ้นสุด"); return; }
+  if(!ids.length){ toast("กรุณาเลือกพนักงานอย่างน้อย 1 คน"); return; }
+  const notOff = ids.map(id=>E(id)).filter(e=>e && !dayOffKindFor(e, dISO));
+  if(notOff.length){ toast(`วันที่นี้เป็นวันทำงานของ ${notOff.map(e=>e.name).join(", ")} — ใช้การลงเวลาปกติ/ขอ OT แทน`); return; }
+  if(ids.some(id=>!hwSplitHours(E(id), start, end, brk))){ toast("ช่วงเวลาไม่ถูกต้อง — ชั่วโมงหลังหักพักต้องมากกว่า 0 และไม่เกิน 16"); return; }
+  const btn = document.getElementById("hwSubmitBtn"); if(btn){ btn.disabled = true; btn.textContent = "กำลังบันทึก..."; }
+  const fields = { work_date: dISO, start_time: start, end_time: end, break_minutes: brk, project_id, note, status: "pending" };
+  let res;
+  if(hwEditId){
+    res = await sb.from("holiday_work_records").update(fields).eq("id", hwEditId).in("status",["pending","returned"]).select("id");
+  } else {
+    res = await sb.from("holiday_work_records").insert(ids.map(id=>Object.assign({ employee_id: id, recorded_by: loggedInEmployeeId }, fields))).select("id");
+  }
+  if(btn){ btn.disabled = false; }
+  if(res.error){
+    const dup = /duplicate key|holiday_work_records_employee_id_work_date_key/.test(res.error.message||"");
+    toast(dup ? "มีบันทึกทำงานวันหยุดของพนักงานคนนี้ในวันนี้อยู่แล้ว — แก้ไขรายการเดิมแทน" : "บันทึกไม่สำเร็จ: " + hwCleanErr(res.error.message));
+    if(btn) btn.textContent = hwEditId ? "💾 บันทึกแล้วส่งให้ HR อีกครั้ง" : "📤 บันทึกและส่งให้ HR อนุมัติ";
+    return;
+  }
+  if(!res.data || !res.data.length){ toast("บันทึกไม่ได้ — รายการอาจถูกตรวจแล้วหรือไม่มีสิทธิ์"); }
+  else {
+    logAudit("attendance", hwEditId?"แก้ไขบันทึกทำงานวันหยุด":"บันทึกทำงานวันหยุด", `${ids.map(id=>E(id)?.name||id).join(", ")} · ${isoToThaiDisplay(dISO)} ${start}–${end}`);
+    toast(hwEditId ? "บันทึกการแก้ไขแล้ว — ส่งให้ HR อนุมัติอีกครั้ง ✓" : `บันทึกแล้ว ${res.data.length} รายการ — รอ HR อนุมัติ ✓`);
+  }
+  hwEditId = null; hwMonth = dISO.slice(0,7);
+  await loadHolidayWork(); updateNotifBell(); render("attendance");
+}
+function hwEdit(id){ hwEditId = id; render("attendance"); window.scrollTo({top:0, behavior:"smooth"}); }
+function hwCancelEdit(){ hwEditId = null; render("attendance"); }
+async function hwDelete(id){
+  const r = (holidayWorkRows||[]).find(x=>String(x.id)===String(id)); if(!r) return;
+  if(!confirm(`ลบบันทึกทำงานวันหยุดของ ${hwRecordedName(r.employee_id)} วันที่ ${isoToThaiDisplay(r.work_date)}?`)) return;
+  const { data, error } = await sb.from("holiday_work_records").delete().eq("id", id).in("status",["pending","returned"]).select("id");
+  if(error){ toast("ลบไม่สำเร็จ: " + hwCleanErr(error.message)); return; }
+  if(!data || !data.length){ toast("ลบไม่ได้ — รายการอาจถูกตรวจแล้ว"); }
+  else { logAudit("attendance","ลบบันทึกทำงานวันหยุด", `${hwRecordedName(r.employee_id)} · ${isoToThaiDisplay(r.work_date)}`); toast("ลบแล้ว"); }
+  await loadHolidayWork(); render("attendance");
+}
+// งวดของวันนั้นยืนยันจ่ายไปแล้วหรือยัง (ตรวจจาก payroll_records จริง ไม่ใช่งวดที่กำลังดูอยู่)
+async function hwPeriodPaid(r){
+  const { data } = await sb.from("payroll_records").select("id").eq("employee_id", r.employee_id).eq("status","paid")
+    .lte("cycle_start_date", r.work_date).gte("cycle_end_date", r.work_date).limit(1);
+  return !!(data && data.length);
+}
+async function hwReview(id, status){
+  const r = (holidayWorkRows||[]).find(x=>String(x.id)===String(id)); if(!r) return;
+  if(!canSeePayroll()){ toast("🔒 อนุมัติได้เฉพาะ HR / Super Admin"); return; }
+  if(String(r.employee_id)===String(loggedInEmployeeId)){ toast("อนุมัติรายการของตัวเองไม่ได้"); return; }
+  if(await hwPeriodPaid(r)){ toast("งวดเงินเดือนของวันนี้ยืนยันจ่ายแล้ว — แก้สถานะไม่ได้ (ติดต่อ Super Admin)"); return; }
+  let review_note = r.review_note || null;
+  if(status==="returned" || status==="rejected"){
+    const why = prompt(status==="returned" ? "เหตุผลที่ส่งกลับให้แก้ไข (ผู้ช่วย HR จะเห็นข้อความนี้)" : "เหตุผลที่ไม่อนุมัติ");
+    if(why===null) return;
+    if(!why.trim()){ toast("กรุณาระบุเหตุผล"); return; }
+    review_note = why.trim();
+  }
+  if(status==="pending" && !confirm("ยกเลิกการอนุมัติ? ค่าทำงานวันหยุดของรายการนี้จะถูกถอดออกจากงวดเงินเดือน")) return;
+  const { data, error } = await sb.from("holiday_work_records").update({ status, review_note }).eq("id", id).select("id,status");
+  if(error){ toast("ดำเนินการไม่สำเร็จ: " + hwCleanErr(error.message)); return; }
+  if(!data || !data.length){ toast("ดำเนินการไม่ได้ — รายการอาจถูกเปลี่ยนไปแล้ว"); await loadHolidayWork(); render("attendance"); return; }
+  const label = {approved:"อนุมัติ", returned:"ส่งกลับแก้ไข", rejected:"ไม่อนุมัติ", pending:"ยกเลิกอนุมัติ"}[status];
+  logAudit("attendance", `${label}บันทึกทำงานวันหยุด`, `${hwRecordedName(r.employee_id)} · ${isoToThaiDisplay(r.work_date)} · ${fmtHrs(Number(r.normal_hours)+Number(r.ot_hours))} ชม.${review_note&&status!=="approved"?' · '+review_note:''}`);
+  toast(`${label}แล้ว ✓`);
+  await loadHolidayWork();
+  const emp = E(r.employee_id); if(emp && emp.cycle) loadCycleStats(emp.cycle).catch(()=>{});
+  updateNotifBell(); render("attendance");
+}
+
 function pgAttendance(){
   const t = subTab.attendance || "today";
   const isPlain = !canViewAll() && !isTeamLead();
@@ -3402,12 +4212,14 @@ function pgAttendance(){
     ${tab("today","วันนี้","🕐")}
     ${tab("log","Log บันทึกเวลา","📝")}
     ${tab("ot","ขอ OT","⏱️", canApproveOt()&&otPending>0)}
+    ${tab("holiday","ทำงานวันหยุด","🗓️", hwNeedsAction())}
+    ${canViewAll()?tab("paysched","รอบจ่าย","📆", canSeePayroll()&&payReqNeedsAction()):''}
     ${canEditAttendance()?tab("review","ตรวจสอบย้อนหลัง","🧐", missingCount>0):''}
     ${tab("adjust","แก้เวลา","🛠️", canSeePayroll()&&Array.isArray(adjustRows)&&adjustRows.some(a=>a.status==='pending'&&String(a.employee_id)!==String(loggedInEmployeeId)))}
     ${isPlain?'':tab("summary","สรุปเวลารายคน","📊")}
     ${tab("late","สถิติมาสาย","⏰")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${t==="log"?attLog():t==="ot"?attOt():t==="adjust"?attAdjust():t==="late"?attLate():isPlain?attToday():(t==="review"&&canEditAttendance())?attReview():t==="summary"?attSummary():attToday()}`;
+  ${t==="log"?attLog():t==="ot"?attOt():t==="holiday"?attHolidayWork():(t==="paysched"&&canViewAll())?attPaySchedule():t==="adjust"?attAdjust():t==="late"?attLate():isPlain?attToday():(t==="review"&&canEditAttendance())?attReview():t==="summary"?attSummary():attToday()}`;
 }
 
 /* ============ Missing Punch Regularization — ตรวจสอบวันที่ไม่มีบันทึกลงเวลา ============ */
@@ -3477,7 +4289,7 @@ async function resolveMissingCore(empId, dateISO, present){
 }
 async function refreshAfterMissing(){
   missingRows = null;
-  await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy)));
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
   render("attendance");
 }
 // กันกดซ้ำ/สองแท็บพร้อมกันในช่วงเสี้ยววินาทีก่อนหน้าจอรีเฟรช (ปุ่มยังไม่ทันหายไปจนกว่า refreshAfterMissing() จะ render เสร็จ)
@@ -3696,7 +4508,7 @@ function attReview(){
         <td><input type="checkbox" class="mpChk" data-kind="${r.kind}" data-emp="${r.emp}" data-date="${r.dateISO}" data-att="${r.attId||''}"></td>
         <td style="white-space:nowrap"><b>${isoToThaiDisplay(r.dateISO)}</b></td>
         <td>${e?empCell(e,true):'#'+r.emp}</td>
-        <td>${e?(e.cycle==='monthly'?'<span class="pill blue">รายเดือน</span>':e.cycle==='weekly'?'<span class="pill purple">รายสัปดาห์</span>':'<span class="pill amber">รายวัน</span>'):'—'}</td>
+        <td>${e?(e.cycle==='monthly'?'<span class="pill blue">รายเดือน</span>':e.cycle==='semimonthly'?'<span class="pill green">ครึ่งเดือน</span>':e.cycle==='weekly'?'<span class="pill purple">รายสัปดาห์</span>':'<span class="pill amber">รายวัน</span>'):'—'}</td>
         <td>${r.kind==='in'?'<span class="pill red">🕐 ลืมเข้า</span>':'<span class="pill amber">🌆 ลืมออก · เข้า '+r.inTime+'</span>'}</td>
         <td class="hint" style="font-size:12px">${r.kind==='out'?'วันนี้นับทำงานแล้ว แต่ชั่วโมงออกไม่ครบ':(e&&e.type==='monthly'?'ไม่หัก (รอยืนยัน)':'ไม่จ่ายวันนี้ (รอยืนยัน)')}</td>
         <td style="text-align:center;white-space:nowrap">
@@ -3709,6 +4521,20 @@ function attReview(){
     </table>`}
   </div>`;
 }
+// [รอบ 18.1] การ์ดอัตรา OT — แสดงอัตราจริงที่ใช้คิดเงินของตัวเอง (ไม่อ้างอิงข้อกฎหมาย)
+function otRateCardHtml(me){
+  if(!me) return '<div class="hint">—</div>';
+  const h = hourlyRateV2(me);
+  const v2Note = payV2On(todayISODate()) ? '' : `<div class="hint" style="margin-top:6px">อัตรานี้ใช้กับงานตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)} · ก่อนหน้านั้นคิด ฿${fmt(calcOTHourlyFor(me))}/ชม.</div>`;
+  return `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0">
+        <div><div class="hint">OT วันทำงาน ×${settings.otMultWorkday}</div><div class="display" style="font-size:24px;font-weight:700;color:var(--accent)">฿${fmt2(h*settings.otMultWorkday)}<span style="font-size:12px">/ชม.</span></div></div>
+        <div><div class="hint">OT วันหยุด ×${settings.otMultHoliday}</div><div class="display" style="font-size:24px;font-weight:700;color:var(--accent)">฿${fmt2(h*settings.otMultHoliday)}<span style="font-size:12px">/ชม.</span></div></div>
+      </div>
+      <div class="hint" style="line-height:1.8">ค่าจ้างต่อชั่วโมง ฿${fmt2(h)} = ${me.type==="monthly"?`เงินเดือน ÷ 30 ÷ ${fmtHrs(normalHoursOf(me))} ชม.`:`ค่าแรงรายวัน ÷ ${fmtHrs(normalHoursOf(me))} ชม.`}<br>
+      🗓️ วันหยุดที่ได้รับแจ้งให้ทำงาน ไม่ต้องยื่น OT — ผู้ช่วย HR บันทึกให้ในแท็บ "ทำงานวันหยุด"</div>${v2Note}`;
+}
+function fmt2(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString("th-TH",{minimumFractionDigits:2, maximumFractionDigits:2}); }
 function attOt(){
   const canPickOthers = canSubmitForOthers();
   const canApprove = canApproveOt();
@@ -3733,8 +4559,7 @@ function attOt(){
     </div>
     <div class="card" style="background:linear-gradient(135deg,#fff9f0,#fff);border:1px solid #f2c98a">
       <h3>💡 อัตรา OT ของฉัน</h3>
-      <div class="display" style="font-size:30px;font-weight:700;color:var(--accent);margin:8px 0">฿${fmt(otRate)}/ชม.</div>
-      <div class="hint" style="line-height:1.8">สูตร: ${myEmp()?.type==="monthly"?`เงินเดือน ÷ ${settings.otDivisorDays} ÷ ${settings.otDivisorHours} ชม.`:`ค่าแรงรายวัน ÷ ${settings.otDivisorHours} ชม.`} ปัดขึ้นตามตั้งค่า (${settings.otRoundTo})<br>📌 แก้ไขสูตรได้ที่ ตั้งค่าระบบ → ตั้งค่าเงินเดือน (Super Admin)</div>
+      ${otRateCardHtml(myEmp())}
     </div>
   </div>
 
@@ -3750,7 +4575,7 @@ function attOt(){
         <td>${o.date}</td><td>${empCell(e,true)}</td>
         <td style="white-space:nowrap;font-size:12.5px">${otSpanLabel(o)}</td>
         <td class="num"><b>${o.hours}</b></td>
-        <td class="num">฿${fmt(o.hours*calcOTHourlyFor(e))}</td>
+        <td class="num">${(canSeePayroll()||isMine)?'฿'+fmt(otRequestPay(e,o)):'<span class="hint">—</span>'}</td>
         <td style="font-size:12px;color:var(--muted)">${o.reason||"—"}</td>
         <td>${stPill(o.status)}</td>
         <td style="text-align:center;white-space:nowrap">
@@ -4237,6 +5062,8 @@ function attLogRowHtml(r){
   let statusHtml;
   if(r.beforeStart){
     statusHtml = '<span class="pill gray">ยังไม่เริ่มงาน</span>';
+  } else if(r.att && r.att.status==="holiday_work"){
+    statusHtml = '<span class="pill green">🗓️ ทำงานวันหยุด (HR อนุมัติแล้ว)</span>';
   } else if(r.isHoliday){
     statusHtml = `<span class="pill amber">🎌 วันหยุดบริษัท${r.holidayName?' · '+r.holidayName:''}</span>`;
   } else if(r.leave || (r.att && r.att.status==="leave")){
@@ -4841,7 +5668,7 @@ function leaveQuota(){
         </div>`;}).join("")}
     </div>
 
-    ${canViewAll()?`<div class="card" style="margin-top:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px dashed #b9ccf5">
+    ${canSeePayroll()?`<div class="card" style="margin-top:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px dashed #b9ccf5">
       <h3>🗺️ เฟส 2: พักร้อนตามกฎหมาย</h3>
       <div class="hint" style="margin-top:6px">ตามกฎหมายแรงงาน พนักงานที่ทำงานครบ 1 ปีมีสิทธิพักร้อน 6 วัน/ปี · ระบบวางโครงตารางไว้แล้ว รอเปิดใช้เฟส 2</div>
     </div>`:''}
@@ -4887,19 +5714,19 @@ function pgPayroll(){
 }
 
 function pyDash(){
-  const totalM = employees.filter(e=>e.cycle==="monthly").reduce((s,e)=>s+calcPay(e).net,0);
-  const totalW = employees.filter(e=>e.cycle==="weekly").reduce((s,e)=>s+calcPay(e).net,0);
-  const totalD = employees.filter(e=>e.cycle==="daily").reduce((s,e)=>s+calcPay(e).net,0);
-  const grand = totalM+totalW+totalD;
+  // [รอบ 18.2] ยอดตามรอบที่เปิดใช้งานจริง
+  const dashCys = activeCycleKeys();
+  const cyTotal = cy => runMembers(cy).reduce((s,e)=>s+calcPay(e).net,0);
+  const grand = dashCys.reduce((s,cy)=>s+cyTotal(cy),0);
+  const cyColor = {monthly:"var(--blue)", semimonthly:"var(--green)", weekly:"var(--purple)", daily:"var(--teal)", biweekly:"var(--muted)"};
+  const cyIcon = {monthly:"🟦", semimonthly:"🟩", weekly:"🟪", daily:"🟢", biweekly:"⬜"};
   return `
   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:16px">
     <div class="card" style="background:linear-gradient(135deg,#ffb020,#f7941d);color:#fff">
       <div class="hint" style="color:rgba(255,255,255,.9)">💰 ยอดจ่ายรวมทุกงวด (ประมาณ)</div>
       <div class="display" style="font-size:30px;font-weight:700;margin-top:4px">฿${fmt(grand)}</div>
     </div>
-    <div class="card"><div class="hint">🟦 Monthly</div><div class="display" style="font-size:22px;font-weight:700;color:var(--blue)">฿${fmt(totalM)}</div><div class="hint">${employees.filter(e=>e.cycle==="monthly").length} คน</div></div>
-    <div class="card"><div class="hint">🟪 Weekly</div><div class="display" style="font-size:22px;font-weight:700;color:var(--purple)">฿${fmt(totalW)}</div><div class="hint">${employees.filter(e=>e.cycle==="weekly").length} คน</div></div>
-    <div class="card"><div class="hint">🟢 Daily</div><div class="display" style="font-size:22px;font-weight:700;color:var(--teal)">฿${fmt(totalD)}</div><div class="hint">${employees.filter(e=>e.cycle==="daily").length} คน</div></div>
+    ${dashCys.map(cy=>`<div class="card"><div class="hint">${cyIcon[cy]||""} ${CYCLES[cy].name.split(" ")[0]}</div><div class="display" style="font-size:22px;font-weight:700;color:${cyColor[cy]||"var(--text)"}">฿${fmt(cyTotal(cy))}</div><div class="hint">${runMembers(cy).length} คน</div></div>`).join("")}
   </div>
 
   <div class="grid" style="grid-template-columns:1.3fr 1fr">
@@ -4907,7 +5734,7 @@ function pyDash(){
       <h3>📅 สถานะงวดจ่าย</h3>
       <table style="margin-top:12px">
         <tr><th>งวด</th><th>ช่วงเวลา</th><th>พนักงาน</th><th>สถานะ</th><th class="num">ยอดรวม</th></tr>
-        ${Object.entries(CYCLES).map(([k,c])=>{const n=employees.filter(e=>e.cycle===k).length;const total=employees.filter(e=>e.cycle===k).reduce((s,e)=>s+calcPay(e).net,0);const st=payrollState.status[k];return `<tr>
+        ${dashCys.map(k=>[k,CYCLES[k]]).map(([k,c])=>{const n=runMembers(k).length;const total=cyTotal(k);const st=payrollState.status[k];return `<tr>
           <td><b>${c.name.split(" ")[0]}</b></td><td style="font-size:12px">${c.period}</td><td class="num">${n} คน</td>
           <td>${st==="paid"?'<span class="pill green">✓ จ่ายแล้ว</span>':st==="approved"?'<span class="pill blue">✓ อนุมัติ</span>':'<span class="pill amber">ฉบับร่าง</span>'}</td>
           <td class="num"><b>฿${fmt(total)}</b></td>
@@ -4919,14 +5746,18 @@ function pyDash(){
       <div style="margin-top:10px">
         ${(()=>{
           const pm = activePeriod("monthly"), pw = activePeriod("weekly");
-          const dCut = daysUntilISO(pm.end), payISO = monthlyPayDateISO(pm), dPay = daysUntilISO(payISO);
+          const dCut = daysUntilISO(pm.end), payISO = payDateFor("monthly", pm), dPay = daysUntilISO(payISO);
           const wCut = daysUntilISO(pw.end);
           const dayWord = n => n===0?"วันนี้" : n===1?"พรุ่งนี้" : n<0?`เลยมาแล้ว ${Math.abs(n)} วัน` : `อีก ${n} วัน`;
           const over = visibleEmployees().filter(e=>e.type==="monthly" && (e.leaveUsed||0) > settings.paidLeaveQuota);
           const rows = [];
           rows.push(`<div class="notif-item"><div class="ic" style="background:var(--amber-soft);color:#b47100">📅</div><div style="flex:1"><b style="font-size:13px">ตัดรอบ ${CYCLES.monthly.name}</b><div class="hint">${dayWord(dCut)} · ${isoToThaiDisplay(pm.end)}</div></div></div>`);
-          rows.push(`<div class="notif-item"><div class="ic" style="background:var(--accent-soft);color:#b47100">💰</div><div style="flex:1"><b style="font-size:13px">วันจ่าย ${CYCLES.monthly.name}</b><div class="hint">${dayWord(dPay)} · ${isoToThaiDisplay(payISO)} · ${employees.filter(e=>e.cycle==="monthly"&&e.status!=="terminated").length} คน</div></div></div>`);
-          rows.push(`<div class="notif-item"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">💸</div><div style="flex:1"><b style="font-size:13px">ตัดรอบ ${CYCLES.weekly.name}</b><div class="hint">${dayWord(wCut)} · ${isoToThaiDisplay(pw.end)} · ${employees.filter(e=>e.cycle==="weekly"&&e.status!=="terminated").length} คน</div></div></div>`);
+          rows.push(`<div class="notif-item"><div class="ic" style="background:var(--accent-soft);color:#b47100">💰</div><div style="flex:1"><b style="font-size:13px">วันจ่าย ${CYCLES.monthly.name}</b><div class="hint">${dayWord(dPay)} · ${isoToThaiDisplay(payISO)} · ${runMembers("monthly").filter(e=>e.status!=="terminated").length} คน</div></div></div>`);
+          rows.push(`<div class="notif-item"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">💸</div><div style="flex:1"><b style="font-size:13px">ตัดรอบ ${CYCLES.weekly.name}</b><div class="hint">${dayWord(wCut)} · ${isoToThaiDisplay(pw.end)} · ${runMembers("weekly").filter(e=>e.status!=="terminated").length} คน</div></div></div>`);
+          if(!CYCLES.semimonthly.disabled){
+            const ps = activePeriod("semimonthly"), psPay = payDateFor("semimonthly", ps);
+            rows.push(`<div class="notif-item"><div class="ic" style="background:var(--green-soft,#e4f7ee);color:var(--green)">🌗</div><div style="flex:1"><b style="font-size:13px">ครึ่งเดือนงวด ${semiHalfOf(ps)}</b><div class="hint">ตัดรอบ ${isoToThaiDisplay(ps.end)} · จ่าย ${dayWord(daysUntilISO(psPay))} ${isoToThaiDisplay(psPay)} · ${runMembers("semimonthly").filter(e=>e.status!=="terminated").length} คน</div></div></div>`);
+          }
           over.slice(0,3).forEach(e=>{
             rows.push(`<div class="notif-item"><div class="ic" style="background:var(--red-soft);color:var(--red)">⚠️</div><div style="flex:1"><b style="font-size:13px">ลาเกินโควตา: ${e.name}</b><div class="hint">ใช้ไป ${e.leaveUsed} / ${settings.paidLeaveQuota} วัน${canSeePayroll()?` · หักวันละ ฿${fmt(Math.round(e.rate/30))}`:""}</div></div></div>`);
           });
@@ -4993,7 +5824,7 @@ function pyRun(){
           ${i<RUN_STEPS.length-1?`<div style="width:34px;height:2px;background:${x.n<doneUpTo||x.n<step.n?'var(--accent)':'var(--line)'};margin-bottom:18px"></div>`:''}
         </div>`).join("")}
     </div>
-    <div class="hint" style="text-align:center;margin-top:6px">งวดที่เลือก: <b>${CYCLES[cy].name}</b> · ${CYCLES[cy].period} · สถานะ ${st==='paid'?'🔒 จ่ายแล้ว (Locked)':st==='approved'?'✅ อนุมัติแล้ว รอจ่าย':'📝 ฉบับร่าง'}${st==='paid'?' · สลิปพร้อมแจกจ่ายที่แท็บ 🧾':''}</div>
+    <div class="hint" style="text-align:center;margin-top:6px">งวดที่เลือก: <b>${CYCLES[cy].name}</b> · ${CYCLES[cy].period} · จ่าย ${isoToThaiDisplay(payDateFor(cy, activePeriod(cy)))} · สถานะ ${st==='paid'?'🔒 จ่ายแล้ว (Locked)':st==='approved'?'✅ อนุมัติแล้ว รอจ่าย':'📝 ฉบับร่าง'}${st==='paid'?' · สลิปพร้อมแจกจ่ายที่แท็บ 🧾':''}</div>
     <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:8px;flex-wrap:wrap">
       <span class="hint">เลือกงวด:</span>
       <select onchange="setPayrollOffset(this.value)" style="padding:7px 12px;border:1.5px solid var(--line);border-radius:9px;font-size:12.5px">
@@ -5002,6 +5833,7 @@ function pyRun(){
     </div>
     ${payrollOffset!==0?`<div class="hint" style="text-align:center;margin-top:8px;padding:8px 12px;background:#fff9f0;border:1px solid #f2c98a;border-radius:10px">⏪ กำลังทำจ่าย <b>งวดย้อนหลัง</b> (ปิดรอบไปแล้ว) — ใช้กรณีตัดรอบก่อนวันจ่าย เช่น ตัดวันที่ 28 แล้วจ่ายสิ้นเดือน · กลับงวดปัจจุบันได้ที่ช่องเลือกงวดด้านบน</div>`:''}
   </div>
+  ${runPeriodNotice(cy)}
   ${content}`;
 }
 // ขั้นสุดท้ายของ workflow: งวด Locked แล้ว → สลิปออกและแจกจ่ายตาม user พนักงานอัตโนมัติ
@@ -5024,7 +5856,7 @@ function pySlipStep(){
           พนักงานแต่ละคน<b>เห็นสลิปของตัวเองอัตโนมัติ</b>ที่แท็บ Self-Service (เฉพาะงวดที่จ่ายแล้ว — RLS คุมสิทธิ์รายคน)<br>
           HR ดาวน์โหลด/พิมพ์ PDF รายคนได้จากตารางด้านล่าง · ต้องการดูงวดอื่นย้อนหลังไปที่แท็บ "🧾 สลิปเงินเดือน" แทน</div>
       </div>
-      ${canViewAll()?`<button class="btn ghost sm" style="margin-left:auto;background:rgba(255,255,255,.18);color:#fff;flex-shrink:0" onclick="unlockPayroll('${cy}')">🔓 เปิดงวดอีกครั้ง</button>`:''}
+      ${canUnlockPayroll()?`<button class="btn ghost sm" style="margin-left:auto;background:rgba(255,255,255,.18);color:#fff;flex-shrink:0" onclick="unlockPayroll('${cy}')">🔓 เปิดงวดอีกครั้ง</button>`:''}
     </div>
   </div>
   <div class="card">
@@ -5046,18 +5878,20 @@ function pySlipStep(){
 }
 function pyCycles(){
   const cycleCard = (key,c)=>{const st=payrollState.status[key];return `
-    <div class="card" style="cursor:pointer;border:2px solid ${payrollState.cycle===key?'var(--accent)':'transparent'};position:relative" onclick="payrollState.cycle='${key}';payrollOffset=0;goRunStep(2)">
+    <div class="card" style="cursor:pointer;border:2px solid ${payrollState.cycle===key?'var(--accent)':'transparent'};position:relative" onclick="selectPayrollCycle('${key}')">
       ${payrollState.cycle===key?'<div style="position:absolute;top:14px;right:14px;width:26px;height:26px;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;font-size:14px">✓</div>':''}
       <h3 style="color:${payrollState.cycle===key?'var(--blue)':'var(--text)'}">${c.name}</h3>
       <div class="hint">${c.desc}</div>
       <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px;font-size:12.5px;color:var(--muted);line-height:1.8">${c.cut}<br>${c.pay}</div>
-      <div style="margin-top:10px">${st==="paid"?'<span class="pill green">✓ จ่ายแล้ว</span>':st==="approved"?'<span class="pill blue">✓ อนุมัติ รอจ่าย</span>':'<span class="pill amber">ฉบับร่าง</span>'} <span class="pill gray">${employees.filter(e=>e.cycle===key).length} คน</span></div>
+      <div style="margin-top:10px">${st==="paid"?'<span class="pill green">✓ จ่ายแล้ว</span>':st==="approved"?'<span class="pill blue">✓ อนุมัติ รอจ่าย</span>':'<span class="pill amber">ฉบับร่าง</span>'} <span class="pill gray">${runMembersFor(key, activePeriod(key)).length} คน</span></div>
     </div>`;};
   return `
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:12px"><h3>📅 เลือกรอบที่จะทำจ่าย</h3>
     <span class="hint" style="margin-left:auto">ตั้งค่าวันตัดรอบ/วันจ่าย ย้ายไปที่ <b>ตั้งค่าระบบ → ตั้งค่าเงินเดือน</b></span></div>
     <div class="hint">เลือกการ์ดรอบจ่าย — Attendance stats, Preview, อนุมัติ, สลิป จะขยับตามงวดนี้อัตโนมัติ</div>
+    ${settings.v2p2Schema?`<div class="hint" style="margin-top:6px">📆 สร้างรอบ/ตั้งวันจ่าย และเปลี่ยนรอบจ่ายรายคน: <a href="javascript:void(0)" onclick="go('attendance');setSub('attendance','paysched')">ลงเวลาทำงาน → รอบจ่าย</a></div>`:''}
+    ${(()=>{ if(!settings.v2p2Schema) return ""; const old = employees.filter(e=>e.status!=="terminated" && CYCLES[employeeCycleOn(e, todayISODate())] && CYCLES[employeeCycleOn(e, todayISODate())].disabled); return old.length?`<div class="hint" style="margin-top:8px;padding:8px 12px;background:#fff1f1;border:1px solid #f3b4b4;border-radius:10px;color:var(--red)">⚠️ พนักงาน ${old.length} คนยังอยู่รอบที่ยกเลิกแล้ว (${old.map(e=>e.name).join(", ")}) — เปลี่ยนรอบจ่ายก่อนทำจ่าย</div>`:""; })()}
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:14px">
       ${activeCycleKeys().map(key=>cycleCard(key,CYCLES[key])).join("")}
     </div>
@@ -5142,7 +5976,7 @@ async function saveCycleSettings(){
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   logAudit("payroll","ตั้งค่ารอบการจ่าย", `ชื่อ: ${cycle_labels.monthly}/${cycle_labels.weekly}/${cycle_labels.daily} · ตัดรอบเดือนวันที่ ${payload.monthly_cutoff_day}${biweekly_enabled?' · เปิดรอบ Biweekly':''}`);
   await loadSettings();
-  await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy)));
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
   missingRows = null;
   closeModal(); render("payroll");
   toast("บันทึกรอบการจ่ายแล้ว ✓ งวดปัจจุบันคำนวณใหม่ตามวันตัดรอบใหม่");
@@ -5166,7 +6000,7 @@ async function recalcAttOT(cy){
   toast("รีเฟรชข้อมูลแล้ว ✓ ตัวเลขในตารางอัปเดตล่าสุด");
 }
 function pyAttOT(){
-  const list = employees.filter(e=>e.cycle===payrollState.cycle);
+  const list = runMembers(payrollState.cycle);
   return `
   <div class="card">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -5184,7 +6018,7 @@ function pyAttOT(){
         <td class="num">${e.att.absent||"—"}</td>
         <td class="num">${e.leaveUsed||"—"}</td>
         <td class="num">${e.att.lateMin||"—"}</td>
-        <td class="num">${e.otHours?`<b>${e.otHours} ชม.</b><div style="font-size:10.5px;color:var(--muted)">฿${fmt(e.otPay||0)}</div>`:"—"}</td>
+        <td class="num">${e.otHours?`<b>${e.otHours} ชม.</b><div style="font-size:10.5px;color:var(--muted)">฿${fmt(e.otPay||0)}</div>`:"—"}${e.hwHours?`<div style="font-size:10.5px;color:var(--green);margin-top:2px">🗓️ วันหยุด ${fmtHrs(e.hwHours)} ชม. ฿${fmt(e.hwPay||0)}</div>`:''}${(e.att&&e.att.dailyHolidayDays)?`<div style="font-size:10.5px;color:var(--muted)">🎌 ค่าจ้างวันหยุด ${e.att.dailyHolidayDays} วัน</div>`:''}</td>
         <td><input type="number" value="${e.extra}" min="0" style="width:110px;padding:6px 10px;border:1.5px solid var(--line);border-radius:8px;text-align:right" onchange="E('${e.id}').extra=Number(this.value)||0;toast('อัปเดตยอดเพิ่มพิเศษแล้ว (จะถูกบันทึกจริงเมื่อกดอนุมัติงวด)')"></td>
       </tr>`).join("")}
     </table>
@@ -5193,7 +6027,7 @@ function pyAttOT(){
 
 function pyCalc(){
   const cy = payrollState.cycle;
-  const list = employees.filter(e=>e.cycle===cy);
+  const list = runMembers(cy);
   const st = payrollState.status[cy];
   const rows = list.map(e=>({e,p:calcPay(e)}));
   const total = rows.reduce((s,r)=>s+r.p.net,0);
@@ -5205,7 +6039,7 @@ function pyCalc(){
       <div><h3>🧮 Payroll Preview — ${CYCLES[cy].name} <span class="pill ${st==='paid'?'green':st==='approved'?'blue':'amber'}">${st==='paid'?'🔒 จ่ายแล้ว':st==='approved'?'🔒 อนุมัติแล้ว':'📝 ฉบับร่าง (Draft)'}</span></h3>
       <div class="hint">รอบ ${CYCLES[cy].period} · ข้อมูลนี้ถูกดึงและตรวจสอบจาก Attendance/Leave/OT/โบนัส/รายการหักมาแล้วในขั้นก่อนหน้า — หน้านี้ใช้ตรวจทานและ Override เฉพาะรายการเงินก่อนอนุมัติ</div></div>
       ${locked
-        ? (canViewAll()?`<button class="btn danger" style="margin-left:auto" onclick="unlockPayroll('${cy}')">🔓 ปลดล็อกงวด</button>`:'<span class="pill gray" style="margin-left:auto">🔒 งวดถูกล็อก</span>')
+        ? (canUnlockPayroll()?`<button class="btn danger" style="margin-left:auto" onclick="unlockPayroll('${cy}')">🔓 ปลดล็อกงวด</button>`:'<span class="pill gray" style="margin-left:auto">🔒 งวดถูกล็อก</span>')
         : '<span class="pill amber" style="margin-left:auto">📝 ตรวจสอบแล้วจากขั้น "ตรวจข้อมูลต้นทาง" — Override ได้เฉพาะรายการเงิน</span>'}
     </div>
     ${periodHolidayHint(period.start, period.end)}
@@ -5304,11 +6138,12 @@ function addOverrideItem(empId){
 }
 async function saveOverride(empId){
   const e = E(empId); if(!e) return;
-  const p = currentPeriod(e.cycle);
+  const ovCy = e.runCycle || employeeCycleOn(e, todayISODate()) || e.cycle;   // [รอบ 18.2] งวดที่ HR กำลังทำจ่ายอยู่ (เดิมใช้งวดปัจจุบันเสมอ)
+  const p = activePeriod(ovCy);
   const sumAdd = ovDraftItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
   const catName = code => (payCategories||[]).find(c=>c.code===code)?.name || code;
   const payload = {
-    employee_id: Number(empId)||empId, cycle: e.cycle,
+    employee_id: Number(empId)||empId, cycle: ovCy,
     cycle_start_date: p.start, cycle_end_date: p.end,
     work_days: null, // ห้าม override วันทำงาน — แก้ที่ Attendance เท่านั้น
     items: ovDraftItems,
@@ -5319,7 +6154,7 @@ async function saveOverride(empId){
   const { error } = await sb.from("payroll_overrides").upsert(payload, {onConflict:"employee_id,cycle_start_date,cycle_end_date"});
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   logAudit("payroll","Override รายรับพิเศษ (Preview)", `${e.name} · ${ovDraftItems.map(i=>`${catName(i.type)} +${fmt(i.amount)}`).join(", ")||"ล้างรายการ"}`);
-  await loadCycleStats(e.cycle);
+  await loadCycleStats(e.runCycle || payrollState.cycle);
   closeModal(); render("payroll");
   toast("บันทึก Override แล้ว ✓ ตัวเลขในร่างอัปเดตทันที");
 }
@@ -5328,16 +6163,17 @@ async function clearOverride(empId){
   const { error } = await sb.from("payroll_overrides").delete().eq("id", e.override.id);
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   logAudit("payroll","ล้าง Override รายรับพิเศษ", e.name);
-  await loadCycleStats(e.cycle);
+  await loadCycleStats(e.runCycle || payrollState.cycle);
   closeModal(); render("payroll");
   toast("ล้าง Override แล้ว — กลับไปใช้ค่าที่ระบบคำนวณ");
 }
 /* ---------- ปลดล็อกงวด (เฉพาะ Super Admin) ---------- */
 async function unlockPayroll(cy){
-  if(!canViewAll()){ toast("เฉพาะ Super Admin และ HR เท่านั้น"); return; }
+  if(!canUnlockPayroll()){ toast("🔒 ปลดล็อกงวดที่จ่ายแล้วได้เฉพาะ Super Admin"); return; }
   const p = activePeriod(cy);
   if(!confirm(`⚠️ ปลดล็อกงวด ${CYCLES[cy].name} (${periodLabel(p)})?\nระบบจะลบรายการที่บันทึกไว้ของงวดนี้ และคืนสถานะรายการหักประจำ/โบนัส/เบิกล่วงหน้าที่ตัดไปแล้วกลับเป็นเหมือนก่อนจ่าย เพื่อแก้ไขและอนุมัติใหม่`)) return;
-  const { error } = await sb.from("payroll_records").delete().eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
+  const { error } = await sb.from("payroll_records").delete().eq("cycle", cy).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end);
+  await syncPayrollPeriod(cy, p, "created");
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
   // คืนสถานะรายการหักประจำ/ผ่อนชำระที่ถูกตัดงวดไปในรอบนี้ กลับเป็น "กำลังหักอยู่"
   const unlockFails = []; // เก็บรายการที่คืนสถานะไม่สำเร็จ ไว้แจ้งเตือน HR (แทนที่จะปล่อยเงียบเหมือนบั๊กเบิกล่วงหน้าที่เจอก่อนหน้านี้)
@@ -5384,6 +6220,7 @@ function openDeductModal(empId){
         </select>
       </div>
       <div class="field" id="dedMonthsWrap" style="margin-top:10px;display:none"><label>จำนวนเดือนที่ผ่อน</label><input id="dedMonths" type="number" value="10" min="1"></div>
+      ${settings.v2p2Schema?`<div class="field" style="margin-top:10px"><label>พนักงานรับเงินครึ่งเดือน: หักในงวดไหน</label><select id="dedHalf"><option value="B">งวด B (จ่ายสิ้นเดือน)</option><option value="A">งวด A (จ่ายวันที่ ${settings.semiAPayDay})</option><option value="split">แบ่งหักสองงวดเท่ากัน</option></select><div class="hint" style="font-size:11px">พนักงานรอบรายเดือนไม่มีผล — หักเต็มจำนวนในงวดเดียวตามเดิม · นับงวดผ่อนเดือนละครั้ง</div></div>`:''}
       ${activeDeductions(e).length?`<div class="hint" style="margin-top:14px;padding:10px;background:#f8f9fc;border-radius:10px">รายการที่หักอยู่: ${activeDeductions(e).map(d=>d.label+' ('+d.monthsPaid+'/'+d.monthsTotal+' เดือน)').join(', ')}</div>`:''}
     </div>
     <div class="modal-foot">
@@ -5391,6 +6228,14 @@ function openDeductModal(empId){
       <button class="btn primary" onclick="saveDeduct('${empId}')">💾 เพิ่มรายการ</button>
     </div>`;
   document.getElementById("modalBg").classList.add("show");
+}
+async function setDeductHalf(dedId, half){
+  if(!canSeePayroll()){ toast("🔒 เฉพาะ HR หรือ Super Admin"); return; }
+  const { error } = await sb.from("employee_deductions").update({ deduct_half: half }).eq("id", dedId);
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  logAudit("payroll", "ตั้งงวดหักครึ่งเดือน", `รายการหัก #${dedId} → ${half==="split"?"แบ่งสองงวด":"งวด "+half}`);
+  await loadDeductions(); render("payroll");
+  toast("บันทึกงวดหักแล้ว ✓");
 }
 async function saveDeduct(empId){
   const e = E(empId);
@@ -5402,7 +6247,8 @@ async function saveDeduct(empId){
   const monthsTotal = mode==='installment' ? (Number(document.getElementById("dedMonths").value)||1) : 1;
   const note = document.getElementById("dedNote").value.trim() || null;
   const { error } = await sb.from("employee_deductions").insert({
-    employee_id: e.id, code, label, amount, months_total: monthsTotal, months_paid: 0, note
+    employee_id: e.id, code, label, amount, months_total: monthsTotal, months_paid: 0, note,
+    ...((settings.v2p2Schema && document.getElementById("dedHalf")) ? { deduct_half: document.getElementById("dedHalf").value } : {})
   });
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   await loadDeductions();
@@ -5521,7 +6367,7 @@ function pyDeductions(){
       <tr><th>พนักงาน</th><th>รายการ</th><th class="num">ยอด/เดือน</th><th>ความคืบหน้า</th><th>สถานะ</th><th style="text-align:center">จัดการ</th></tr>
       ${filtered.map(d=>{const paidOff=d.monthsPaid>=d.monthsTotal;return `<tr style="${paidOff?'opacity:.65':''}">
         <td>${empCell(d.emp,true)}</td>
-        <td style="font-size:13px">${d.label}${d.note?`<div style="font-size:11px;color:var(--muted)">📝 ${d.note}</div>`:''}</td>
+        <td style="font-size:13px">${d.label}${d.note?`<div style="font-size:11px;color:var(--muted)">📝 ${d.note}</div>`:''}${(settings.v2p2Schema && isSemiEmp(d.emp))?`<div style="margin-top:4px"><select onchange="setDeductHalf(${d.id}, this.value)" style="font-size:11px;padding:3px 6px;border:1px solid var(--line);border-radius:6px">${[["B","ครึ่งเดือน: หักงวด B"],["A","ครึ่งเดือน: หักงวด A"],["split","ครึ่งเดือน: แบ่งหักสองงวด"]].map(([v,l])=>`<option value="${v}" ${(d.deductHalf||"B")===v?"selected":""}>${l}</option>`).join("")}</select></div>`:''}</td>
         <td class="num">฿${fmt(d.amount)}</td>
         <td style="min-width:140px"><div style="display:flex;align-items:center;gap:8px"><div style="width:80px;height:7px;background:#e7eaf1;border-radius:6px;overflow:hidden"><div style="height:100%;width:${Math.min(100,d.monthsPaid/d.monthsTotal*100)}%;background:${paidOff?'var(--green)':'var(--accent)'}"></div></div><span style="font-size:11.5px">${d.monthsPaid}/${d.monthsTotal}</span></div></td>
         <td>${paidOff?'<span class="pill green">✓ ชำระครบแล้ว</span>':'<span class="pill amber">กำลังหัก</span>'}</td>
@@ -5536,7 +6382,7 @@ function pyDeductions(){
 
 /* ============ PAYROLL PRE-CHECK ก่อนอนุมัติ ============ */
 function checkPayrollReadiness(cy){
-  const list = employees.filter(e=>e.cycle===cy && e.status!=="terminated");
+  const list = runMembers(cy).filter(e=>e.status!=="terminated");
   const p = activePeriod(cy);
   const issues = [];
   list.forEach(e=>{
@@ -5547,14 +6393,15 @@ function checkPayrollReadiness(cy){
     if(probs.length) issues.push({e, probs});
   });
   const inPeriod = d => d>=p.start && d<=p.end;
-  const pendLeave = leaves.filter(l=>{const emp=E(l.emp);return emp&&emp.cycle===cy&&inPeriod(l.dateISO||"")&&(l.supStatus==="pending"||l.hrStatus==="pending");});
-  const pendOt = otRequests.filter(o=>{const emp=E(o.emp);return emp&&emp.cycle===cy&&o.status==="pending"&&inPeriod(o.dateISO||o.date||"");});
+  const pendLeave = leaves.filter(l=>{const emp=E(l.emp);return emp&&employeeCycleOn(emp, p.end)===cy&&inPeriod(l.dateISO||"")&&(l.supStatus==="pending"||l.hrStatus==="pending");});
+  const pendOt = otRequests.filter(o=>{const emp=E(o.emp);return emp&&employeeCycleOn(emp, p.end)===cy&&o.status==="pending"&&inPeriod(o.dateISO||o.date||"");});
   const totalMissing = list.reduce((s,e)=>s+(e.att.missing||0),0);
   const checks = [
     {label:"Attendance ครบทุกวันทำงาน", ok: totalMissing===0, fix:"attendance", sub: totalMissing?`ขาดบันทึก ${totalMissing} วัน`:"ครบ"},
     {label:"Missing Punch เคลียร์แล้ว", ok: totalMissing===0, fix:"attendance", sub: totalMissing?"มีรายการรอตรวจสอบ":"ไม่มีค้าง"},
     {label:"Leave Sync (ไม่มีใบลาค้างอนุมัติในงวด)", ok: pendLeave.length===0, fix:"leave", sub: pendLeave.length?`${pendLeave.length} ใบรออนุมัติ`:"เรียบร้อย"},
     {label:"OT อนุมัติครบ", ok: pendOt.length===0, fix:"attendance", sub: pendOt.length?`${pendOt.length} รายการรออนุมัติ`:"เรียบร้อย"},
+    ...(settings.v2p2Schema ? [{label:"ช่วงข้อมูลต่อเนื่อง ไม่ตกหล่น/ไม่ซ้ำ", ok: !list.some(e=>e.coverage&&(e.coverage.overlap||e.coverage.gapFrom)), fix:"payroll", sub:(()=>{ const bad = list.filter(e=>e.coverage&&(e.coverage.overlap||e.coverage.gapFrom)); return bad.length?`${bad.length} คน: ${bad.slice(0,3).map(e=>e.name).join(", ")}`:"ทุกวันถูกนับครั้งเดียว"; })()}] : []),
     {label:"Salary Structure ครบทุกคน", ok: !issues.some(i=>i.probs.some(x=>x.includes("ฐานเงินเดือน"))), fix:"payroll", sub:""},
     {label:"รายการหักประจำ (ตรวจแล้ว)", ok:true, sub:`${list.reduce((s,e)=>s+activeDeductions(e).length,0)} รายการ active`},
     {label:"โบนัส/ปรับเงิน (ตรวจแล้ว)", ok:true, sub:`${bonusRecords.filter(b=>list.some(e=>String(e.id)===String(b.emp))&&b.status==="รวมงวดนี้").length} รายการรวมงวดนี้`},
@@ -5660,7 +6507,7 @@ function pySlip(){
   const isHist = !!g;
   const rows = isHist
     ? g.rows.map(r=>({e:E(r.employee_id), net:Number(r.net_pay)||0, recId:r.id}))
-    : employees.filter(e=>e.cycle===cy).map(e=>({e, net:calcPay(e).net}));
+    : runMembers(cy).map(e=>({e, net:calcPay(e).net}));
   const periodLabel = isHist ? histPeriodLabel(g) : CYCLES[cy].period;
   const payDate = isHist ? (g.paidAt?new Date(g.paidAt).toLocaleDateString("th-TH"):"ยังไม่จ่าย") : "—";
   _slipExportRows = rows;
@@ -5813,10 +6660,12 @@ async function afterLogin(){
   }
   // loadAdjustments/loadAdvances/ensureHolidaysLoaded โหลดตั้งแต่ตอนล็อกอิน เพราะกระดิ่งแจ้งเตือนต้องใช้นับ "สิ่งที่รออนุมัติ" ให้ครบทุกประเภท
   await Promise.all([loadLeaves(), loadAttendanceToday(), loadDeductions(), loadBonuses(), loadSettings(), loadOtRequests(), loadAnnouncements(), loadPayCategories(), loadOrgUnits(), loadNotifReads(), loadAdjustments(), loadAdvances(), ensureHolidaysLoaded()]);
+  await loadHolidayWork();   // [รอบ 18.1] ต้องรู้ settings.v2Schema ก่อน (โหลดใน loadSettings ด้านบน)
+  await Promise.all([loadScheduleHistory(), loadPayScheduleRequests()]);   // [รอบ 18.2] ต้องมาก่อนคำนวณรอบจ่าย
   await loadProjectsModule(); projectsLoaded = true;
   updateProjectBadge();
   await loadPayrollStatus();
-  await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy)));
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
   syncTopbarUser();
   showApp();
   return true;
@@ -5834,7 +6683,7 @@ function showApp(){
 // รองรับเฉพาะหน้าที่มีจริง และยังผ่านการตรวจสิทธิ์ของ go() ตามปกติ
 const DEEPLINK_PAGES = {
   leave:      {key:"leave",      subs:["dashboard","types","submit","approve","calendar","report","quota"]},
-  attendance: {key:"attendance", subs:["today","ot","review","adjust","summary","late"]},
+  attendance: {key:"attendance", subs:["today","ot","holiday","paysched","review","adjust","summary","late"]},
   payroll:    {key:"payroll",    subs:["dashboard","run","structure","slip","advance","deductions","bonus","report","ess"]},
   settings:   {key:"settings",   subs:["company","work","holiday","late","payroll","org","approval","channels","users","phase2"]}
 };
@@ -5871,9 +6720,11 @@ function resetAppState(){
   TEAM_DIR = new Map();   // ล้างสมุดรายชื่อทีมตอน logout กันชื่อของบัญชีเก่าค้างข้ามผู้ใช้
   projectsLoaded = false; projectsLoading = false; prjActiveProject = null;
   payrollHistRows = []; payrollHistLoaded = false; payrollHistLoading = false;
-  payrollState = { cycle:"monthly", status:{monthly:"draft", weekly:"draft", daily:"draft"} };
+  payrollState = { cycle:"monthly", status:{monthly:"draft", semimonthly:"draft", weekly:"draft", daily:"draft"} };
   holidayRows = null; empFilesCache = {}; empModalCtx = null;
   missingRows = null; adjustRows = null; payCategories = null;
+  holidayWorkRows = null; hwMonth = null; hwEditId = null;
+  scheduleHistory = []; payrollPeriodRows = null; payScheduleReqRows = null; psForm = { cycle:"monthly", off:0 };
   advanceRows = null; ytdRows = null; orgUnits = null; userRolesRows = null;
   attLogEmpId = null; attLogMonth = null; attLogRows = null;
   attLateOffset = 0; attLateHistRows = null; attLateDetailEmpId = null; attLateDetailRows = null;
@@ -6082,13 +6933,13 @@ function exportBankExcel(){
 function pyBank(){
   const cy = payrollState.cycle;
   const st = payrollState.status[cy];
-  const list = employees.filter(e=>e.cycle===cy);
+  const list = runMembers(cy);
   const total = list.reduce((s,e)=>s+calcPay(e).net,0);
   const banks = ["KBANK (กสิกร)", "SCB (ไทยพาณิชย์)", "BBL (กรุงเทพ)", "KTB (กรุงไทย)"];
   _bankExportRows = list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return {name:e.name, code:e.code, method:pi.methodLabel, dest:pi.ok?pi.dest:"ยังไม่มีข้อมูล", net:p.net, ok:pi.ok};});
   _bankExportPeriod = CYCLES[cy].period;
   const payBar = st==="paid"
-    ? `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#e4f7ee,#fff);border:1px solid #bfe8d2"><b style="font-size:14.5px">🔒 งวดนี้จ่ายและปิดงวดแล้ว (Locked)</b><div class="hint" style="margin-top:3px">สลิป PDF พร้อมแจกจ่าย — พนักงานเปิดดูของตัวเองได้ใน Self-Service ทันที</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn primary sm" onclick="setSub('payroll','slip')">🧾 ไปหน้าสลิปเงินเดือน →</button>${canViewAll()?`<button class="btn danger sm" onclick="unlockPayroll('${cy}')">🔓 เปิดงวดอีกครั้ง</button>`:''}</div></div>`
+    ? `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#e4f7ee,#fff);border:1px solid #bfe8d2"><b style="font-size:14.5px">🔒 งวดนี้จ่ายและปิดงวดแล้ว (Locked)</b><div class="hint" style="margin-top:3px">สลิป PDF พร้อมแจกจ่าย — พนักงานเปิดดูของตัวเองได้ใน Self-Service ทันที</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn primary sm" onclick="setSub('payroll','slip')">🧾 ไปหน้าสลิปเงินเดือน →</button>${canUnlockPayroll()?`<button class="btn danger sm" onclick="unlockPayroll('${cy}')">🔓 เปิดงวดอีกครั้ง</button>`:''}</div></div>`
     : st==="approved"
     ? `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#fff9f0,#fff);border:1px solid #f2c98a"><b style="font-size:14.5px">💸 Payment Processing — โอนเงินตามไฟล์ด้านล่าง แล้วกดยืนยันจ่ายเพื่อปิดงวด</b><div style="margin-top:10px"><button class="btn green" onclick="openConfirmPayModal('${cy}')">💸 ยืนยันจ่ายเงิน & ปิดงวด (Lock)</button></div></div>`
     : `<div class="card" style="margin-bottom:16px"><div class="hint">⏳ ยังไม่ได้อนุมัติงวดนี้ — กลับไปขั้น "ตรวจ & อนุมัติ" ก่อน</div><button class="btn ghost sm" style="margin-top:6px" onclick="goRunStep(4)">← ไปอนุมัติงวด</button></div>`;
@@ -6206,7 +7057,7 @@ async function submitAdvance(){
   if(amount<=0){ toast("กรุณาระบุจำนวนเงิน"); return; }
   if(!reason){ toast("กรุณาระบุเหตุผล"); return; }
   const me = myEmp();
-  const cy = me?.cycle || "monthly";
+  const cy = employeeCycleOn(me, todayISODate()) || "monthly";
   const p = currentPeriod(cy); // ผูกกับ "งวดปัจจุบันจริง" ตอนยื่นขอ (ไม่ใช่งวดที่ HR อาจกำลังดูย้อนหลังอยู่)
   const { error } = await sb.from("salary_advances").insert({ employee_id: loggedInEmployeeId, amount, reason, status:"pending", target_cycle_start:p.start, target_cycle_end:p.end });
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
@@ -6222,7 +7073,7 @@ async function reviewAdvance(id, decision){
   let targetStart = a.target_cycle_start, targetEnd = a.target_cycle_end, rolled = false;
   if(decision==="approved" && e && targetStart && targetEnd){
     // ถ้างวดที่ผูกไว้ตอนยื่นขอปิดจ่ายไปแล้วก่อน HR จะมาอนุมัติ (อนุมัติช้า) → เลื่อนไปหักงวดเปิดถัดไปให้อัตโนมัติ
-    const resolved = await resolveOpenAdvancePeriod(e.cycle, targetStart, targetEnd);
+    const resolved = await resolveOpenAdvancePeriod(employeeCycleOn(e, targetEnd) || e.cycle, targetStart, targetEnd);
     if(resolved.start!==targetStart || resolved.end!==targetEnd){ rolled = true; targetStart = resolved.start; targetEnd = resolved.end; }
   }
   const payload = { status:decision, reviewed_by:loggedInEmployeeId, reviewed_at:new Date().toISOString() };
@@ -6237,7 +7088,7 @@ async function reviewAdvance(id, decision){
   const targetLabel = (targetStart&&targetEnd) ? periodLabel({start:targetStart,end:targetEnd}) : "";
   logAudit("payroll", decision==="approved"?"อนุมัติเบิกเงินล่วงหน้า":"ไม่อนุมัติเบิกเงินล่วงหน้า", `${e?e.name:a.employee_id} · ฿${fmt(a.amount)}${targetLabel?` · งวด ${targetLabel}`:""}${rolled?" (เลื่อนงวด — งวดเดิมจ่ายไปแล้ว)":""}`);
   advanceRows = null;
-  if(decision==="approved" && e) await loadCycleStats(e.cycle); // ยอดหักเข้าร่างงวดทันที (ถ้าตรงกับงวดที่กำลังดูอยู่)
+  if(decision==="approved" && e) await loadCycleStats(payrollState.cycle); // ยอดหักเข้าร่างงวดทันที (ถ้าตรงกับงวดที่กำลังดูอยู่)
   render("payroll");
   toast(decision==="approved"?`อนุมัติแล้ว ✓ ฿${fmt(a.amount)} จะถูกหักจากเงินเดือนของ ${e?.name} ในงวด ${targetLabel} ครั้งเดียว${rolled?" (เลื่อนงวดเพราะงวดเดิมจ่ายไปแล้ว)":""}`:"บันทึกไม่อนุมัติแล้ว");
 }
@@ -6528,7 +7379,7 @@ function pyReport(){
     <h3>🗓️ ดึงข้อมูลย้อนหลัง — สรุปงวดจ่าย</h3>
     <div class="hint">กำหนดช่วงวันที่/ประเภทงวด สำหรับตรวจสอบหรือใช้ยื่นภาษี-ประกันสังคม</div>
     <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:12px">
-      <div class="field"><label>ประเภทงวด</label><select id="rpCycle"><option value="all" ${reportFilter.cycle==='all'?'selected':''}>ทั้งหมด</option><option value="monthly" ${reportFilter.cycle==='monthly'?'selected':''}>Monthly</option><option value="weekly" ${reportFilter.cycle==='weekly'?'selected':''}>Weekly</option><option value="daily" ${reportFilter.cycle==='daily'?'selected':''}>Daily</option></select></div>
+      <div class="field"><label>ประเภทงวด</label><select id="rpCycle"><option value="all" ${reportFilter.cycle==='all'?'selected':''}>ทั้งหมด</option><option value="monthly" ${reportFilter.cycle==='monthly'?'selected':''}>Monthly</option><option value="semimonthly" ${reportFilter.cycle==='semimonthly'?'selected':''}>Semi-Monthly</option><option value="weekly" ${reportFilter.cycle==='weekly'?'selected':''}>Weekly</option><option value="daily" ${reportFilter.cycle==='daily'?'selected':''}>Daily</option></select></div>
       <div class="field"><label>ตั้งแต่วันที่จ่าย</label><input type="date" id="rpFrom" value="${reportFilter.from}"></div>
       <div class="field"><label>ถึงวันที่จ่าย</label><input type="date" id="rpTo" value="${reportFilter.to}"></div>
       <button class="btn primary sm" onclick="applyReportFilter()">🔍 ดึงข้อมูล</button>
@@ -6622,7 +7473,7 @@ function pyESS(){
         <div style="background:rgba(255,255,255,.08);border-radius:12px;padding:14px;margin-bottom:10px">
           <div style="font-size:11px;opacity:.7">เงินเดือนงวดปัจจุบัน</div>
           <div class="display" style="font-size:24px;font-weight:700;color:var(--accent)">฿${fmt(monthlyNet)}</div>
-          <div style="font-size:11px;opacity:.7">จะจ่ายวันที่ ${isoToThaiDisplay(monthlyPayDateISO(activePeriod("monthly")))}</div>
+          <div style="font-size:11px;opacity:.7">จะจ่ายวันที่ ${(()=>{ const myCy = employeeCycleOn(me, todayISODate()) || "monthly"; return isoToThaiDisplay(payDateFor(myCy, currentPeriod(myCy))); })()}</div>
         </div>
         <div style="background:rgba(124,108,240,.18);border:1px solid #7c6cf0;border-radius:12px;padding:14px;margin-bottom:14px">
           <div style="font-size:11px;opacity:.85">💰 ยอดรับรวมปีนี้ ${thisYear+543}${openingKnown&&opening>0?' <span style="opacity:.7">(รวมยอดยกมาก่อนใช้ระบบ)</span>':''}</div>
@@ -6995,8 +7846,10 @@ function stPayroll(){
     <div class="hint" style="margin-top:8px;line-height:1.9">
       <b>${CYCLES.monthly.name}:</b> ${CYCLES.monthly.cut} · ${CYCLES.monthly.pay}<br>
       <b>${CYCLES.weekly.name}:</b> ${CYCLES.weekly.cut} · ${CYCLES.weekly.pay}<br>
-      <b>${CYCLES.daily.name}:</b> จ่ายทุกวันทำงาน<br>
-      ${settings.biweeklyEnabled?`<b>${CYCLES.biweekly.name}:</b> ${CYCLES.biweekly.cut} · ${CYCLES.biweekly.pay}<br>`:''}
+      ${settings.v2p2Schema?`<b>${CYCLES.semimonthly.name}:</b> ${CYCLES.semimonthly.cut} · ${CYCLES.semimonthly.pay}<br>
+      <b>${CYCLES.daily.name} / ${CYCLES.biweekly.name}:</b> ยกเลิกการสร้างรอบใหม่แล้ว (ประวัติเดิมยังเปิดดูได้)<br>
+      <span style="color:#b47100">ℹ️ รายเดือนเป็นรอบ 1–สิ้นเดือนตั้งแต่ ${isoToThaiDisplay(settings.monthlyCalendarFrom)}${hasTransitionPeriod()?` (งวดเปลี่ยนผ่าน ${periodLabel({start:settings.monthlyCalendarFrom,end:transitionEndISO()})})`:''} — วันตัดรอบรายเดือนในปุ่มแก้ไขมีผลเฉพาะงวดก่อนหน้านั้น</span><br>`:`<b>${CYCLES.daily.name}:</b> จ่ายทุกวันทำงาน<br>
+      ${settings.biweeklyEnabled?`<b>${CYCLES.biweekly.name}:</b> ${CYCLES.biweekly.cut} · ${CYCLES.biweekly.pay}<br>`:''}`}
       เปลี่ยนแล้วงวดปัจจุบันทุกหน้า (Attendance stats, Preview, อนุมัติ, สลิป) ขยับตามอัตโนมัติ · 3 ประเภทนี้ผูกกับพนักงานโดยตรง จึงแก้ชื่อได้แต่ลบไม่ได้
     </div>
   </div>`;
@@ -7081,8 +7934,43 @@ async function delPayCategory(id){
   render("settings");
   toast("ลบหมวดหมู่แล้ว");
 }
-function stPayrollOT(){
+// [รอบ 18.1] การ์ดตั้งค่ากติกาค่าจ้างใหม่ (HR/Super Admin เท่านั้น — หน้า settings ถูก gate ด้วย canAccessAdmin())
+function stPayRulesV2(){
+  if(!settings.v2Schema) return `<div class="card" style="margin-top:16px;border:1px dashed #f2c98a"><h3>🆕 กติกา OT / ค่าทำงานวันหยุด (ใหม่)</h3><div class="hint">ยังไม่เปิดใช้ — ต้องรัน migration เฟส 1 ในฐานข้อมูลก่อน</div></div>`;
+  const dis = canAccessAdmin() ? '' : 'disabled';
   return `
+  <div class="card" style="margin-top:16px;border:1.5px solid #9fd8b8;background:linear-gradient(135deg,#effaf3,#fff)">
+    <h3>🆕 กติกา OT / ค่าทำงานวันหยุด (ใช้กับงานตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)})</h3>
+    <div class="hint">ค่าจ้างต่อชั่วโมง = เงินเดือน ÷ 30 ÷ ชั่วโมงปกติของพนักงาน (รายวัน = ค่าแรง ÷ ชั่วโมงปกติ) คิดละเอียดเต็มแล้วปัดยอดเงินขึ้นเป็นบาท · ตั้งต่ำกว่าค่าขั้นต่ำไม่ได้ (ฐานข้อมูลบังคับซ้ำ) · งานก่อนวันเริ่มใช้คิดตามสูตร OT เหมาด้านล่างเหมือนเดิม</div>
+    <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-top:12px">
+      <div class="field"><label>OT วันทำงาน ×</label><input id="v2OtWork" type="number" step="0.25" min="1.5" value="${settings.otMultWorkday}" ${dis}></div>
+      <div class="field"><label>OT วันหยุด ×</label><input id="v2OtHol" type="number" step="0.25" min="3" value="${settings.otMultHoliday}" ${dis}></div>
+      <div class="field"><label>ทำงานวันหยุด รายเดือน +×</label><input id="v2HwMon" type="number" step="0.25" min="1" value="${settings.hwMultMonthly}" ${dis}></div>
+      <div class="field"><label>ทำงานวันหยุด รายวัน ×</label><input id="v2HwDay" type="number" step="0.25" min="2" value="${settings.hwMultDaily}" ${dis}></div>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;background:#fff;padding:10px 12px;border-radius:9px">
+      <input type="checkbox" id="v2BlockCheckin" ${settings.blockWeeklyOffCheckin?'checked':''} ${dis}>
+      🚫 ปิดปุ่มลงเวลาใน LINE ในวันหยุดประจำสัปดาห์ (ให้ผู้ช่วย HR บันทึกแทน) <span class="hint">— มีผลเมื่ออัปเดตระบบลงเวลา LINE แล้ว</span>
+    </label>
+    ${canAccessAdmin()?'<button class="btn primary sm" style="margin-top:12px" onclick="saveV2PayRules()">💾 บันทึกกติกา</button>':''}
+  </div>`;
+}
+async function saveV2PayRules(){
+  const v = id => Number(document.getElementById(id).value);
+  const payload = { ot_mult_workday: v("v2OtWork"), ot_mult_holiday: v("v2OtHol"), holiday_work_mult_monthly: v("v2HwMon"), holiday_work_mult_daily: v("v2HwDay"),
+    block_weekly_off_checkin: document.getElementById("v2BlockCheckin").checked };
+  if(payload.ot_mult_workday<1.5 || payload.ot_mult_holiday<3 || payload.holiday_work_mult_monthly<1 || payload.holiday_work_mult_daily<2){
+    toast("ตั้งต่ำกว่าค่าขั้นต่ำไม่ได้ (OT วันทำงาน 1.5 · OT วันหยุด 3 · วันหยุดรายเดือน 1 · วันหยุดรายวัน 2)"); return;
+  }
+  const { data, error } = await sb.from("settings").update(payload).eq("id",1).select("id");
+  if(error){ toast("บันทึกไม่สำเร็จ: " + error.message); return; }
+  if(!data || !data.length){ toast("บันทึกไม่ได้ — ไม่มีสิทธิ์"); return; }
+  await loadSettings();
+  logAudit("settings","ตั้งค่ากติกา OT/ค่าทำงานวันหยุด", `OT ×${payload.ot_mult_workday} · วันหยุด ×${payload.ot_mult_holiday} · ทำงานวันหยุด รายเดือน +${payload.holiday_work_mult_monthly} / รายวัน ×${payload.holiday_work_mult_daily} · ปิดลงเวลาวันหยุด ${payload.block_weekly_off_checkin?'เปิด':'ปิด'}`);
+  toast("บันทึกกติกาแล้ว ✓"); render("settings");
+}
+function stPayrollOT(){
+  return stPayRulesV2() + `
   <div class="card" style="margin-top:16px">
     <h3>⏱️ ตั้งค่า OT (ค่าล่วงเวลา)</h3>
     <div class="hint">${canAccessAdmin() ? 'เลือกรูปแบบการคำนวณ OT และตั้งค่ารายละเอียด — มีผลกับพนักงานรายเดือนทุกคนทันทีที่บันทึก' : 'เฉพาะ Super Admin และ HR เท่านั้นที่แก้ไขตั้งค่านี้ได้ (นโยบายความปลอดภัยของระบบ)'}</div>
@@ -7408,7 +8296,7 @@ function stLate(){
 async function setLateGrace(v){
   const g = Math.max(0, Math.min(120, Number(v)||0));
   const ok = await saveSettingsFields({late_grace_minutes:g}, `ตั้งผ่อนผันมาสายเป็น ${g} นาที/วันแล้ว ✓ มีผลกับงวดร่างทันที`, "แก้ไขนาทีผ่อนผันมาสาย", `${g} นาที/วัน`);
-  if(ok) await Promise.all(Object.keys(CYCLES).map(cy=>loadCycleStats(cy))); // คำนวณยอดหักใหม่ให้ตรงกับค่าที่เพิ่งตั้ง
+  if(ok) await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy))); // คำนวณยอดหักใหม่ให้ตรงกับค่าที่เพิ่งตั้ง
 }
 async function setLatePolicy(mode){
   await saveSettingsFields({late_policy:mode},
