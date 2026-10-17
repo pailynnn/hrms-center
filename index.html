@@ -221,6 +221,8 @@ th.num{text-align:right}
   .modal-body{padding:12px}
   #loginScreen > div{padding:26px 18px !important}
 }
+details>summary::-webkit-details-marker{display:none}
+details[open]>summary>span:first-child{display:inline-block;transform:rotate(90deg)}
 </style>
 <style id="drReportStyles">
 #drReportsTbl thead th{text-align:left;border-bottom:2px solid #e6e9f0;padding:8px;font-size:12px;color:#6b7280;white-space:nowrap}
@@ -7969,8 +7971,9 @@ async function saveV2PayRules(){
   logAudit("settings","ตั้งค่ากติกา OT/ค่าทำงานวันหยุด", `OT ×${payload.ot_mult_workday} · วันหยุด ×${payload.ot_mult_holiday} · ทำงานวันหยุด รายเดือน +${payload.holiday_work_mult_monthly} / รายวัน ×${payload.holiday_work_mult_daily} · ปิดลงเวลาวันหยุด ${payload.block_weekly_off_checkin?'เปิด':'ปิด'}`);
   toast("บันทึกกติกาแล้ว ✓"); render("settings");
 }
-function stPayrollOT(){
-  return stPayRulesV2() + `
+// [รอบ 18.2b] การ์ดตั้งค่า OT เดิม (ใช้เฉพาะตอนฐานข้อมูลยังไม่รัน migration เฟส 1)
+function stOtLegacyCard(){
+  return `
   <div class="card" style="margin-top:16px">
     <h3>⏱️ ตั้งค่า OT (ค่าล่วงเวลา)</h3>
     <div class="hint">${canAccessAdmin() ? 'เลือกรูปแบบการคำนวณ OT และตั้งค่ารายละเอียด — มีผลกับพนักงานรายเดือนทุกคนทันทีที่บันทึก' : 'เฉพาะ Super Admin และ HR เท่านั้นที่แก้ไขตั้งค่านี้ได้ (นโยบายความปลอดภัยของระบบ)'}</div>
@@ -8025,7 +8028,84 @@ function stPayrollOT(){
       </tr>`).join("")}
     </table>` : `<div class="hint" style="margin-top:14px;padding:12px;background:#f8f9fc;border-radius:10px;text-align:center">เลือก "OT เหมา (Flat Rate)" ด้านบนเพื่อตั้งค่ารายละเอียด</div>`}
   </div>
+`;
+}
+// [รอบ 18.2b] การ์ดเดียว: ตั้งค่าทั่วไป + กดเปิด/ปิดทีละหัวข้อ — ระบบเลือกสูตรตามวันที่ทำงานเอง ไม่ต้องเลือกโหมด
+let otPanelOpen = { v2:true, legacy:false };
+function stOtMerged(){
+  const admin = canAccessAdmin(), dis = admin ? '' : 'disabled';
+  const from = isoToThaiDisplay(settings.payRulesV2From);
+  const sumStyle = 'display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;cursor:pointer;list-style:none';
+  const people = employees.filter(e=>e.status!=="terminated" && (e.rate||0)>0);
+  return `
+  <div class="card" style="margin-top:16px">
+    <h3>⏱️ ตั้งค่า OT และค่าทำงานวันหยุด</h3>
+    <div class="hint">${admin ? 'ระบบเลือกสูตรให้อัตโนมัติตามวันที่ทำงาน — กดหัวข้อเพื่อเปิด/ปิดหน้าตั้งค่า' : 'เฉพาะ Super Admin และ HR เท่านั้นที่แก้ไขตั้งค่านี้ได้ (นโยบายความปลอดภัยของระบบ)'}</div>
 
+    <div style="display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin-top:14px;padding:12px 14px;background:#f8f9fc;border-radius:10px">
+      <div class="field" style="margin:0"><label>เริ่มคิด OT หลังเวลา</label><input id="otStartTime" type="time" value="${settings.otStartTime}" ${dis}></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;padding-bottom:10px">
+        <input type="checkbox" id="otRequiresApproval" ${settings.otRequiresApproval?'checked':''} ${dis}> ✅ OT ต้องอนุมัติก่อนจึงนำไปคิดเงินเดือน
+      </label>
+      ${admin?'<button class="btn ghost sm" style="margin-left:auto;margin-bottom:6px" onclick="saveOtSettings()">💾 บันทึก</button>':''}
+    </div>
+
+    <details ${otPanelOpen.v2?'open':''} ontoggle="otPanelOpen.v2=this.open" style="margin-top:10px;border:1.5px solid #9fd8b8;border-radius:12px;background:linear-gradient(135deg,#effaf3,#fff)">
+      <summary style="${sumStyle}">
+        <span style="font-size:15px">▸</span>
+        <div style="flex:1"><b>OT ×${settings.otMultWorkday} / ×${settings.otMultHoliday} และค่าทำงานวันหยุด</b><div class="hint">งานตั้งแต่ ${from} เป็นต้นไป</div></div>
+        <span class="pill green">✓ ใช้อยู่</span>
+      </summary>
+      <div style="padding:0 14px 14px">
+        <div class="hint">ค่าจ้างต่อชั่วโมง = เงินเดือน ÷ 30 ÷ ชั่วโมงปกติของพนักงาน (รายวัน = ค่าแรง ÷ ชั่วโมงปกติ) คิดละเอียดเต็มแล้วปัดยอดเงินขึ้นเป็นบาท · ตั้งต่ำกว่าค่าขั้นต่ำไม่ได้ (ฐานข้อมูลบังคับซ้ำ)</div>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:12px">
+          <div class="field"><label>OT วันทำงาน ×</label><input id="v2OtWork" type="number" step="0.25" min="1.5" value="${settings.otMultWorkday}" ${dis}></div>
+          <div class="field"><label>OT วันหยุด ×</label><input id="v2OtHol" type="number" step="0.25" min="3" value="${settings.otMultHoliday}" ${dis}></div>
+          <div class="field"><label>ทำงานวันหยุด รายเดือน +×</label><input id="v2HwMon" type="number" step="0.25" min="1" value="${settings.hwMultMonthly}" ${dis}></div>
+          <div class="field"><label>ทำงานวันหยุด รายวัน ×</label><input id="v2HwDay" type="number" step="0.25" min="2" value="${settings.hwMultDaily}" ${dis}></div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;background:#fff;padding:10px 12px;border-radius:9px">
+          <input type="checkbox" id="v2BlockCheckin" ${settings.blockWeeklyOffCheckin?'checked':''} ${dis}>
+          🚫 ปิดปุ่มลงเวลาใน LINE ในวันหยุดประจำสัปดาห์ (ให้ผู้ช่วย HR บันทึกแทน) <span class="hint">— มีผลเมื่ออัปเดตระบบลงเวลา LINE แล้ว</span>
+        </label>
+        ${admin?'<button class="btn primary sm" style="margin-top:12px" onclick="saveV2PayRules()">💾 บันทึกกติกา</button>':''}
+        ${people.length?`<table style="margin-top:14px">
+          <tr><th>พนักงาน</th><th class="num">ค่าจ้าง/ชม.</th><th class="num">OT วันทำงาน/ชม.</th><th class="num">OT วันหยุด/ชม.</th><th class="num">ทำงานวันหยุด 8 ชม.</th></tr>
+          ${people.map(e=>{ const h = hourlyRateV2(e); const hw = e.type==="monthly" ? h*settings.hwMultMonthly : h*settings.hwMultDaily; const nh = Math.min(8, normalHoursOf(e)); return `<tr>
+            <td>${empCell(e)}</td>
+            <td class="num">฿${h.toFixed(2)}${normalHoursOf(e)!==8?`<div class="hint" style="font-size:10.5px">${fmtHrs(normalHoursOf(e))} ชม./วัน</div>`:''}</td>
+            <td class="num">฿${(h*settings.otMultWorkday).toFixed(2)}</td>
+            <td class="num">฿${(h*settings.otMultHoliday).toFixed(2)}</td>
+            <td class="num"><b>฿${fmt(payCeil(hw*nh))}</b><div class="hint" style="font-size:10.5px">${e.type==="monthly"?`+${settings.hwMultMonthly} เท่า`:`รวม ${settings.hwMultDaily} เท่า`}</div></td>
+          </tr>`; }).join("")}
+        </table>`:''}
+      </div>
+    </details>
+
+    <details ${otPanelOpen.legacy?'open':''} ontoggle="otPanelOpen.legacy=this.open" style="margin-top:10px;border:1px solid var(--line);border-radius:12px;background:#fff">
+      <summary style="${sumStyle}">
+        <span style="font-size:15px">▸</span>
+        <div style="flex:1"><b>OT เหมา (สูตรเดิม)</b><div class="hint">ใช้กับงานก่อน ${from} เท่านั้น (งวดเก่าที่ยังไม่ปิด)</div></div>
+        <span class="pill gray">งวดเก่า</span>
+      </summary>
+      <div style="padding:0 14px 14px">
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+          <div class="field"><label>คำนวณจากเงินเดือน ÷ (วัน/เดือน)</label><input id="otDivisorDays" type="number" min="1" value="${settings.otDivisorDays}" ${dis}></div>
+          <div class="field"><label>÷ (ชั่วโมง/วัน)</label><input id="otDivisorHours" type="number" min="1" value="${settings.otDivisorHours}" ${dis}></div>
+          <div class="field"><label>ปัดอัตรา OT/ชม. ให้ลงท้ายด้วยเลขที่หารด้วย</label><input id="otRoundTo" type="number" min="1" value="${settings.otRoundTo}" ${dis}></div>
+        </div>
+        <div class="hint" style="margin-top:8px">สูตร: เงินเดือน ÷ ${settings.otDivisorDays} ÷ ${settings.otDivisorHours} ชม. แล้วปัดขึ้นให้ลงท้ายด้วยเลขที่หารด้วย ${settings.otRoundTo} · ×1 ทุกชั่วโมง</div>
+        ${admin?'<button class="btn ghost sm" style="margin-top:10px" onclick="saveOtSettings()">💾 บันทึกสูตรเดิม</button>':''}
+        <table style="margin-top:12px">
+          <tr><th>พนักงาน</th><th class="num">เงินเดือน</th><th class="num">ค่า OT/ชั่วโมง (สูตรเดิม)</th></tr>
+          ${employees.filter(e=>e.type==="monthly" && e.status!=="terminated").map(e=>`<tr><td>${empCell(e)}</td><td class="num">฿${fmt(e.rate)}</td><td class="num">฿${calcOTHourly(e.rate)}</td></tr>`).join("")}
+        </table>
+      </div>
+    </details>
+  </div>`;
+}
+function stPayrollOT(){
+  return (settings.v2Schema ? stOtMerged() : stPayRulesV2() + stOtLegacyCard()) + `
   <div class="card" style="margin-top:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px dashed #b9ccf5">
     <h3>🧾 ภาษีและประกันสังคม (Tax &amp; SSO) <span class="pill blue" style="margin-left:auto">รองรับเฟสถัดไป</span></h3>
     <div class="hint" style="margin-top:6px">วางโครงไว้รอเปิดใช้งานจริง — พอถึงเวลาแค่กรอกอัตราแล้วเปิดสวิตช์ ไม่ต้องรื้อระบบ</div>
