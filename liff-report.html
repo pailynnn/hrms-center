@@ -462,7 +462,7 @@ const L = {
     next:"แผนงานวันถัดไป *", nextDate:"วันที่", addTask:"เพิ่มงาน", zonePh:"โซน/ชั้น", taskPh:"งานที่จะทำ",
     photos:"รูปหน้างาน", hintPhotos:"เลือกได้หลายรูปพร้อมกัน ครั้งละไม่เกิน 10 รูป (ย่อขนาดอัตโนมัติ)", addPhoto:"เพิ่มรูป / ถ่ายรูป",
     maxPick:"เลือกได้ครั้งละไม่เกิน 10 รูป — ระบบเลือกให้ 10 รูปแรก", maxTotal:"แนบรูปได้สูงสุด 30 รูปต่อรายงาน",
-    photoBusy:"กำลังเตรียมรูป", photoAdded:"เพิ่มรูปแล้ว",
+    photoBusy:"กำลังเตรียมรูป", photoAdded:"เพิ่มรูปแล้ว", photoFail:"รูปที่เปิดไม่ได้", photoFailHint:"ไฟล์แบบ HEIC/HEIF หรือรูปจากคลาวด์ที่ยังไม่ดาวน์โหลด — ลองกด 📷 ถ่ายใหม่ หรือตั้งกล้องให้บันทึกเป็น JPEG", photoNone:"ยังไม่มีรูปถูกเพิ่ม", photosFailedSrv:"รูปที่บันทึกไม่สำเร็จ",
     pdfBtn:"บันทึก / แชร์ PDF", pdfOpen:"เปิดดู PDF", pdfBusy:"กำลังสร้างไฟล์ PDF...", pdfErr:"สร้างไฟล์ PDF ไม่สำเร็จ",
     docTitle:"รายงานประจำวันหน้างาน", docNo:"เลขที่รายงาน", docMan:"กำลังคน", docPresent:"ผู้ปฏิบัติงานวันนี้",
     docPlan:"แผนงานวันนี้", docResult:"ผลการทำงาน", docProgress:"ความคืบหน้า", docProblem:"ปัญหา & การแก้ไข",
@@ -503,7 +503,7 @@ const L = {
     next:"နောက်ရက်အစီအစဉ် *", nextDate:"ရက်စွဲ", addTask:"အလုပ်ထည့်", zonePh:"ဇုန်/ထပ်", taskPh:"လုပ်မည့်အလုပ်",
     photos:"လုပ်ငန်းခွင်ဓာတ်ပုံ", hintPhotos:"တစ်ကြိမ်လျှင် ပုံ ၁၀ ပုံအထိ ရွေးနိုင်သည် (အရွယ်အစား အလိုအလျောက်လျှော့)", addPhoto:"ပုံထည့် / ဓာတ်ပုံရိုက်",
     maxPick:"တစ်ကြိမ်လျှင် ၁၀ ပုံသာ — ပထမ ၁၀ ပုံကို ယူပါမည်", maxTotal:"အစီရင်ခံစာတစ်ခုလျှင် ၃၀ ပုံအထိသာ",
-    photoBusy:"ပုံပြင်ဆင်နေသည်", photoAdded:"ပုံထည့်ပြီး",
+    photoBusy:"ပုံပြင်ဆင်နေသည်", photoAdded:"ပုံထည့်ပြီး", photoFail:"ဖွင့်မရသောပုံ", photoFailHint:"HEIC/HEIF ဖိုင် သို့မဟုတ် cloud ပုံ — 📷 ဖြင့် ပြန်ရိုက်ပါ သို့မဟုတ် ကင်မရာကို JPEG သို့ ပြောင်းပါ", photoNone:"ပုံ မထည့်ရသေးပါ", photosFailedSrv:"မသိမ်းနိုင်သောပုံ",
     pdfBtn:"PDF သိမ်း / မျှဝေ", pdfOpen:"PDF ဖွင့်ကြည့်", pdfBusy:"PDF ဖိုင် ဖန်တီးနေသည်...", pdfErr:"PDF မဖန်တီးနိုင်ပါ",
     docTitle:"နေ့စဉ်လုပ်ငန်းခွင် အစီရင်ခံစာ", docNo:"အစီရင်ခံစာနံပါတ်", docMan:"လူအင်အား", docPresent:"ယနေ့လုပ်သားများ",
     docPlan:"ယနေ့အစီအစဉ်", docResult:"လုပ်ဆောင်ချက်", docProgress:"တိုးတက်မှု", docProblem:"ပြဿနာ & ဖြေရှင်းနည်း",
@@ -716,31 +716,61 @@ document.getElementById("photoInput").addEventListener("change", async function(
   const room = MAX_PHOTOS - photos.length;
   if(files.length > room){ files = files.slice(0, Math.max(0, room)); warn = t("maxTotal"); }
   if(!files.length){ showStatus("⚠️ "+t("maxTotal"), "err"); return; }
-  let done = 0;
+  // [รอบ 23] นับเฉพาะรูปที่เตรียมสำเร็จจริง — เดิมรูปที่เปิดไม่ได้ (เช่น HEIC) ถูกนับว่า "เพิ่มแล้ว" แต่ไม่ถูกส่ง
+  let done = 0, ok = 0; const failed = [];
   for(const f of files){
     showStatus("⏳ "+t("photoBusy")+" "+(done+1)+"/"+files.length, "info");
-    try{ const d = await compress(f); photos.push({type:pendingType, dataUrl:d}); }catch(err){}
+    try{ const d = await compress(f); photos.push({type:pendingType, dataUrl:d}); ok++; }
+    catch(err){ failed.push((f.name||"?")+" ("+(f.type||"ไม่ทราบชนิด")+", "+Math.round((f.size||0)/1024)+" KB)"); console.warn("photo prepare failed", f.name, f.type, f.size, err); }
     done++;
     renderPhotos();
   }
+  if(failed.length){
+    showStatus("⚠️ "+(ok?t("photoAdded")+" "+ok+" "+t("rvImgs")+" · ":t("photoNone")+" · ")+t("photoFail")+" "+failed.length+" "+t("rvImgs")+": "+failed.slice(0,3).join(", ")+" — "+t("photoFailHint"), "err");
+    return;
+  }
   if(warn) showStatus("⚠️ "+warn, "err");
-  else showStatus("✅ "+t("photoAdded")+" "+done+" "+t("rvImgs"), "ok");
+  else showStatus("✅ "+t("photoAdded")+" "+ok+" "+t("rvImgs"), "ok");
   setTimeout(()=>{ if(statusBox.className.indexOf("err")===-1) hideStatus(); }, 2200);
 });
 function pickPhoto(type){ pendingType = type||"site"; document.getElementById("photoInput").click(); }
 function autoGrow(el){ if(!el) return; el.style.height="auto"; el.style.height=(el.scrollHeight+2)+"px"; }
-function compress(file){
+// [รอบ 23] เตรียมรูปให้ทนขึ้น: HEIC/HEIF → แปลงเป็น JPEG ก่อน (heic2any โหลดเฉพาะตอนต้องใช้) · ลอง <img> ก่อน ไม่ได้ค่อยใช้ createImageBitmap
+function isHeic(file){ return /hei[cf]/i.test(file.type||"") || /\.hei[cf]$/i.test(file.name||""); }
+async function compress(file){
+  if(!file || !file.size) throw new Error("empty");
+  let src = file;
+  if(isHeic(file)){
+    try{
+      if(!window.heic2any) await loadScriptOnce("https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js");
+      const out = await window.heic2any({ blob:file, toType:"image/jpeg", quality:0.8 });
+      src = Array.isArray(out) ? out[0] : out;
+    }catch(e){ console.warn("heic2any", e); }
+  }
+  try{ return await compressImg(src); }
+  catch(e1){
+    if(typeof createImageBitmap!=="function") throw e1;
+    const bmp = await createImageBitmap(src);
+    return drawJpeg(bmp, bmp.width, bmp.height);
+  }
+}
+function drawJpeg(img, w0, h0){
+  const max = 1280; let w = w0, h = h0;
+  if(w>h && w>max){ h = Math.round(h*max/w); w = max; }
+  else if(h>=w && h>max){ w = Math.round(w*max/h); h = max; }
+  const cv = document.createElement("canvas"); cv.width=w; cv.height=h;
+  cv.getContext("2d").drawImage(img,0,0,w,h);
+  const d = cv.toDataURL("image/jpeg", 0.7);
+  if(!d || d.length < 1000 || d.indexOf("data:image/jpeg")!==0) throw new Error("canvas");
+  return d;
+}
+function compressImg(file){
   return new Promise((resolve,reject)=>{
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = ()=>{
-      const max = 1280; let {width:w,height:h} = img;
-      if(w>h && w>max){ h = Math.round(h*max/w); w = max; }
-      else if(h>=w && h>max){ w = Math.round(w*max/h); h = max; }
-      const cv = document.createElement("canvas"); cv.width=w; cv.height=h;
-      cv.getContext("2d").drawImage(img,0,0,w,h);
       URL.revokeObjectURL(url);
-      resolve(cv.toDataURL("image/jpeg", 0.7));
+      try{ resolve(drawJpeg(img, img.naturalWidth||img.width, img.naturalHeight||img.height)); }catch(e){ reject(e); }
     };
     img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error("img")); };
     img.src = url;
@@ -1177,6 +1207,7 @@ function showSuccess(json, p){
       : (json.checked_out?'<div class="signlock" style="justify-content:center;margin-bottom:10px">🔒 '+t("okCheckout")+'</div>':''))+
     (nextTxt?'<div class="infobox" style="text-align:left"><div class="inforow"><span class="k">'+t("next")+'</span></div><div style="font-size:12.5px">'+esc(nextTxt)+'</div></div>':'')+
     (json.photos_uploaded?'<div style="font-size:11.5px;color:var(--muted)">'+t("photosSaved")+': '+json.photos_uploaded+'</div>':'')+
+    (json.photos_failed?'<div style="font-size:11.5px;color:#c0392b">⚠️ '+t("photosFailedSrv")+': '+json.photos_failed+'</div>':'')+
     (RPT?'<button class="submit" style="margin-top:12px" onclick="sharePdf()">📤 '+t("pdfBtn")+'</button>'+
          '<button class="btn-ghost" onclick="openPdf()">👁 '+t("pdfOpen")+'</button>':'')+
     // เหลือทีมอื่น -> ปุ่มหลักคือ "กรอกทีมถัดไป" (reload หน้า init จะเด้งไปทีมที่ยังไม่ได้รายงานให้เอง)
