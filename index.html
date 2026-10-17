@@ -538,8 +538,12 @@ const LEAVE_TYPES = [
   {code:"personal", name:"ลากิจ", paid:"quota", color:"#3b7bf6", desc:"ใช้โควตาไม่หักเงิน 2 วัน/เดือน — เกินหักตามค่าจ้างต่อวัน"},
   {code:"sick", name:"ลาป่วย", paid:"quota", color:"#ee5d9a", desc:"ใช้โควตารวมกับลากิจ — ป่วย 3 วันขึ้นไปต้องมีใบรับรองแพทย์"},
   {code:"annual", name:"พักร้อน", paid:"unpaid", color:"#17c3a3", desc:"ยังไม่เปิดใช้ (เฟส 2)"},
-  {code:"unpaid", name:"ลาไม่รับค่าจ้าง", paid:"unpaid", color:"#8a92a6", desc:"หักค่าจ้างตามวันที่ลา"}
+  {code:"unpaid", name:"ลาไม่รับค่าจ้าง", paid:"unpaid", color:"#8a92a6", desc:"หักค่าจ้างตามวันที่ลา"},
+  // [รอบ 18.3] ใช้สิทธิหยุดชดเชย — ไม่หักเงิน ไม่ใช้โควตา (DB ตัดสิทธิ์ที่เก่าที่สุดให้เอง · ไม่มีสิทธิ์คงเหลือ = ยื่นไม่ได้)
+  {code:"comp_day", name:"หยุดชดเชย", paid:"comp", color:"#f59e0b", desc:"ใช้สิทธิหยุดชดเชยจากวันหยุดบริษัทที่มาทำงาน — ไม่หักเงิน ไม่ใช้โควตาลา · วันที่ลาต้องอยู่หลังวันหยุดที่มาทำงาน", needsV3:true}
 ];
+// ประเภทลาที่เลือกยื่นได้ตอนนี้ (หยุดชดเชยต้องรอ DB เฟส 3)
+function leaveTypesForSubmit(){ return LEAVE_TYPES.filter(t=>!t.needsV3 || settings.compDayEnabled); }
 
 /* ================== EMPLOYEES ================== */
 // โหลดจริงจาก Supabase (ตาราง employees) หลังล็อกอินสำเร็จ ผ่าน loadEmployees()
@@ -684,9 +688,15 @@ async function loadEmployees(){
   // (base_wage / bank_account / payment_method / promptpay_id / payee_name / payee_relation → null · แถวของตัวเองคงค่าจริง)
   // เพราะ policy `hr_assistant_read_employees` ที่เคยเปิดให้อ่านตารางตรง ๆ ทุกแถว ถูกตัดทิ้งไปแล้วในรอบนี้
   // role อื่นยังอ่านตาราง employees ตรง ๆ ตาม RLS เดิมทุกประการ (admin/hr ทุกแถว · หัวหน้าเห็นทีมตัวเอง · พนักงานเห็นแค่ตัวเอง)
-  const { data, error } = isHrAssistant()
-    ? await sb.rpc("employees_for_hr_assistant")
-    : await sb.from("employees").select("*").order("id");
+  // [รอบ 18.3] หัวหน้าทีม (รวม T000) อ่านผ่าน RPC `employees_for_supervisor()` — ลูกทีม/ทั้งบริษัทถูกปิดคอลัมน์เงิน
+  //   DB ที่ยังไม่รัน security_fix.sql (ไม่มี RPC) → อ่านตารางตรงแบบเดิม
+  let res;
+  if(isHrAssistant()) res = await sb.rpc("employees_for_hr_assistant");
+  else if(currentRoleCode==="supervisor"){
+    res = await sb.rpc("employees_for_supervisor");
+    if(res.error || !Array.isArray(res.data) || !res.data.length) res = await sb.from("employees").select("*").order("id");
+  } else res = await sb.from("employees").select("*").order("id");
+  const { data, error } = res;
   if(error){ console.error("loadEmployees error", error); toastLoadError("รายชื่อพนักงาน"); return; }
   const rows = (data||[]).slice().sort((a,b)=>Number(a.id)-Number(b.id)); // RPC ไม่การันตีลำดับ จึงเรียงเองให้เหมือน .order("id")
   const all = rows.map(mapEmployeeRow)
@@ -772,7 +782,12 @@ function myTodayAttendance(){
 
 // โหลดตั้งค่า OT จริงจากตาราง settings (แถวเดียว id=1) มาทับค่า default ใน settings object ฝั่ง client
 async function loadSettings(){
-  const { data, error } = await sb.from("settings").select("*").eq("id",1).maybeSingle();
+  // [รอบ 18.3] อ่านผ่าน RPC settings_public() — ไม่มี token/secret ของ LINE (ปิดช่องโหว่ทุกคนอ่าน token ได้)
+  // DB ที่ยังไม่รัน security_fix.sql (ยังไม่มี RPC) → อ่านตารางตรงแบบเดิม
+  let data = null, error = null;
+  const rp = await sb.rpc("settings_public");
+  if(!rp.error && rp.data && typeof rp.data==="object" && !Array.isArray(rp.data)){ data = rp.data; settings.secureSettings = true; }
+  else { const r = await sb.from("settings").select("*").eq("id",1).maybeSingle(); data = r.data; error = r.error; settings.secureSettings = false; }
   if(error || !data) { console.error("loadSettings error", error); toastLoadError("ค่าตั้งค่าระบบ"); return; }
   // เวลาทำงาน / การลา
   settings.shiftIn = (data.shift_in||"08:30").slice(0,5);
@@ -840,8 +855,14 @@ async function loadSettings(){
   if(data.company_sub){ COMPANY.sub = data.company_sub; }
   if(data.company_tagline){ COMPANY.tagline = data.company_tagline; }
   if(data.company_logo){ COMPANY.logo = data.company_logo; COMPANY.logoIsCustom = true; }
-  settings.lineChannelToken = data.line_channel_access_token || "";
+  settings.lineChannelToken = data.line_channel_access_token || "";   // [รอบ 18.3] หลังรัน security_fix.sql จะว่างเสมอ (ดูสถานะจาก lineCredStatus)
   settings.lineChannelSecret = data.line_channel_secret || "";
+  settings.lineCredStatus = settings.secureSettings ? null : {
+    has_token: !!settings.lineChannelToken, token_tail: settings.lineChannelToken.length>=4 ? settings.lineChannelToken.slice(-4) : null,
+    has_secret: !!settings.lineChannelSecret, secret_tail: settings.lineChannelSecret.length>=4 ? settings.lineChannelSecret.slice(-4) : null };
+  // [รอบ 18.3] เฟส 3 (วันเปิดทำงานในวันหยุดบริษัท · หยุดชดเชย) — DB รัน phase3_migration.sql แล้ว
+  settings.v3Schema = Object.prototype.hasOwnProperty.call(data, "comp_day_enabled");
+  settings.compDayEnabled = settings.v3Schema && data.comp_day_enabled!==false;
   settings.liffId = data.liff_id || "";
   settings.liffLeaveId = data.liff_leave_id || "";
   settings.liffChannelId = data.liff_channel_id || "";
@@ -1371,6 +1392,10 @@ function runPeriodNotice(cy){
   if(shifted.length){
     out += box("#fff9f0", "#f2c98a", `<b style="font-size:13.5px">🔀 เปลี่ยนรอบจ่าย — ช่วงข้อมูลไม่เท่ากับงวด</b><div class="hint" style="margin-top:4px;line-height:1.8">${shifted.map(e=>`${e.name}: ${periodLabel(e.runRange)}`).join("<br>")}</div>`);
   }
+  const pend = list.filter(e=>e.hdPending && e.hdPending.length);
+  if(pend.length){
+    out += box("#fff1f1", "#f3b4b4", `<b style="font-size:13.5px;color:var(--red)">⏳ รอข้อสรุป — วันหยุดบริษัทที่เปิดทำงาน (ยืนยันจ่ายไม่ได้จนกว่าจะเคลียร์)</b><div class="hint" style="margin-top:4px;line-height:1.8">${pend.map(e=>`${e.name}: ${e.hdPending.map(x=>`${isoToThaiDisplay(x.h.holiday_date)} ${x.h.name} — ${x.reason}`).join(" · ")}`).join("<br>")}<br><a href="javascript:void(0)" onclick="go('settings');setSub('settings','holiday')">→ ไปกำหนดวิธีจัดการค่าจ้างที่ ตั้งค่า → วันหยุด</a></div>`);
+  }
   const bad = list.filter(e=>e.coverage && (e.coverage.overlap || e.coverage.gapFrom));
   if(bad.length){
     out += box("#fff1f1", "#f3b4b4", `<b style="font-size:13.5px;color:var(--red)">⚠️ ตรวจความครบถ้วนของช่วงข้อมูล</b><div class="hint" style="margin-top:4px;line-height:1.8">${bad.map(e=>{
@@ -1428,6 +1453,7 @@ function refreshCycleLabels(){
     CYCLES.semimonthly.period = periodLabel(currentPeriod("semimonthly"));
   }
   if(settings.cycleLabels?.biweekly) CYCLES.biweekly.name = settings.cycleLabels.biweekly;
+  if(settings.cycleLabels?.semimonthly && CYCLES.semimonthly) CYCLES.semimonthly.name = settings.cycleLabels.semimonthly;   // [รอบ 18.3]
 }
 function periodLabel(p){ return `${isoToThaiDisplay(p.start)} – ${isoToThaiDisplay(p.end)}`; }
 
@@ -1507,7 +1533,7 @@ async function loadCycleStats(cy){
   const aPeriod = half==="B" ? semiPeriodContaining(addDaysISO(period.start,-1)) : null;   // โควตาลาเป็นรายเดือน → งวด B นับรวมงวด A ของเดือนเดียวกัน
   const lvStart = (aPeriod && aPeriod.start < qStart) ? aPeriod.start : qStart;
   const [attRes, lvRes, otRes, hwRes] = await Promise.all([
-    sb.from("attendances").select("employee_id,status,late_minutes,work_date").gte("work_date", qStart).lte("work_date", effEnd),
+    sb.from("attendances").select("employee_id,status,late_minutes,work_date,check_in_time,check_out_time").gte("work_date", qStart).lte("work_date", effEnd),
     sb.from("leave_requests").select("employee_id,leave_date,leave_type,supervisor_status,hr_status").gte("leave_date", lvStart).lte("leave_date", effEnd),
     sb.from("ot_requests").select("employee_id,work_date,hours,status").gte("work_date", qStart).lte("work_date", period.end),
     // [รอบ 18.1] ค่าทำงานวันหยุดที่ HR อนุมัติแล้ว (ยังไม่รัน migration = ข้าม ไม่ทำให้เงินเดือนพัง)
@@ -1635,6 +1661,27 @@ async function loadCycleStats(cy){
     e.hwRecords = ((hwRes && hwRes.data) || []).filter(r=>String(r.employee_id)===String(e.id) && inR(r.work_date));
     e.hwHours = e.hwRecords.reduce((s,r)=>s+(Number(r.normal_hours)||0)+(Number(r.ot_hours)||0),0);
     e.hwPay = payCeil(e.hwRecords.reduce((s,r)=>s+holidayWorkAmount(e, r),0));
+    // [รอบ 18.3] วันหยุดบริษัทที่เปิดทำงาน — คิดเฉพาะสมาชิกที่ลงเวลาจริง (มีบันทึกทำงานวันหยุดที่อนุมัติแล้ว = ใช้บันทึกนั้นแทน ไม่คิดซ้ำ)
+    //   จ่ายค่าทำงานวันหยุด (pay)  → รายเดือน +ชั่วโมงทำงาน (ไม่เกินชั่วโมงปกติ) × ค่าจ้าง/ชม. × ตัวคูณ (เกินเวลา = ยื่น OT วันหยุด ×3)
+    //   เลื่อนวันหยุด (substitute) → ค่าจ้างปกติ ไม่บวก + ได้สิทธิหยุดชดเชย
+    //   ยังไม่เลือก / รายวันที่ยังไม่มีข้อสรุป → "รอข้อสรุป" ไม่เข้าสูตรใด และห้ามยืนยันจ่าย
+    e.hdItems = []; e.hdPending = []; e.hdHours = 0; e.hdPay = 0; e.compUsedDays = 0;
+    if(settings.v3Schema){
+      const hwDates = new Set(e.hwRecords.map(r=>r.work_date));
+      const attByDate = new Map(att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").map(a=>[a.work_date, a]));
+      (Array.isArray(holidayRows)?holidayRows:[]).filter(h=>h.company_works && inR(h.holiday_date) && holidayWorkMember(h, e)).forEach(h=>{
+        const a = attByDate.get(h.holiday_date);
+        if(!a || hwDates.has(h.holiday_date)) return;
+        if(e.type!=="monthly" && !String(h.daily_resolution||"").trim()){ e.hdPending.push({h, reason:"พนักงานรายวัน — ยังไม่บันทึกข้อสรุปค่าจ้าง"}); return; }
+        if(!h.treatment){ e.hdPending.push({h, reason:"ยังไม่เลือกวิธีจัดการค่าจ้าง"}); return; }
+        if(h.treatment==="pay" && e.type==="monthly"){
+          const hrs = Math.min(attendanceWorkHours(a, normalHoursOf(e)), normalHoursOf(e));
+          e.hdHours += hrs; e.hdItems.push({h, hours:hrs});
+        }
+      });
+      e.hdPay = payCeil(e.hdHours*hourlyRateV2(e)*settings.hwMultMonthly);
+      e.compUsedDays = apprLeaves.filter(l=>l.leave_type==="comp_day").length;
+    }
   });
 }
 
@@ -1681,6 +1728,8 @@ async function approvePayroll(cy){
     const otNote = pay.otHours ? otRemarkFor(e, pay) : "";
     const hwNote = pay.hwPay ? `ค่าทำงานวันหยุด ${fmtHrs(pay.hwHours)} ชม. (฿${fmt(pay.hwPay)})` : "";
     const dhNote = (e.att && e.att.dailyHolidayDays) ? `ค่าจ้างวันหยุดบริษัท ${e.att.dailyHolidayDays} วัน` : "";
+    const hdNote = pay.hdPay ? `ค่าทำงานวันหยุดบริษัท ${(e.hdItems||[]).map(x=>isoToThaiDisplay(x.h.holiday_date)).join(", ")} ${fmtHrs(pay.hdHours)} ชม. ×${settings.hwMultMonthly} (฿${fmt(pay.hdPay)})` : "";
+    const compNote = e.compUsedDays ? `ใช้วันหยุดชดเชย ${e.compUsedDays} วัน (ไม่หักเงิน)` : "";
     // รายการหักแบบแยกบรรทัด (ชื่อ + จำนวนเงิน + งวดผ่อน) — เก็บเป็น JSON เพื่อโชว์รายละเอียดในสลิปให้พนักงานเข้าใจว่าถูกหักอะไรบ้าง
     const dedItems = [];
     if(pay.absentDeduct) dedItems.push({label:"หักขาดงาน/ลาเกินโควตา", amount: pay.absentDeduct});
@@ -1702,7 +1751,7 @@ async function approvePayroll(cy){
       other_deductions: pay.lateDeduct + pay.otherDeduct,
       deduction_remarks: [pay.unpaidLeaveDeduct?`หักลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน ฿${fmt(pay.unpaidLeaveDeduct)}`:"", pay.lateDeduct?`หักมาสาย ${pay.lateBillable} นาที (สายรวม ${e.att.lateMin} น. ผ่อนผัน ${settings.lateGraceMinutes} น./วัน) ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
       deduction_items: dedItems.length ? JSON.stringify(dedItems) : null,
-      addition_amount: pay.extra, addition_remarks: [otNote, hwNote, dhNote, bonusNotes].filter(Boolean).join(" · ") || null,
+      addition_amount: pay.extra, addition_remarks: [otNote, hwNote, hdNote, dhNote, compNote, bonusNotes].filter(Boolean).join(" · ") || null,
       net_pay: pay.net, status: "approved"
     };
   });
@@ -1736,6 +1785,8 @@ async function confirmPayroll(cy){
   const p = activePeriod(cy);
   const list = runMembers(cy).filter(e=>e.status!=="terminated");
   if(list.some(e=>e.runCycle!==cy)) await loadCycleStats(cy);   // [รอบ 18.2] งวดหัก/โบนัสต้องเป็นของรอบนี้
+  // [รอบ 18.3] ห้ามยืนยันจ่ายเมื่อยังมี "รอข้อสรุป" (DB บังคับซ้ำด้วย trigger)
+  if(payrollPendingCount(list)){ toast(`⏳ ยังมีรายการ "รอข้อสรุป" ${payrollPendingCount(list)} รายการ — กำหนดวิธีจัดการค่าจ้างของวันหยุดที่เปิดทำงานก่อน`); return; }
   const { error } = await sb.from("payroll_records").update({status:"paid", paid_at: new Date().toISOString()}).eq("cycle", cy).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end).eq("status","approved");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   payrollHistLoaded = false;
@@ -2136,13 +2187,60 @@ async function ensureHolidaysLoaded(){
   if(error){ console.error("loadHolidays", error); toastLoadError("วันหยุด"); }
 }
 // วันหยุดมีผลกับพนักงานคนนี้ไหม (ทั้งบริษัท หรือเฉพาะแผนก/สาขา)
+// [รอบ 18.3] วันหยุดที่บริษัท "เปิดทำงาน" และเลือก "เลื่อนวันหยุด → หยุดชดเชย" = วันทำงานของสมาชิกรายเดือน (ตรงกับ is_day_off_for() ใน DB)
+function holidayAppliesTo(h, e){ return !h.dept || h.dept===(e&&e.dept); }
+function holidayWorkMember(h, e){
+  if(!h || !h.company_works || !e || !holidayAppliesTo(h, e)) return false;
+  if(h.work_scope==="dept") return h.work_dept===e.dept;
+  if(h.work_scope==="list") return (h.work_employee_ids||[]).map(String).includes(String(e.id));
+  return true;
+}
+function holidayMovedFor(h, e){ return !!h && h.treatment==="substitute" && !!e && e.type==="monthly" && holidayWorkMember(h, e); }
 function isHolidayFor(dISO, e){
   return (Array.isArray(holidayRows)?holidayRows:[]).some(h=>
-    h.holiday_date===dISO && (!h.dept || h.dept===(e&&e.dept)) );
+    h.holiday_date===dISO && holidayAppliesTo(h, e) && !holidayMovedFor(h, e) );
 }
 function holidayNameOn(dISO, e){
-  const h = (Array.isArray(holidayRows)?holidayRows:[]).find(h=>h.holiday_date===dISO && (!h.dept || h.dept===(e&&e.dept)));
+  const h = (Array.isArray(holidayRows)?holidayRows:[]).find(h=>h.holiday_date===dISO && holidayAppliesTo(h, e) && !holidayMovedFor(h, e));
   return h ? h.name : null;
+}
+// ชั่วโมงทำงานจริงจากเวลาเข้า–ออก (หักพัก 1 ชม. ถ้าเกิน 5 ชม.) · ไม่มีเวลาออก = ชั่วโมงปกติ
+function attendanceWorkHours(a, normalH){
+  if(!a || !a.check_in_time || !a.check_out_time) return normalH;
+  let h = (new Date(a.check_out_time) - new Date(a.check_in_time))/3600000;
+  if(!(h>0)) return normalH;
+  if(h>5) h -= 1;
+  return Math.round(h*100)/100;
+}
+/* ===== [รอบ 18.3] สิทธิหยุดชดเชย (comp_day_credits) ===== */
+let compCredits = null;  // null = ยังไม่โหลด
+async function ensureCompCreditsLoaded(force){
+  if(!settings.v3Schema){ compCredits = []; return; }
+  if(Array.isArray(compCredits) && !force) return;
+  const { data, error } = await sb.from("comp_day_credits").select("*").order("source_date");
+  if(error){ console.warn("comp_day_credits", error); compCredits = []; return; }
+  compCredits = data||[];
+}
+// สิทธิ์คงเหลือที่ใช้กับวันลา dISO ได้ (วันต้นทางต้องอยู่ก่อนวันลา) · ไม่ระบุวัน = คงเหลือทั้งหมด
+function compBalanceFor(empId, dISO){
+  return (compCredits||[]).filter(c=>String(c.employee_id)===String(empId) && c.status==="available" && (!dISO || c.source_date < dISO))
+    .reduce((s,c)=>s+(Number(c.days)||0),0);
+}
+async function lvCompHintRefresh(){
+  const box = document.getElementById("lvCompHint"); if(!box) return;
+  const t = document.getElementById("lvType")?.value;
+  if(t!=="comp_day"){ box.style.display="none"; return; }
+  const sel = document.getElementById("lvEmp");
+  const empId = sel ? Number(sel.value) : loggedInEmployeeId;
+  box.style.display="block";
+  if(!empId){ box.innerHTML = "เลือกพนักงานเพื่อดูสิทธิหยุดชดเชยคงเหลือ"; return; }
+  await ensureCompCreditsLoaded();
+  const mine = (compCredits||[]).filter(c=>String(c.employee_id)===String(empId));
+  const avail = mine.filter(c=>c.status==="available");
+  const total = avail.reduce((s,c)=>s+(Number(c.days)||0),0);
+  box.innerHTML = `🎟️ <b>สิทธิหยุดชดเชยคงเหลือ ${fmtHrs(total)} วัน</b>${avail.length?` — จากวันหยุด ${avail.map(c=>`${isoToThaiDisplay(c.source_date)}${Number(c.days)!==1?" ("+fmtHrs(c.days)+" วัน)":""}`).join(", ")}`:""}<br>
+    ใบลา 1 วันใช้สิทธิ์ 1 วัน (ใช้สิทธิ์ที่เก่าที่สุดก่อน) · วันที่ลาต้องอยู่<b>หลัง</b>วันหยุดที่มาทำงาน · ไม่หักเงิน ไม่ใช้โควตาลา
+    ${mine.some(c=>c.status==="reserved")?`<br>⏳ รออนุมัติอยู่ ${mine.filter(c=>c.status==="reserved").length} รายการ`:""}`;
 }
 // ===== วันหยุดตามประเพณี: โหลด/เพิ่ม/ลบ (HR กรอกเองเป็นครั้งๆ ตามมติที่ประชุม ไม่ผูกปฏิทินราชการ) =====
 let holidayLoading = false;
@@ -2223,9 +2321,9 @@ function calcPay(e){
   const otherDeduct = runDeductions(e).reduce((s,x)=>s+x.amount,0)
     + advanceDeduct
     + (ov ? (Number(ov.extra_deduction)||0) : 0);
-  const extra = (e.extra||0) + (e.otPay||0) + (e.hwPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);
+  const extra = (e.extra||0) + (e.otPay||0) + (e.hwPay||0) + (e.hdPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);   // [รอบ 18.3] + ค่าทำงานวันหยุดบริษัทที่เปิดทำงาน
   const net = base + extra - absentDeduct - unpaidLeaveDeduct - lateDeduct - otherDeduct;
-  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, hwPay:e.hwPay||0, hwHours:e.hwHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, paidWorkDays, ov, prorate, semiHalf};
+  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, hwPay:e.hwPay||0, hwHours:e.hwHours||0, hdPay:e.hdPay||0, hdHours:e.hdHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, paidWorkDays, ov, prorate, semiHalf};
 }
 function activeDeductions(e){return (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal);}
 const THAI_BANKS = ["KBANK (กสิกรไทย)","SCB (ไทยพาณิชย์)","BBL (กรุงเทพ)","KTB (กรุงไทย)","BAY (กรุงศรีอยุธยา)","TTB (ทหารไทยธนชาต)","GSB (ออมสิน)","BAAC (ธ.ก.ส.)","UOB (ยูโอบี)","CIMB (ซีไอเอ็มบี)"];
@@ -5381,12 +5479,12 @@ function leaveTypes(){
     <h3>🏷️ ประเภทการลา</h3>
     <div class="hint">กำหนดประเภท กติกา และวิธีคิดเงินสำหรับแต่ละประเภท</div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:14px">
-      ${LEAVE_TYPES.map(t=>`
+      ${leaveTypesForSubmit().map(t=>`
       <div style="background:#f8f9fc;border-radius:14px;padding:16px;border-left:4px solid ${t.color}">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
           <div style="width:36px;height:36px;border-radius:10px;background:${t.color};color:#fff;display:grid;place-items:center;font-size:16px">${t.code==='personal'?'👔':t.code==='sick'?'🤒':t.code==='annual'?'🏖️':'📅'}</div>
           <b>${t.name}</b>
-          <span class="pill ${t.paid==='quota'?'green':'gray'}" style="margin-left:auto">${t.paid==='quota'?'ใช้โควตา':'ไม่ได้ค่าจ้าง'}</span>
+          <span class="pill ${t.paid==='quota'?'green':t.paid==='comp'?'amber':'gray'}" style="margin-left:auto">${t.paid==='quota'?'ใช้โควตา':t.paid==='comp'?'ไม่หักเงิน (ใช้สิทธิชดเชย)':'ไม่ได้ค่าจ้าง'}</span>
         </div>
         <div class="hint">${t.desc}</div>
         <button class="btn ghost xs" style="margin-top:10px" onclick="toast('เดโม่: แก้ไขประเภทลา ${t.name}')">✏️ แก้ไข</button>
@@ -5408,13 +5506,14 @@ function leaveSubmit(){
       <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:16px">
         <div class="field" style="grid-column:span 2"><label>ยื่นในนามของ</label>
           ${canPickOthers
-            ? `<select id="lvEmp"><option value="">-- เลือกพนักงาน --</option>${employees.map(e=>`<option value="${e.id}">${e.code} — ${e.name} (${e.dept})</option>`).join("")}</select>`
+            ? `<select id="lvEmp" onchange="lvCompHintRefresh()"><option value="">-- เลือกพนักงาน --</option>${employees.map(e=>`<option value="${e.id}">${e.code} — ${e.name} (${e.dept})</option>`).join("")}</select>`
             : `<input value="${myEmp()?.name||''} (ตัวเอง)" disabled style="background:#f3f5f9;color:var(--muted)">`}
         </div>
-        <div class="field"><label>ประเภทการลา *</label><select id="lvType">${LEAVE_TYPES.map(t=>`<option value="${t.code}">${t.name}</option>`).join("")}</select></div>
+        <div class="field"><label>ประเภทการลา *</label><select id="lvType" onchange="lvCompHintRefresh()">${leaveTypesForSubmit().map(t=>`<option value="${t.code}">${t.name}</option>`).join("")}</select></div>
         <div class="field"><label>ช่วงเวลา</label><select id="lvPeriod"><option>เต็มวัน</option><option>ครึ่งวันเช้า</option><option>ครึ่งวันบ่าย</option></select></div>
         <div class="field"><label>วันที่เริ่มลา *</label><input id="lvDateFrom" type="date" value="${todayISODate()}"></div>
         <div class="field"><label>ถึงวันที่</label><input id="lvDateTo" type="date" value="${todayISODate()}"></div>
+        <div id="lvCompHint" class="hint" style="grid-column:span 2;display:none;padding:10px 12px;background:#fff8ec;border:1px solid #f5d39b;border-radius:10px;line-height:1.8"></div>
         <div class="field" style="grid-column:span 2"><label>เหตุผล</label><textarea id="lvReason" rows="3" placeholder="ระบุเหตุผลการลา..."></textarea></div>
         <div class="field" style="grid-column:span 2"><label>เอกสารแนบ (ถ้ามี)</label>
           <div style="padding:12px;border:2px dashed var(--line);border-radius:10px;text-align:center;font-size:12.5px;color:var(--muted)">📎 กดเลือกไฟล์ (ใบรับรองแพทย์ ฯลฯ) — ยังไม่รองรับในเฟสนี้</div></div>
@@ -5451,7 +5550,12 @@ async function doSubmitLeave(){
   for(let d=new Date(from+"T00:00:00"); isoDate(d)<=to; d.setDate(d.getDate()+1)){
     dates.push(isoDate(d));   // เดินวันด้วยเวลาท้องถิ่น กันวันเลื่อนข้ามเขตเวลา
   }
-  const isPaid = LT(typeCode)?.paid === "quota";
+  const isPaid = LT(typeCode)?.paid === "quota" || LT(typeCode)?.paid === "comp";
+  if(typeCode==="comp_day"){
+    await ensureCompCreditsLoaded(true);
+    const bal = compBalanceFor(empId, dates[0]);
+    if(bal < dates.length){ toast(`สิทธิหยุดชดเชยที่ใช้กับวันที่เลือกได้มี ${fmtHrs(bal)} วัน แต่ยื่น ${dates.length} วัน — ลดจำนวนวัน หรือเลือกวันที่หลังวันหยุดที่มาทำงาน`); return; }
+  }
   const nowISO = new Date().toISOString();
   const rows = dates.map(dateISO=>({
     employee_id: empId, leave_date: dateISO, reason,
@@ -5464,6 +5568,7 @@ async function doSubmitLeave(){
   if(btn){ btn.disabled = false; btn.textContent = "📤 ยื่นใบลา"; }
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
 
+  if(typeCode==="comp_day") await ensureCompCreditsLoaded(true);
   await loadLeaves();
   logAudit("leave","ยื่นใบลา", `${E(empId)?.name||""} · ${LT(typeCode)?.name||typeCode} ${dates.length} วัน (${isoToThaiDisplay(from)}${to!==from?" – "+isoToThaiDisplay(to):""})`);
   updateBadge();
@@ -5901,6 +6006,7 @@ function pyCycles(){
 }
 
 function openCycleSettingsModal(){
+  if(settings.v2p2Schema) return openCycleSettingsModalV2();   // [รอบ 18.3] รอบจ่ายใหม่: ไม่ให้แก้วันตัดรอบเดิม/รอบ Biweekly ที่ไม่ใช้แล้ว
   document.getElementById("modalBox").className="modal";
   document.getElementById("modalBox").innerHTML=`
     <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">📅</div>
@@ -5947,6 +6053,68 @@ function openCycleSettingsModal(){
       <button class="btn primary" onclick="saveCycleSettings()">💾 บันทึก</button>
     </div>`;
   document.getElementById("modalBg").classList.add("show");
+}
+// [รอบ 18.3] ตั้งแต่รอบจ่ายใหม่ (18.2): ช่วงวันของรายเดือน/ครึ่งเดือนเป็นกติกาตายตัว · แก้ได้แค่ชื่อที่แสดง + วันตัดรอบ/วันจ่ายรายสัปดาห์
+//   วันตัดรอบรายเดือนแบบเดิม (28) และรอบ Biweekly แสดงอ่านอย่างเดียว — แก้แล้วจะทำให้งวดก่อน 29 ต.ค. (เช่น จ่าย 31 ต.ค.) เปลี่ยน
+function openCycleSettingsModalV2(){
+  const lbl = k => (settings.cycleLabels?.[k] || CYCLES[k].name).replace(/"/g,'&quot;');
+  const oldCut = Number(settings.monthlyCutoffDay)||25;
+  document.getElementById("modalBox").className="modal";
+  document.getElementById("modalBox").innerHTML=`
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">📅</div>
+      <div><h3 style="font-size:16px">ตั้งค่ารอบการจ่าย</h3><div class="hint">กติกาของแต่ละรอบ (ใช้ทั้งบริษัท)</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      <div class="hint" style="padding:10px 12px;background:#f4f7fb;border-radius:10px;line-height:1.8;margin-bottom:12px">
+        📌 หน้านี้ = <b>กติกาของรอบ</b> (ช่วงวัน · วันจ่าย · ชื่อที่แสดง)<br>
+        📆 สร้างงวดจริง/ยืนยันวันจ่ายของแต่ละงวด และเปลี่ยนรอบจ่ายรายคน อยู่ที่ <a href="javascript:void(0)" onclick="closeModal();go('attendance');setSub('attendance','paysched')">ลงเวลาทำงาน → 📆 รอบจ่าย</a>
+      </div>
+      <b style="font-size:13.5px">ชื่อที่แสดง</b>
+      <div class="grid" style="grid-template-columns:1fr 1fr 1fr;margin:8px 0 14px;gap:10px">
+        <div class="field"><label>รายเดือน</label><input id="cyNameMonthly" value="${lbl('monthly')}"></div>
+        <div class="field"><label>ครึ่งเดือน</label><input id="cyNameSemi" value="${lbl('semimonthly')}"></div>
+        <div class="field"><label>รายสัปดาห์</label><input id="cyNameWeekly" value="${lbl('weekly')}"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;margin-bottom:14px">
+        <div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px"><b>รายเดือน</b> — วันที่ 1 – สิ้นเดือน · จ่ายสิ้นเดือน (ตรงวันหยุด → วันทำงานก่อนหน้า)<div class="hint">เริ่มใช้ ${isoToThaiDisplay(settings.monthlyCalendarFrom)}${hasTransitionPeriod()?' (มีงวดเปลี่ยนผ่าน)':''}</div></div>
+        <div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px"><b>ครึ่งเดือน</b> — งวด A: วันที่ 29 เดือนก่อน – ${settings.semiAEndDay} จ่ายวันที่ ${settings.semiAPayDay} · งวด B: ${settings.semiAEndDay+1} – 28 จ่ายสิ้นเดือน · ฐาน 50/50</div>
+      </div>
+      <b style="font-size:13.5px">รายสัปดาห์ (ค่าจ้างรายวัน)</b>
+      <div class="hint" style="font-size:10.5px;margin:2px 0 6px">เช่น ทำงาน จ–ส จ่ายทุกเสาร์ → ตั้งตัดรอบ + จ่าย = เสาร์</div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;margin:8px 0;gap:12px">
+        <div class="field"><label>ตัดรอบทุกวัน</label><select id="cyWCut">${DOW_TH.map((d,i)=>`<option value="${i}" ${(settings.weeklyCutoffDow??5)===i?'selected':''}>${d}</option>`).join("")}</select></div>
+        <div class="field"><label>จ่ายทุกวัน</label><select id="cyWPay">${DOW_TH.map((d,i)=>`<option value="${i}" ${(settings.weeklyPayDow??1)===i?'selected':''}>${d}</option>`).join("")}</select></div>
+      </div>
+      <details style="margin-top:12px;border:1px solid var(--line);border-radius:10px">
+        <summary style="padding:10px 12px;cursor:pointer;font-size:13px"><b>รอบแบบเดิม</b> <span class="hint">— ใช้กับงวดก่อน ${isoToThaiDisplay(settings.monthlyCalendarFrom)} เท่านั้น (อ่านอย่างเดียว)</span></summary>
+        <div class="hint" style="padding:0 12px 12px;line-height:1.9">
+          รายเดือนแบบเดิม: ${oldCut>=31?'สิ้นเดือน':`ตัดรอบวันที่ ${oldCut} (${oldCut+1} เดือนก่อน – ${oldCut})`} · จ่าย${!settings.monthlyPayDay?'สิ้นเดือน':' วันที่ '+settings.monthlyPayDay}<br>
+          รายวัน / ทุก 2 สัปดาห์ (Biweekly): ยกเลิกการสร้างรอบใหม่แล้ว — ประวัติเดิมยังเปิดดูได้<br>
+          🔒 ไม่เปิดให้แก้ เพราะจะทำให้ตัวเลขงวดเดิม (เช่น งวดที่จ่าย 31 ต.ค.) เปลี่ยน
+        </div>
+      </details>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      <button class="btn primary" onclick="saveCycleSettingsV2()">💾 บันทึก</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function saveCycleSettingsV2(){
+  const cycle_labels = Object.assign({}, settings.cycleLabels||{}, {
+    monthly: document.getElementById("cyNameMonthly").value.trim() || "Monthly Payroll",
+    semimonthly: document.getElementById("cyNameSemi").value.trim() || CYCLES.semimonthly.name,
+    weekly: document.getElementById("cyNameWeekly").value.trim() || "Weekly Payroll"
+  });
+  const payload = { cycle_labels, weekly_cutoff_dow: Number(document.getElementById("cyWCut").value), weekly_pay_dow: Number(document.getElementById("cyWPay").value) };
+  const { error } = await sb.from("settings").update(payload).eq("id",1);
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  logAudit("payroll","ตั้งค่ารอบการจ่าย", `ชื่อ: ${cycle_labels.monthly}/${cycle_labels.semimonthly}/${cycle_labels.weekly} · รายสัปดาห์ตัดรอบ${DOW_TH[payload.weekly_cutoff_dow]} จ่าย${DOW_TH[payload.weekly_pay_dow]}`);
+  await loadSettings();
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
+  missingRows = null;
+  closeModal(); render(currentPage);
+  toast("บันทึกรอบการจ่ายแล้ว ✓");
 }
 async function saveCycleSettings(){
   const cycle_labels = {
@@ -6020,7 +6188,7 @@ function pyAttOT(){
         <td class="num">${e.att.absent||"—"}</td>
         <td class="num">${e.leaveUsed||"—"}</td>
         <td class="num">${e.att.lateMin||"—"}</td>
-        <td class="num">${e.otHours?`<b>${e.otHours} ชม.</b><div style="font-size:10.5px;color:var(--muted)">฿${fmt(e.otPay||0)}</div>`:"—"}${e.hwHours?`<div style="font-size:10.5px;color:var(--green);margin-top:2px">🗓️ วันหยุด ${fmtHrs(e.hwHours)} ชม. ฿${fmt(e.hwPay||0)}</div>`:''}${(e.att&&e.att.dailyHolidayDays)?`<div style="font-size:10.5px;color:var(--muted)">🎌 ค่าจ้างวันหยุด ${e.att.dailyHolidayDays} วัน</div>`:''}</td>
+        <td class="num">${e.otHours?`<b>${e.otHours} ชม.</b><div style="font-size:10.5px;color:var(--muted)">฿${fmt(e.otPay||0)}</div>`:"—"}${e.hwHours?`<div style="font-size:10.5px;color:var(--green);margin-top:2px">🗓️ วันหยุด ${fmtHrs(e.hwHours)} ชม. ฿${fmt(e.hwPay||0)}</div>`:''}${(e.att&&e.att.dailyHolidayDays)?`<div style="font-size:10.5px;color:var(--muted)">🎌 ค่าจ้างวันหยุด ${e.att.dailyHolidayDays} วัน</div>`:''}${e.hdPay?`<div style="font-size:10.5px;color:var(--green)">🏗️ วันหยุดบริษัท ${fmtHrs(e.hdHours)} ชม. ฿${fmt(e.hdPay)}</div>`:''}${(e.hdPending&&e.hdPending.length)?`<div style="margin-top:2px"><span class="pill red" style="font-size:10px">⏳ รอข้อสรุป ${e.hdPending.length}</span></div>`:''}${e.compUsedDays?`<div style="font-size:10.5px;color:var(--muted)">🎟️ หยุดชดเชย ${e.compUsedDays} วัน</div>`:''}</td>
         <td><input type="number" value="${e.extra}" min="0" style="width:110px;padding:6px 10px;border:1.5px solid var(--line);border-radius:8px;text-align:right" onchange="E('${e.id}').extra=Number(this.value)||0;toast('อัปเดตยอดเพิ่มพิเศษแล้ว (จะถูกบันทึกจริงเมื่อกดอนุมัติงวด)')"></td>
       </tr>`).join("")}
     </table>
@@ -6404,6 +6572,7 @@ function checkPayrollReadiness(cy){
     {label:"Leave Sync (ไม่มีใบลาค้างอนุมัติในงวด)", ok: pendLeave.length===0, fix:"leave", sub: pendLeave.length?`${pendLeave.length} ใบรออนุมัติ`:"เรียบร้อย"},
     {label:"OT อนุมัติครบ", ok: pendOt.length===0, fix:"attendance", sub: pendOt.length?`${pendOt.length} รายการรออนุมัติ`:"เรียบร้อย"},
     ...(settings.v2p2Schema ? [{label:"ช่วงข้อมูลต่อเนื่อง ไม่ตกหล่น/ไม่ซ้ำ", ok: !list.some(e=>e.coverage&&(e.coverage.overlap||e.coverage.gapFrom)), fix:"payroll", sub:(()=>{ const bad = list.filter(e=>e.coverage&&(e.coverage.overlap||e.coverage.gapFrom)); return bad.length?`${bad.length} คน: ${bad.slice(0,3).map(e=>e.name).join(", ")}`:"ทุกวันถูกนับครั้งเดียว"; })()}] : []),
+    ...(settings.v3Schema ? [{label:"ไม่มีรายการ \"รอข้อสรุป\" (วันหยุดบริษัทที่เปิดทำงาน)", ok: !list.some(e=>e.hdPending&&e.hdPending.length), fix:"settings", block:true, sub:(()=>{ const n = list.reduce((s,e)=>s+((e.hdPending||[]).length),0); return n?`${n} รายการ — ห้ามยืนยันจ่าย`:"ไม่มีค้าง"; })()}] : []),
     {label:"Salary Structure ครบทุกคน", ok: !issues.some(i=>i.probs.some(x=>x.includes("ฐานเงินเดือน"))), fix:"payroll", sub:""},
     {label:"รายการหักประจำ (ตรวจแล้ว)", ok:true, sub:`${list.reduce((s,e)=>s+activeDeductions(e).length,0)} รายการ active`},
     {label:"โบนัส/ปรับเงิน (ตรวจแล้ว)", ok:true, sub:`${bonusRecords.filter(b=>list.some(e=>String(e.id)===String(b.emp))&&b.status==="รวมงวดนี้").length} รายการรวมงวดนี้`},
@@ -6431,7 +6600,7 @@ function pyApprove(){
       <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:${c.ok?'#e4f7ee':'#fdecec'};border-radius:9px;font-size:13px">
         <span style="color:${c.ok?'var(--green)':'var(--red)'};font-weight:700">${c.ok?'✔':'✘'}</span><b style="flex:1">${c.label}</b>
         <span class="hint" style="font-size:11.5px">${c.sub||''}</span>
-        ${!c.ok&&c.fix?`<button class="btn ghost xs" onclick="${c.fix==='attendance'?"go('attendance');setSub('attendance','review')":c.fix==='leave'?"go('leave')":"setSub('payroll','structure')"}">→ ไปแก้</button>`:''}
+        ${!c.ok&&c.fix?`<button class="btn ghost xs" onclick="${c.fix==='attendance'?"go('attendance');setSub('attendance','review')":c.fix==='leave'?"go('leave')":c.fix==='settings'?"go('settings');setSub('settings','holiday')":"setSub('payroll','structure')"}">→ ไปแก้</button>`:''}
       </div>`).join("")}
     </div>
     ${R.issues.length?`
@@ -6449,8 +6618,10 @@ function pyApprove(){
   </div>`;
 }
 /* Popup ยืนยันก่อนจ่าย: สรุปยอด + แจ้งผลของการล็อก */
+function payrollPendingCount(list){ return (list||[]).reduce((s,e)=>s+((e.hdPending||[]).length),0); }
 function openConfirmPayModal(cy){
   const R = checkPayrollReadiness(cy);
+  const pendN = payrollPendingCount(R.list);
   const total = R.list.reduce((s,e)=>s+calcPay(e).net,0);
   document.getElementById("modalBox").className="modal";
   document.getElementById("modalBox").innerHTML=`
@@ -6472,7 +6643,8 @@ function openConfirmPayModal(cy){
     </div>
     <div class="modal-foot">
       <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
-      <button class="btn green" onclick="closeModal();confirmPayroll('${cy}')">💸 ยืนยันจ่ายและล็อกงวด</button>
+      ${pendN?`<div style="flex:1;color:var(--red);font-size:12.5px;text-align:left">⏳ มีรายการ "รอข้อสรุป" ${pendN} รายการ — ยืนยันจ่ายไม่ได้</div>`:''}
+      <button class="btn green" ${pendN?'disabled':''} onclick="closeModal();confirmPayroll('${cy}')">💸 ยืนยันจ่ายและล็อกงวด</button>
     </div>`;
   document.getElementById("modalBg").classList.add("show");
 }
@@ -7844,7 +8016,7 @@ function stPayroll(){
   const cycleSettingsCard = `
   <div class="card" style="margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:12px"><h3>📅 รอบการจ่าย (Payroll Cycles)</h3>
-    <button class="btn primary sm" style="margin-left:auto" onclick="openCycleSettingsModal()">⚙️ แก้ไขชื่อ/วันตัดรอบ/วันจ่าย</button></div>
+    <button class="btn primary sm" style="margin-left:auto" onclick="openCycleSettingsModal()">⚙️ ${settings.v2p2Schema?'แก้ไขชื่อ / รายสัปดาห์':'แก้ไขชื่อ/วันตัดรอบ/วันจ่าย'}</button></div>
     <div class="hint" style="margin-top:8px;line-height:1.9">
       <b>${CYCLES.monthly.name}:</b> ${CYCLES.monthly.cut} · ${CYCLES.monthly.pay}<br>
       <b>${CYCLES.weekly.name}:</b> ${CYCLES.weekly.cut} · ${CYCLES.weekly.pay}<br>
@@ -8209,10 +8381,11 @@ function stHolidays(){
     <div class="hint" style="line-height:1.85">
       • วันที่อยู่ในรายการนี้ <b>ไม่ถูกนับเป็นวันทำงาน</b> ของพนักงาน — ไม่ขึ้นเตือน "ลืมลงเวลา" และไม่ถูกหักเงินว่าขาดงาน<br>
       • <b>พนักงานรายเดือน</b> — เงินเดือนเท่าเดิม (วันหยุดไม่ถูกหัก)<br>
-      • <b>พนักงานรายวัน</b> — ยึดหลักเดิม คือ <b>ไม่ได้มาทำงาน = ไม่ได้ค่าแรง</b> (แต่ไม่ถือว่าขาดงาน) · ถ้ามาทำงานจริงและลงเวลา ก็ได้ค่าแรงวันนั้นตามปกติ<br>
+      • <b>พนักงานรายวัน</b> — ${settings.v2Schema?`ได้ค่าจ้างวันหยุดบริษัทที่ปิด แม้ไม่ได้มาทำงาน (วันตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)})`:`ไม่ได้มาทำงาน = ไม่ได้ค่าแรง (แต่ไม่ถือว่าขาดงาน)`}<br>
+      ${settings.v3Schema?`• วันที่บริษัทต้อง<b>เปิดทำงาน</b> — กด "🏗️ เปิดทำงาน" ที่แถววันหยุดนั้น เลือกกลุ่มคน และวิธีจัดการค่าจ้าง (เลื่อนวันหยุด → หยุดชดเชย หรือ จ่ายค่าทำงานวันหยุด)<br>`:''}
       • มีผลกับ <b>ทุกคนทั้งบริษัท</b> เว้นแต่จะเลือกขอบเขตเป็นเฉพาะแผนก
     </div>
-    <div style="margin-top:10px"><span class="pill amber">วันหยุดที่ยังไม่ถึง ${upcoming} วัน</span></div>
+    <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><span class="pill amber">วันหยุดที่ยังไม่ถึง ${upcoming} วัน</span>${holidayCounterPills(rows, y)}</div>
   </div>
   ${form}
   <div class="card">
@@ -8225,16 +8398,218 @@ function stHolidays(){
     ${!ready?'<div class="hint" style="text-align:center;padding:24px">⏳ กำลังโหลด...</div>':
       groups.length===0?'<div class="hint" style="text-align:center;padding:24px">ยังไม่มีวันหยุดในปีนี้ — เพิ่มได้จากฟอร์มด้านบน</div>':`
     <table style="margin-top:12px">
-      <tr><th>ชื่อวันหยุด</th><th>ช่วงวันที่</th><th class="num">จำนวนวัน</th><th>ขอบเขต</th><th style="text-align:center"></th></tr>
+      <tr><th>ชื่อวันหยุด</th><th>ช่วงวันที่</th><th class="num">จำนวนวัน</th><th>ขอบเขต</th>${settings.v3Schema?'<th>เปิดทำงาน</th>':''}<th style="text-align:center"></th></tr>
       ${groups.map(g=>`<tr>
         <td><b>${g.name}</b></td>
         <td style="white-space:nowrap">${g.from===g.to?isoToThaiDisplay(g.from):isoToThaiDisplay(g.from)+" – "+isoToThaiDisplay(g.to)}</td>
         <td class="num">${g.days}</td>
         <td>${g.dept?'<span class="pill blue">เฉพาะ '+g.dept+'</span>':'<span class="pill gray">ทั้งบริษัท</span>'}</td>
+        ${settings.v3Schema?`<td>${holidayWorkCell(g, canEdit)}</td>`:''}
         <td style="text-align:center">${canEdit?`<button class="btn danger xs" onclick="delHolidayGroup('${g.ids.join(",")}','${g.name.replace(/'/g,"\\'")}')">🗑 ลบ</button>`:''}</td>
       </tr>`).join("")}
     </table>`}
+  </div>
+  ${settings.v3Schema ? holidayWorksPanel(rows, y, canEdit) : ''}`;
+}
+/* ===== [รอบ 18.3] วันหยุดบริษัทที่เปิดทำงาน · หยุดชดเชย (หน้าจอ HR/Super Admin) ===== */
+let holidayWorksOpen = { works:true, credits:false };
+function holidayCounterPills(rows, y){
+  const yr = String(y);
+  const declared = new Set(rows.filter(h=>h.holiday_date.slice(0,4)===yr && !h.dept && h.holiday_type!=="special").map(h=>h.holiday_date));
+  const may1 = declared.has(`${yr}-05-01`);
+  const n = declared.size;
+  return `<span class="pill ${n>=13?'green':'red'}">ประกาศแล้ว ${n} / 13 วัน (ทั้งบริษัท)</span><span class="pill ${may1?'green':'red'}">${may1?'✓':'✗'} 1 พ.ค. ${y+543}</span>`;
+}
+function holidayTreatLabel(h){
+  if(!h.company_works) return "";
+  if(h.treatment==="substitute") return `<span class="pill green">เลื่อนวันหยุด → หยุดชดเชย</span>`;
+  if(h.treatment==="pay") return `<span class="pill blue">จ่ายค่าทำงานวันหยุด</span>`;
+  return `<span class="pill red">รอข้อสรุป</span>`;
+}
+function holidayScopeLabel(h){
+  if(h.work_scope==="dept") return `แผนก ${h.work_dept||"—"}`;
+  if(h.work_scope==="list") return `${(h.work_employee_ids||[]).length} คน (${(h.work_employee_ids||[]).map(id=>E(id)?.name||("#"+id)).slice(0,3).join(", ")}${(h.work_employee_ids||[]).length>3?" ...":""})`;
+  return "ทุกคน";
+}
+function holidayWorkCell(g, canEdit){
+  const rows = (holidayRows||[]).filter(h=>g.ids.includes(h.id));
+  const works = rows.filter(h=>h.company_works);
+  const today = todayISODate();
+  const may1Only = rows.every(h=>h.holiday_date.slice(5)==="05-01");
+  const chips = works.map(h=>`<div style="font-size:11.5px;margin-bottom:3px">🏗️ ${isoToThaiDisplay(h.holiday_date)} · ${holidayScopeLabel(h)} ${holidayTreatLabel(h)}</div>`).join("");
+  const canOpen = canEdit && (works.length || (!may1Only && rows.some(h=>h.holiday_date>today)));
+  return `${chips}${canOpen?`<button class="btn ghost xs" onclick="openHolidayWorkModal('${g.ids.join(",")}')">${works.length?'⚙️ แก้ไข/วิธีจัดการค่าจ้าง':'🏗️ เปิดทำงาน'}</button>`:(works.length?'':'<span class="hint">—</span>')}`;
+}
+function holidayWorksPanel(rows, y, canEdit){
+  const works = rows.filter(h=>h.company_works && h.holiday_date.slice(0,4)===String(y));
+  const ready = Array.isArray(compCredits);
+  if(!ready) ensureCompCreditsLoaded().then(()=>{ if(currentPage==="settings") render("settings"); });
+  const credits = (compCredits||[]).filter(c=>c.source_date.slice(0,4)===String(y));
+  const sumStyle = 'display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:10px;cursor:pointer;list-style:none';
+  const stTh = {available:'<span class="pill green">ใช้ได้</span>', reserved:'<span class="pill amber">รออนุมัติใบลา</span>', used:'<span class="pill blue">ใช้แล้ว</span>', void:'<span class="pill gray">ยกเลิก</span>'};
+  const pendingN = works.filter(h=>!h.treatment && h.holiday_date<=todayISODate()).length;
+  return `
+  <div class="card" style="margin-top:16px">
+    <h3>🏗️ วันเปิดทำงานในวันหยุด และหยุดชดเชย</h3>
+    <div class="hint">กดหัวข้อเพื่อเปิด/ปิด · ปี ${y+543}</div>
+    <details ${holidayWorksOpen.works?'open':''} ontoggle="holidayWorksOpen.works=this.open" style="margin-top:10px;border:1px solid var(--line);border-radius:12px;background:#fff">
+      <summary style="${sumStyle}"><span style="font-size:15px">▸</span><div style="flex:1"><b>วันเปิดทำงาน ${works.length} วัน</b><div class="hint">ติ๊ก/ยกเลิก/เปลี่ยนกลุ่มได้ถึงก่อนวันนั้น · วิธีจัดการค่าจ้างเปลี่ยนได้จนกว่างวดที่เกี่ยวข้องจะยืนยันจ่าย</div></div>${pendingN?`<span class="pill red">รอข้อสรุป ${pendingN}</span>`:''}</summary>
+      <div style="padding:0 14px 14px">
+      ${works.length===0?'<div class="hint" style="padding:10px 0">ยังไม่มีวันหยุดที่เปิดทำงานในปีนี้ — กด "🏗️ เปิดทำงาน" ที่แถววันหยุดในตารางด้านบน</div>':`
+      <table><tr><th>วันที่</th><th>วันหยุด</th><th>กลุ่มที่ทำงาน</th><th>เหตุผล</th><th>วิธีจัดการค่าจ้าง</th><th class="num">สิทธิ์ชดเชย</th><th></th></tr>
+      ${works.map(h=>{ const cs = (compCredits||[]).filter(c=>String(c.source_holiday_id)===String(h.id) && c.status!=="void");
+        return `<tr>
+        <td style="white-space:nowrap">${isoToThaiDisplay(h.holiday_date)}</td><td>${h.name}</td><td style="font-size:12px">${holidayScopeLabel(h)}</td>
+        <td style="font-size:12px">${h.work_reason||"—"}</td>
+        <td>${holidayTreatLabel(h)}${h.treatment==="substitute"&&h.treatment_verified_by?`<div class="hint" style="font-size:10.5px">ตรวจเงื่อนไขแล้ว: ${E(h.treatment_verified_by)?.name||"#"+h.treatment_verified_by}${h.treatment_verified_at?" · "+isoToThaiDisplay(String(h.treatment_verified_at).slice(0,10)):""}</div>`:''}${h.daily_resolution?`<div class="hint" style="font-size:10.5px">รายวัน: ${h.daily_resolution}</div>`:''}</td>
+        <td class="num">${h.treatment==="substitute"?`${cs.length} คน`:'—'}</td>
+        <td>${canEdit?`<button class="btn ghost xs" onclick="openHolidayWorkModal('${h.id}')">⚙️</button>`:''}</td></tr>`; }).join("")}
+      </table>`}
+      </div>
+    </details>
+    <details ${holidayWorksOpen.credits?'open':''} ontoggle="holidayWorksOpen.credits=this.open" style="margin-top:10px;border:1px solid var(--line);border-radius:12px;background:#fff">
+      <summary style="${sumStyle}"><span style="font-size:15px">▸</span><div style="flex:1"><b>สิทธิหยุดชดเชย ${credits.filter(c=>c.status==="available").reduce((s,c)=>s+Number(c.days||0),0)} วันคงเหลือ</b><div class="hint">สร้างอัตโนมัติให้รายเดือนที่ลงเวลาจริงในวันที่ "เลื่อนวันหยุด" (ทุกคืน 02:30 หรือกดปุ่มด้านล่าง) · พนักงานใช้ผ่านใบลา "หยุดชดเชย"</div></div></summary>
+      <div style="padding:0 14px 14px">
+      ${canEdit?`<button class="btn ghost sm" onclick="runGenerateCompCredits()">🔄 สร้างสิทธิ์จากการลงเวลาตอนนี้</button>`:''}
+      ${!ready?'<div class="hint" style="padding:10px 0">⏳ กำลังโหลด...</div>':credits.length===0?'<div class="hint" style="padding:10px 0">ยังไม่มีสิทธิหยุดชดเชยในปีนี้</div>':`
+      <table style="margin-top:10px"><tr><th>พนักงาน</th><th>จากวันหยุด</th><th class="num">วัน</th><th>สถานะ</th><th>ใช้วันที่</th><th>หมายเหตุ</th><th></th></tr>
+      ${credits.map(c=>`<tr>
+        <td>${E(c.employee_id)?.name||("#"+c.employee_id)}</td><td style="white-space:nowrap">${isoToThaiDisplay(c.source_date)}</td>
+        <td class="num">${canEdit&&c.status==="available"?`<select style="width:70px" onchange="updateCompCredit(${c.id},{days:Number(this.value)})"><option value="1" ${Number(c.days)===1?'selected':''}>1</option><option value="0.5" ${Number(c.days)===0.5?'selected':''}>0.5</option></select>`:fmtHrs(c.days)}</td>
+        <td>${stTh[c.status]||c.status}</td><td>${c.used_date?isoToThaiDisplay(c.used_date):'—'}</td><td style="font-size:11.5px">${c.note||''}</td>
+        <td>${canEdit&&c.status==="available"?`<button class="btn danger xs" onclick="updateCompCredit(${c.id},{status:'void'},'ยกเลิกสิทธิ์นี้?')">ยกเลิก</button>`:canEdit&&c.status==="void"?`<button class="btn ghost xs" onclick="updateCompCredit(${c.id},{status:'available'})">คืนสิทธิ์</button>`:''}</td>
+      </tr>`).join("")}</table>`}
+      </div>
+    </details>
   </div>`;
+}
+async function runGenerateCompCredits(holidayId){
+  const { data, error } = await sb.rpc("generate_comp_credits", { p_holiday_id: holidayId || null });
+  if(error){ toast("สร้างสิทธิ์ไม่สำเร็จ: "+error.message); return; }
+  await ensureCompCreditsLoaded(true);
+  logAudit("settings","สร้างสิทธิหยุดชดเชย", `${Number(data)||0} รายการใหม่`);
+  if(currentPage==="settings") render("settings");
+  if(!holidayId) toast(`สร้างสิทธิหยุดชดเชยใหม่ ${Number(data)||0} รายการ ✓`);
+}
+async function updateCompCredit(id, patch, ask){
+  if(ask && !confirm(ask)) return;
+  const { data, error } = await sb.from("comp_day_credits").update(patch).eq("id", id).select();
+  if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  if(!data || !data.length){ toast("บันทึกไม่สำเร็จ (ไม่มีสิทธิ์แก้รายการนี้)"); return; }
+  const c = data[0];
+  logAudit("settings","แก้ไขสิทธิหยุดชดเชย", `${E(c.employee_id)?.name||c.employee_id} · วันหยุด ${isoToThaiDisplay(c.source_date)} · ${JSON.stringify(patch)}`);
+  await ensureCompCreditsLoaded(true);
+  render("settings");
+}
+let hwModalState = null;
+function openHolidayWorkModal(idsCsv){
+  const ids = String(idsCsv).split(",").map(Number).filter(Boolean);
+  const rows = (holidayRows||[]).filter(h=>ids.includes(h.id)).sort((a,b)=>a.holiday_date<b.holiday_date?-1:1);
+  if(!rows.length) return;
+  const today = todayISODate();
+  const pick = rows.find(h=>h.company_works) || rows.find(h=>h.holiday_date>today && h.holiday_date.slice(5)!=="05-01") || rows[0];
+  hwModalState = { ids, id: pick.id };
+  renderHolidayWorkModal();
+  document.getElementById("modalBg").classList.add("show");
+}
+function hwFormValues(){
+  const g = id => document.getElementById(id);
+  const scope = (document.querySelector('input[name="hwScope"]:checked')||{}).value || "all";
+  return {
+    company_works: !!(g("hwWorks") && g("hwWorks").checked),
+    work_scope: scope,
+    work_dept: scope==="dept" ? (g("hwDept")?.value||null) : null,
+    work_employee_ids: scope==="list" ? Array.from(document.querySelectorAll('input[name="hwEmp"]:checked')).map(x=>Number(x.value)) : null,
+    work_reason: (g("hwReason")?.value||"").trim() || null,
+    treatment: ((document.querySelector('input[name="hwTreat"]:checked')||{}).value) || null,
+    treatment_note: (g("hwTreatNote")?.value||"").trim() || null,
+    verified: !!(g("hwVerified") && g("hwVerified").checked),
+    daily_resolution: (g("hwDaily")?.value||"").trim() || null
+  };
+}
+function renderHolidayWorkModal(keep){
+  const st = hwModalState; if(!st) return;
+  const rows = (holidayRows||[]).filter(h=>st.ids.includes(h.id)).sort((a,b)=>a.holiday_date<b.holiday_date?-1:1);
+  const h = rows.find(x=>x.id===st.id) || rows[0];
+  const v = keep || { company_works:h.company_works, work_scope:h.work_scope||"all", work_dept:h.work_dept, work_employee_ids:h.work_employee_ids||[], work_reason:h.work_reason, treatment:h.treatment, treatment_note:h.treatment_note, verified: h.treatment==="substitute", daily_resolution:h.daily_resolution };
+  const today = todayISODate();
+  const locked = h.holiday_date <= today;          // ผ่านวันแล้ว → กลุ่ม/การติ๊กล็อก
+  const may1 = h.holiday_date.slice(5)==="05-01";
+  const depts = Array.from(new Set(employees.map(e=>e.dept).filter(d=>d && d!=="—"))).sort();
+  const people = employees.filter(e=>e.status!=="terminated" && holidayAppliesTo(h, e));
+  const members = people.filter(e=>holidayWorkMember(Object.assign({}, h, v, {company_works:true}), e));
+  const hasDaily = members.some(e=>e.type!=="monthly");
+  const law = canSeePayroll();
+  document.getElementById("modalBox").className = "modal";
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modal-head"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">🏗️</div>
+      <div><h3 style="font-size:16px">เปิดทำงานในวันหยุด — ${h.name}</h3><div class="hint">${rows.length>1?'เลือกวันที่ด้านล่าง · ':''}ตั้งทีละวัน</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <div class="modal-body">
+      ${rows.length>1?`<div class="field"><label>วันที่</label><select onchange="hwModalState.id=Number(this.value);renderHolidayWorkModal()">${rows.map(r=>`<option value="${r.id}" ${r.id===h.id?'selected':''}>${isoToThaiDisplay(r.holiday_date)}${r.company_works?' · 🏗️ เปิดทำงาน':''}</option>`).join("")}</select></div>`:`<div class="hint" style="margin-bottom:8px">วันที่ <b>${isoToThaiDisplay(h.holiday_date)}</b></div>`}
+      ${may1?`<div class="card" style="box-shadow:none;background:#fff1f1;border:1px solid #f3b4b4;margin:10px 0">⛔ 1 พ.ค. ตั้งเป็นวันเปิดทำงานไม่ได้</div>`:`
+      <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:14px;cursor:pointer"><input type="checkbox" id="hwWorks" ${v.company_works?'checked':''} ${locked?'disabled':''} onchange="renderHolidayWorkModal(hwFormValues())"> <b>บริษัทเปิดทำงานวันนี้</b></label>
+      ${locked?`<div class="hint" style="margin-bottom:8px">🔒 ผ่านวันนั้นแล้ว — การเปิดทำงานและกลุ่มคนถูกล็อก (เปลี่ยนได้เฉพาะวิธีจัดการค่าจ้าง)</div>`:''}
+      ${v.company_works?`
+      <div class="field"><label>กลุ่มที่ต้องมาทำงาน</label>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
+          ${[["all","ทุกคน"],["dept","เฉพาะแผนก"],["list","เลือกรายชื่อ"]].map(([k,l])=>`<label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="hwScope" value="${k}" ${v.work_scope===k?'checked':''} ${locked?'disabled':''} onchange="renderHolidayWorkModal(hwFormValues())"> ${l}</label>`).join("")}
+        </div></div>
+      ${v.work_scope==="dept"?`<div class="field"><label>แผนก</label><select id="hwDept" ${locked?'disabled':''} onchange="renderHolidayWorkModal(hwFormValues())">${depts.map(d=>`<option value="${d}" ${v.work_dept===d?'selected':''}>${d}</option>`).join("")}</select></div>`:''}
+      ${v.work_scope==="list"?`<div style="max-height:170px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0">${people.map(e=>`<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:2px 0;cursor:pointer"><input type="checkbox" name="hwEmp" value="${e.id}" ${(v.work_employee_ids||[]).map(String).includes(String(e.id))?'checked':''} ${locked?'disabled':''} onchange="renderHolidayWorkModal(hwFormValues())"> ${e.code} — ${e.name} <span class="hint">${e.dept}${e.type!=="monthly"?" · รายวัน":""}</span></label>`).join("")}</div>`:''}
+      <div class="hint" style="margin:4px 0 10px">กลุ่มนี้ ${members.length} คน${hasDaily?` (รายวัน ${members.filter(e=>e.type!=="monthly").length} คน)`:''} · คนที่ไม่อยู่ในกลุ่ม = วันหยุดตามปกติ · วันนั้นพนักงานลงเวลาเองตามปกติ</div>
+      <div class="field"><label>เหตุผลที่เปิดทำงาน</label><textarea id="hwReason" rows="2" ${locked?'disabled':''} placeholder="เช่น ต้องส่งมอบงานติดตั้งให้ลูกค้าตามกำหนด">${v.work_reason||''}</textarea></div>
+      <div style="border-top:1px solid var(--line);margin:12px 0 0;padding-top:12px">
+        <b style="font-size:13.5px">วิธีจัดการค่าจ้างของวันนี้</b>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;font-size:13px">
+          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="" ${!v.treatment?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>ยังไม่เลือก</b> — รายการของคนที่มาทำงานเป็น "รอข้อสรุป" ไม่คิดเงินเพิ่ม และ<b>ยืนยันจ่ายงวดที่ครอบคลุมวันนี้ไม่ได้</b></span></label>
+          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="substitute" ${v.treatment==="substitute"?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>เลื่อนวันหยุด → หยุดชดเชย</b> — รายเดือนที่มาทำงานได้ค่าจ้างปกติ ไม่จ่ายเพิ่ม + ได้สิทธิหยุดชดเชย 1 วัน (วันนั้นนับเป็นวันทำงาน: สาย/ขาด/OT ×${settings.otMultWorkday} ตามปกติ)</span></label>
+          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="pay" ${v.treatment==="pay"?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>จ่ายค่าทำงานวันหยุด</b> — รายเดือนได้เพิ่ม ×${settings.hwMultMonthly} ของค่าจ้างต่อชั่วโมง ตามชั่วโมงที่ลงเวลา (ไม่เกินชั่วโมงปกติ) · เกินเวลาให้ยื่น OT วันหยุด ×${settings.otMultHoliday}</span></label>
+        </div>
+        ${v.treatment==="substitute"?`<div class="card" style="box-shadow:none;margin-top:10px;background:#f4fbf7;border:1px solid #bfe8d2">
+          <label style="display:flex;gap:8px;cursor:pointer;font-size:13px"><input type="checkbox" id="hwVerified" ${v.verified?'checked':''}> <b>ตรวจเงื่อนไขแล้ว</b> — การเลื่อนวันหยุดนี้ทำได้ตามลักษณะงาน/ข้อตกลงกับพนักงาน (บันทึกชื่อผู้ตรวจและเวลาให้อัตโนมัติ)</label>
+          ${law?`<div class="hint" style="margin-top:6px;font-size:11px">อ้างอิง พ.ร.บ.คุ้มครองแรงงาน ม.29 วรรคท้าย — เลื่อนวันหยุดตามประเพณีไปหยุดวันอื่นได้เฉพาะงานตามลักษณะที่กำหนด หรือมีข้อตกลงกับลูกจ้าง · ถ้าไม่เข้าเงื่อนไข ให้เลือก "จ่ายค่าทำงานวันหยุด"</div>`:''}
+          <div class="field" style="margin-top:8px"><label>หลักฐาน / ข้อตกลงกับพนักงาน *</label><textarea id="hwTreatNote" rows="2" placeholder="เช่น หนังสือตกลงเลื่อนวันหยุด ลงชื่อพนักงานครบ 17 ต.ค. 69">${v.treatment_note||''}</textarea></div>
+        </div>`:`<input type="hidden" id="hwTreatNote" value="${(v.treatment_note||'').replace(/"/g,'&quot;')}">`}
+        ${hasDaily?`<div class="field" style="margin-top:10px"><label>ข้อสรุปค่าจ้างพนักงานรายวันในกลุ่มนี้ (ยังไม่มีสูตรอัตโนมัติ — ใส่ยอดผ่าน Override ในหน้าทำจ่าย)</label><textarea id="hwDaily" rows="2" placeholder="ว่าง = รายวันที่มาทำงานเป็น &quot;รอข้อสรุป&quot;">${v.daily_resolution||''}</textarea></div>`:''}
+      </div>`:''}`}
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
+      ${may1?'':`<button class="btn primary" onclick="saveHolidayWork()">💾 บันทึก</button>`}
+    </div>`;
+}
+async function saveHolidayWork(){
+  const st = hwModalState; if(!st) return;
+  const h = (holidayRows||[]).find(x=>x.id===st.id); if(!h) return;
+  const v = hwFormValues();
+  const locked = h.holiday_date <= todayISODate();
+  const payload = {};
+  if(!locked){
+    Object.assign(payload, { company_works:v.company_works, work_scope:v.work_scope, work_dept:v.work_dept, work_employee_ids:v.work_employee_ids, work_reason:v.work_reason });
+    if(v.company_works && v.work_scope==="dept" && !v.work_dept){ toast("เลือกแผนก"); return; }
+    if(v.company_works && v.work_scope==="list" && !(v.work_employee_ids||[]).length){ toast("เลือกรายชื่ออย่างน้อย 1 คน"); return; }
+    if(v.company_works && !v.work_reason){ toast("กรุณาใส่เหตุผลที่เปิดทำงาน"); return; }
+  } else if(!h.company_works){ toast("วันนี้ผ่านไปแล้ว — ตั้งเป็นวันเปิดทำงานไม่ได้"); return; }
+  if(v.company_works || (locked && h.company_works)){
+    if(v.treatment==="substitute" && (!v.verified || !v.treatment_note)){ toast("เลือก \"เลื่อนวันหยุด\" ต้องติ๊ก \"ตรวจเงื่อนไขแล้ว\" และใส่หลักฐาน/ข้อตกลง"); return; }
+    Object.assign(payload, { treatment:v.treatment, treatment_note:v.treatment_note, daily_resolution:v.daily_resolution });
+    if(v.treatment==="substitute" && h.treatment!=="substitute"){ payload.treatment_verified_by = loggedInEmployeeId; payload.treatment_verified_at = new Date().toISOString(); }   // DB บันทึกผู้ตรวจซ้ำเป็นคนที่ล็อกอินเสมอ
+    if(v.treatment!=="substitute"){ payload.treatment_verified_by = null; payload.treatment_verified_at = null; }
+  }
+  const { data, error } = await sb.from("holidays").update(payload).eq("id", h.id).select();
+  if(error){ toast("บันทึกไม่สำเร็จ: "+error.message); return; }
+  if(!data || !data.length){ toast("บันทึกไม่สำเร็จ (ไม่มีสิทธิ์แก้วันหยุด)"); return; }
+  const r = data[0];
+  logAudit("settings", "ตั้งค่าวันเปิดทำงานในวันหยุด", `${h.name} ${isoToThaiDisplay(h.holiday_date)} · ${r.company_works?`เปิดทำงาน (${holidayScopeLabel(r)}) · ${r.treatment==="substitute"?"เลื่อนวันหยุด → หยุดชดเชย":r.treatment==="pay"?"จ่ายค่าทำงานวันหยุด":"รอข้อสรุป"}`:"ไม่เปิดทำงาน"}`);
+  closeModal();
+  await reloadHolidays();
+  if(r.treatment==="substitute" && r.holiday_date<=todayISODate()) await runGenerateCompCredits(r.id);
+  else await ensureCompCreditsLoaded(true);
+  missingRows = null;
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
+  render("settings");
+  toast("บันทึกวันเปิดทำงานแล้ว ✓");
 }
 async function addHolidayRange(){
   const name = document.getElementById("hName").value.trim();
@@ -8411,8 +8786,9 @@ function stChan(){
           <div><b>LINE Messaging API</b><div class="hint">Official Account · ส่งข้อความอัตโนมัติ</div></div>
           <label style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" ${settings.channels.line?'checked':''} onchange="saveSettingsFields({channel_line:this.checked}, this.checked?'เปิดช่องทาง LINE แล้ว ✓':'ปิดช่องทาง LINE แล้ว', 'เปิด/ปิดช่องทางแจ้งเตือน', 'LINE: '+(this.checked?'เปิด':'ปิด'))"> เปิดใช้</label>
         </div>
-        <div class="field"><label>Channel Access Token</label><input id="lineToken" type="password" value="${settings.lineChannelToken||''}" placeholder="ยาวๆ จาก LINE Developers Console" style="font-family:monospace;font-size:11.5px"></div>
-        <div class="field" style="margin-top:8px"><label>Channel Secret</label><input id="lineSecret" type="password" value="${settings.lineChannelSecret||''}" placeholder="Channel secret" style="font-family:monospace;font-size:11.5px"></div>
+        ${lineCredStatusHtml()}
+        <div class="field"><label>Channel Access Token</label><input id="lineToken" type="password" value="" autocomplete="off" placeholder="${(settings.lineCredStatus&&settings.lineCredStatus.has_token)?'เว้นว่าง = ใช้ค่าเดิม · วางค่าใหม่เพื่อเปลี่ยน':'ยาวๆ จาก LINE Developers Console'}" style="font-family:monospace;font-size:11.5px"></div>
+        <div class="field" style="margin-top:8px"><label>Channel Secret</label><input id="lineSecret" type="password" value="" autocomplete="off" placeholder="${(settings.lineCredStatus&&settings.lineCredStatus.has_secret)?'เว้นว่าง = ใช้ค่าเดิม':'Channel secret'}" style="font-family:monospace;font-size:11.5px"></div>
         <button class="btn green sm" style="margin-top:10px" onclick="saveLineCredentials()">💾 บันทึกค่า LINE</button>
         <div class="field" style="margin-top:12px"><label>Webhook URL (ไปวางใน LINE Developers Console)</label>
           <div style="display:flex;gap:6px"><input value="${webhookUrl}" readonly style="font-family:monospace;font-size:10.5px;flex:1" onclick="this.select()"><button class="btn ghost sm" type="button" onclick="navigator.clipboard.writeText('${webhookUrl}');toast('คัดลอกแล้ว ✓')">📋</button></div>
@@ -8455,11 +8831,28 @@ function stChan(){
     </div>
   </div>`;
 }
+// [รอบ 18.3] ค่า token/secret ไม่ถูกส่งลงหน้าเว็บอีกแล้ว — แสดงแค่ "ตั้งค่าแล้ว (ลงท้าย xxxx)"
+let lineCredLoading = false;
+function lineCredStatusHtml(){
+  if(!settings.lineCredStatus && settings.secureSettings && !lineCredLoading){
+    lineCredLoading = true;
+    sb.rpc("line_credentials_status").then(r=>{ lineCredLoading = false; settings.lineCredStatus = (!r.error && r.data && typeof r.data==="object" && !Array.isArray(r.data)) ? r.data : {}; if(currentPage==="settings") render("settings"); });
+  }
+  const st = settings.lineCredStatus;
+  if(!st) return `<div class="hint" style="margin-bottom:8px">⏳ กำลังตรวจสถานะค่า LINE...</div>`;
+  const pill = (ok, tail, label) => ok ? `<span class="pill green">✓ ${label} ตั้งค่าแล้ว${tail?` (ลงท้าย ••••${tail})`:""}</span>` : `<span class="pill gray">${label} ยังไม่ได้ตั้ง</span>`;
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${pill(st.has_token, st.token_tail, "Token")}${pill(st.has_secret, st.secret_tail, "Secret")}</div>
+    <div class="hint" style="margin-bottom:8px;font-size:11px">🔒 ระบบไม่แสดงค่าจริงบนหน้าจอ · ช่องว่าง = ใช้ค่าเดิม</div>`;
+}
 async function saveLineCredentials(){
   const token = document.getElementById("lineToken").value.trim();
   const secret = document.getElementById("lineSecret").value.trim();
-  await saveSettingsFields({ line_channel_access_token: token||null, line_channel_secret: secret||null },
-    "บันทึกค่า LINE แล้ว ✓", "ตั้งค่า LINE Messaging API", token?"ตั้งค่า Token/Secret แล้ว":"ล้างค่า LINE");
+  if(!token && !secret){ toast("ยังไม่ได้วางค่าใหม่ — ค่าเดิมยังใช้งานอยู่"); return; }
+  const payload = {};
+  if(token) payload.line_channel_access_token = token;
+  if(secret) payload.line_channel_secret = secret;
+  settings.lineCredStatus = null;
+  await saveSettingsFields(payload, "บันทึกค่า LINE แล้ว ✓", "ตั้งค่า LINE Messaging API", [token?"เปลี่ยน Token":"", secret?"เปลี่ยน Secret":""].filter(Boolean).join(" · "));
 }
 async function saveLiffSettings(){
   const liffId = document.getElementById("liffId").value.trim();
