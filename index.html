@@ -961,6 +961,10 @@ function weeklyOffDowsFor(e){
   return [THAI_DAYS[settings.weeklyHoliday] ?? 0];
 }
 // "company_holiday" = วันหยุดบริษัท · "weekly_off" = วันหยุดประจำสัปดาห์ของคนนี้ · null = วันทำงาน (ตรงกับ is_day_off_for() ใน DB)
+// [รอบ 26] บริษัทปิดกรณีพิเศษ (holiday_type "special") — รายเดือนได้ค่าจ้างปกติ ไม่หัก ไม่เพิ่ม · รายวันไม่ได้ค่าจ้าง
+function specialClosureOn(dISO, e){
+  return (Array.isArray(holidayRows)?holidayRows:[]).some(h=>h.holiday_date===dISO && h.holiday_type==="special" && holidayAppliesTo(h, e) && !holidayMovedFor(h, e));
+}
 function dayOffKindFor(e, dISO){
   if(!dISO) return null;
   if(isHolidayFor(dISO, e)) return "company_holiday";
@@ -979,6 +983,10 @@ function otRequestPay(e, o){
 // ค่าทำงานวันหยุด 1 รายการ (ยังไม่ปัด) — รายวันในวันหยุดบริษัทได้ค่าจ้างวันหยุดในฐานเงินเดือนแล้ว จึงบวกเพิ่มอีก (ตัวคูณรายวัน − 1)
 function holidayWorkAmount(e, r){
   const h = hourlyRateV2(e);
+  if(r.day_kind==="company_holiday" && specialClosureOn(r.work_date, e) && !(Array.isArray(holidayRows)?holidayRows:[]).some(x=>x.holiday_date===r.work_date && x.holiday_type!=="special" && holidayAppliesTo(x, e))){
+    // [รอบ 26] บริษัทปิดกรณีพิเศษแต่มาทำงาน — ไม่ได้เงินเพิ่ม: รายเดือน 0 (ได้เงินเดือนปกติอยู่แล้ว) · รายวันค่าแรงปกติ · ชั่วโมงเกินคิด OT วันทำงาน
+    return (e.type==="monthly" ? 0 : (Number(r.normal_hours)||0)*h) + (e.otExempt ? 0 : (Number(r.ot_hours)||0)*h*settings.otMultWorkday);
+  }
   const mult = e.type==="monthly" ? settings.hwMultMonthly
     : (r.day_kind==="company_holiday" ? settings.hwMultDaily - 1 : settings.hwMultDaily);
   return (Number(r.normal_hours)||0)*h*mult + (e.otExempt ? 0 : (Number(r.ot_hours)||0)*h*settings.otMultHoliday);   // [รอบ 23] ไม่รับ OT = ส่วน OT เป็น 0
@@ -1666,6 +1674,7 @@ async function loadCycleStats(cy){
     // [รอบ 18.1] ค่าจ้างรายวัน: วันหยุดบริษัท (ที่ปิด) ตั้งแต่วันเริ่มกติกาใหม่ ได้ค่าจ้างตามปกติแม้ไม่ได้มาทำงาน
     const dailyHolidayDays = e.type==="monthly" ? 0 : wdE.filter(dISO=>{
       if(!payV2On(dISO) || !isHolidayFor(dISO, e) || workedDates.has(dISO)) return false;
+      if(specialClosureOn(dISO, e) && !(Array.isArray(holidayRows)?holidayRows:[]).some(h=>h.holiday_date===dISO && h.holiday_type!=="special" && holidayAppliesTo(h, e))) return false;   // [รอบ 26] ปิดกรณีพิเศษ = รายวันไม่ได้เงิน
       if(e.start){ const sd = thaiDateToJS(e.start); if(sd && isoDate(sd)>dISO) return false; }
       return true;
     }).length; // ใช้คิดเงินเดือนคนเข้ากลางรอบ (calcPay) — workDays เฉยๆ ยังใช้แสดงผล "มาทำงาน" ตามเดิม
@@ -2470,7 +2479,7 @@ function groupHolidays(rows){
     if(last && last.name===h.name && (last.dept||"")===(h.dept||"") && prevDay===h.holiday_date){
       last.to = h.holiday_date; last.ids.push(h.id); last.days++;
     } else {
-      out.push({name:h.name, dept:h.dept||"", from:h.holiday_date, to:h.holiday_date, ids:[h.id], days:1});
+      out.push({name:h.name, dept:h.dept||"", from:h.holiday_date, to:h.holiday_date, ids:[h.id], days:1, type:h.holiday_type||""});
     }
   });
   return out;
@@ -8865,6 +8874,7 @@ function stHolidays(){
     <h3>➕ เพิ่มวันหยุด (กรอกเป็นช่วงวันได้)</h3>
     <div class="hint">ใช้ตอนที่ประชุมบริษัทมีมติหยุดเป็นครั้งๆ — กรอกชื่อและช่วงวันที่ ระบบจะสร้างให้ทีละวันตลอดช่วงโดยอัตโนมัติ</div>
     <div class="grid" style="grid-template-columns:2fr 1fr 1fr 1.2fr;margin-top:14px;gap:12px">
+      <div class="field" style="grid-column:1/-1"><label>ประเภท</label><select id="hType"><option value="traditional">วันหยุดตามประเพณี (นับใน 13 วัน · รายวันได้ค่าจ้าง)</option><option value="special">บริษัทปิดกรณีพิเศษ — รายเดือนได้ค่าจ้างปกติ ไม่หัก ไม่เพิ่ม · รายวันไม่ได้เงิน</option></select></div>
       <div class="field"><label>ชื่อวันหยุด <span style="color:var(--red)">*</span></label><input id="hName" placeholder="เช่น หยุดสงกรานต์ / หยุดประเพณีถือศีลกินผัก"></div>
       <div class="field"><label>ตั้งแต่วันที่ <span style="color:var(--red)">*</span></label><input type="date" id="hFrom" value="${todayISO}"></div>
       <div class="field"><label>ถึงวันที่</label><input type="date" id="hTo" placeholder="ว่าง = วันเดียว"></div>
@@ -8879,7 +8889,7 @@ function stHolidays(){
     <div class="hint" style="line-height:1.85">
       • วันที่อยู่ในรายการนี้ <b>ไม่ถูกนับเป็นวันทำงาน</b> ของพนักงาน — ไม่ขึ้นเตือน "ลืมลงเวลา" และไม่ถูกหักเงินว่าขาดงาน<br>
       • <b>พนักงานรายเดือน</b> — เงินเดือนเท่าเดิม (วันหยุดไม่ถูกหัก)<br>
-      • <b>พนักงานรายวัน</b> — ${settings.v2Schema?`ได้ค่าจ้างวันหยุดบริษัทที่ปิด แม้ไม่ได้มาทำงาน (วันตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)})`:`ไม่ได้มาทำงาน = ไม่ได้ค่าแรง (แต่ไม่ถือว่าขาดงาน)`}<br>
+      • <b>พนักงานรายวัน</b> — ${settings.v2Schema?`ได้ค่าจ้างวันหยุดตามประเพณี แม้ไม่ได้มาทำงาน (วันตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)}) · <b>บริษัทปิดกรณีพิเศษ</b> (ไฟดับ น้ำท่วม ไม่มีงาน ฯลฯ) = รายเดือนได้ปกติ ไม่หัก ไม่เพิ่ม · รายวันไม่ได้เงิน`:`ไม่ได้มาทำงาน = ไม่ได้ค่าแรง (แต่ไม่ถือว่าขาดงาน)`}<br>
       ${settings.v3Schema?`• วันที่บริษัทต้อง<b>เปิดทำงาน</b> — กด "🏗️ เปิดทำงาน" ที่แถววันหยุดนั้น เลือกกลุ่มคน และวิธีจัดการค่าจ้าง (เลื่อนวันหยุด → หยุดชดเชย หรือ จ่ายค่าทำงานวันหยุด)<br>`:''}
       • วันหยุดที่ตรง<b>วันหยุดประจำสัปดาห์ (${settings.weeklyHoliday||"อาทิตย์"})</b> ระบบขึ้นป้ายแดง + ปุ่มเพิ่ม <b>วันหยุดชดเชย</b> วันทำงานถัดไป (HR กดเอง · ไม่นับใน 13 วัน)<br>
       • มีผลกับ <b>ทุกคนทั้งบริษัท</b> เว้นแต่จะเลือกขอบเขตเป็นเฉพาะแผนก
@@ -8899,7 +8909,7 @@ function stHolidays(){
     <table style="margin-top:12px">
       <tr><th>ชื่อวันหยุด</th><th>ช่วงวันที่</th><th class="num">จำนวนวัน</th><th>ขอบเขต</th>${settings.v3Schema?'<th>เปิดทำงาน</th>':''}<th style="text-align:center"></th></tr>
       ${groups.map(g=>`<tr>
-        <td><b>${g.name}</b>${holidaySubstituteCell(g, canEdit)}</td>
+        <td><b>${g.name}</b>${g.type==="special"?' <span class="pill gray" style="font-size:10.5px">ปิดกรณีพิเศษ · รายวันไม่ได้เงิน</span>':''}${holidaySubstituteCell(g, canEdit)}</td>
         <td style="white-space:nowrap">${g.from===g.to?isoToThaiDisplay(g.from):isoToThaiDisplay(g.from)+" – "+isoToThaiDisplay(g.to)}</td>
         <td class="num">${g.days}</td>
         <td>${g.dept?'<span class="pill blue">เฉพาะ '+g.dept+'</span>':'<span class="pill gray">ทั้งบริษัท</span>'}</td>
@@ -9160,7 +9170,7 @@ async function addHolidayRange(){
   if(dates.length>62){ toast("ช่วงวันยาวเกินไป (เกิน 62 วัน) — กรุณาแบ่งเป็นหลายครั้ง"); return; }
   const existing = new Set((Array.isArray(holidayRows)?holidayRows:[]).map(h=>h.holiday_date+"|"+(h.dept||"")));
   const rows = dates.filter(d=>!existing.has(d+"|"+(dept||""))).map(d=>({
-    holiday_date: d, name, holiday_type: "traditional", dept, created_by: loggedInEmployeeId || null
+    holiday_date: d, name, holiday_type: (document.getElementById("hType")?.value==="special" ? "special" : "traditional"), dept, created_by: loggedInEmployeeId || null
   }));
   if(rows.length===0){ toast("วันที่เลือกถูกตั้งเป็นวันหยุดไว้อยู่แล้วทั้งหมด"); return; }
   const { data: insRows, error } = await sb.from("holidays").insert(rows).select("id");
