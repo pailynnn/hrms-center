@@ -147,6 +147,9 @@
         <button class="chip" data-type="unpaid" onclick="selectType('unpaid')">
           <span class="ic">📄</span><span class="tt" id="typeUnpaidTh">ลาไม่รับค่าจ้าง</span><span class="st" id="typeUnpaidMm">လစာမဲ့ခွင့်</span>
         </button>
+        <button class="chip" data-type="annual" id="chipAnnual" style="display:none" onclick="selectType('annual')">
+          <span class="ic">🏖️</span><span class="tt" id="typeAnnualTh">พักร้อน</span><span class="st" id="typeAnnualMm">နှစ်ပတ်လည်ခွင့်</span>
+        </button>
         <button class="chip" data-type="comp_day" id="chipComp" style="display:none" onclick="selectType('comp_day')">
           <span class="ic">🎟️</span><span class="tt" id="typeCompTh">หยุดชดเชย</span><span class="st" id="typeCompMm">အစားထိုးနားရက်</span>
         </button>
@@ -204,7 +207,11 @@ const L = {
     loginLine: "กำลังเข้าสู่ระบบผ่าน LINE...",
     okMsg: (n)=>`ยื่นใบลาสำเร็จ ✓ (${n} วัน) ส่งให้ HR อนุมัติแล้ว`,
     compHint: (n, src)=>`🎟️ สิทธิหยุดชดเชยคงเหลือ ${n} วัน${src?` (จากวันหยุด ${src})`:""} · ลา 1 วันใช้ 1 สิทธิ์ · วันที่ลาต้องอยู่หลังวันหยุดที่มาทำงาน`,
-    compShort: (n)=>`สิทธิหยุดชดเชยคงเหลือ ${n} วัน — เลือกวันลาไม่เกินนี้`
+    compShort: (n)=>`สิทธิหยุดชดเชยคงเหลือ ${n} วัน — เลือกวันลาไม่เกินนี้`,
+    annualHint: (l, q)=>`🏖️ สิทธิพักร้อนปีนี้คงเหลือ ${l} / ${q} วัน · ไม่หักเงิน · ใช้ไม่ครบไม่สะสมข้ามปี`,
+    annualShort: (l)=>`สิทธิพักร้อนคงเหลือ ${l} วัน — เลือกวันลาไม่เกินนี้`,
+    sickHint: "🩺 ลาป่วยไม่เกิน 3 วันไม่ต้องใช้ใบรับรองแพทย์ · เกิน 3 วันต้องมีใบรับรองแพทย์ — ส่งรูปให้ HR ทางแชต",
+    sickLong: "ลาป่วยเกิน 3 วัน — อย่าลืมส่งรูปใบรับรองแพทย์ให้ HR"
   },
   mm: {
     subtitle: "LINE မှ ခွင့်လျှောက်ရန် · ရွေးရုံသာ ရိုက်ရန်မလို",
@@ -219,7 +226,11 @@ const L = {
     loginLine: "LINE မှတစ်ဆင့် ဝင်ရောက်နေသည်...",
     okMsg: (n)=>`ခွင့်လျှောက်လွှာ ပို့ပြီးပါပြီ ✓ (${n} ရက်) HR ထံ ပို့ပြီးပါပြီ`,
     compHint: (n, src)=>`🎟️ ကျန်ရှိသော အစားထိုးနားရက် ${n} ရက်${src?` (${src} အားလပ်ရက်မှ)`:""} · ခွင့် ၁ ရက် = ၁ ရက်သုံး · ခွင့်ရက်သည် အလုပ်လာခဲ့သော အားလပ်ရက်နောက်ပိုင်း ဖြစ်ရမည်`,
-    compShort: (n)=>`ကျန်ရှိသော အစားထိုးနားရက် ${n} ရက် — ဤထက်မပိုရွေးပါ`
+    compShort: (n)=>`ကျန်ရှိသော အစားထိုးနားရက် ${n} ရက် — ဤထက်မပိုရွေးပါ`,
+    annualHint: (l, q)=>`🏖️ ယခုနှစ် နှစ်ပတ်လည်ခွင့် ကျန် ${l} / ${q} ရက် · လစာမဖြတ် · နောက်နှစ်သို့ မသယ်ပါ`,
+    annualShort: (l)=>`နှစ်ပတ်လည်ခွင့် ကျန် ${l} ရက် — ဤထက်မပိုရွေးပါ`,
+    sickHint: "🩺 နာမကျန်းခွင့် ၃ ရက်အထိ ဆရာဝန်လက်မှတ် မလို · ၃ ရက်ကျော်လျှင် ဆရာဝန်လက်မှတ် လိုအပ်သည် — HR ထံ ဓာတ်ပုံပို့ပါ",
+    sickLong: "နာမကျန်းခွင့် ၃ ရက်ကျော် — ဆရာဝန်လက်မှတ် ဓာတ်ပုံကို HR ထံ ပို့ရန် မမေ့ပါနှင့်"
   }
 };
 let lang = localStorage.getItem("hrmsLiffLang") || "th";
@@ -240,7 +251,7 @@ function setLang(x){
   document.getElementById("langTh").classList.toggle("on", x==="th");
   document.getElementById("langMm").classList.toggle("on", x==="mm");
   // ป้ายชื่อบนชิป: ไทยเด่นเสมอ (HR เห็นไทย) + คำแปลเป็นตัวรอง สลับตำแหน่งเด่น/รองตามภาษาที่เลือก
-  const pairs = [["typePersonalTh","ลากิจ","typePersonalMm","ကိုယ်ရေးခွင့်"],["typeSickTh","ลาป่วย","typeSickMm","နာမကျန်းခွင့်"],["typeUnpaidTh","ลาไม่รับค่าจ้าง","typeUnpaidMm","လစာမဲ့ခွင့်"],["typeCompTh","หยุดชดเชย","typeCompMm","အစားထိုးနားရက်"]];
+  const pairs = [["typePersonalTh","ลากิจ","typePersonalMm","ကိုယ်ရေးခွင့်"],["typeSickTh","ลาป่วย","typeSickMm","နာမကျန်းခွင့်"],["typeUnpaidTh","ลาไม่รับค่าจ้าง","typeUnpaidMm","လစာမဲ့ခွင့်"],["typeCompTh","หยุดชดเชย","typeCompMm","အစားထိုးနားရက်"],["typeAnnualTh","พักร้อน","typeAnnualMm","နှစ်ပတ်လည်ခွင့်"]];
   pairs.forEach(([idTh,th,idMm,mm])=>{
     document.getElementById(idTh).textContent = x==="mm" ? mm : th;
     document.getElementById(idMm).textContent = x==="mm" ? th : mm;
@@ -251,8 +262,12 @@ function setLang(x){
 /* [รอบ 23] หยุดชดเชย: แสดงชิปเมื่อมีสิทธิ์คงเหลือ (ถาม liff-leave-submit action "balance") */
 let COMP = null;   // {available, credits:[{source_date,days}]}
 function fmtD(iso){ const [y,m,d]=String(iso).split("-"); return lang==="mm" ? `${+d}/${+m}/${y}` : `${+d}/${+m}/${+y+543}`; }
+let ANNUAL = null;   // [รอบ 25] {enabled, eligibleFrom, quota, left}
+function nDaysSel(){ const f=document.getElementById("dateFrom").value, to=document.getElementById("dateTo").value||f; return Math.round((new Date(to+"T00:00:00Z") - new Date(f+"T00:00:00Z"))/86400000) + 1; }
 function renderCompHint(){
   const box = document.getElementById("compHint"); if(!box) return;
+  if(selectedType==="sick"){ box.textContent = t("sickHint"); box.style.display = "block"; return; }
+  if(selectedType==="annual" && ANNUAL){ box.textContent = t("annualHint")(ANNUAL.left, ANNUAL.quota); box.style.display = "block"; return; }
   if(!COMP || !(COMP.available>0) || selectedType!=="comp_day"){ box.style.display="none"; return; }
   const src = (COMP.credits||[]).slice(0,4).map(c=>fmtD(c.source_date)).join(", ");
   box.textContent = t("compHint")(COMP.available, src);
@@ -264,10 +279,14 @@ async function loadCompBalance(){
     const res = await fetch(SUBMIT_URL, { method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ idToken, action:"balance", lang }) });
     const j = await res.json().catch(()=>null);
-    if(!res.ok || !j || !j.compEnabled || !(j.available>0)) return;
-    COMP = j;
-    document.getElementById("chipComp").style.display = "";
-    document.getElementById("typeChips").classList.add("four");
+    if(!res.ok || !j) return;
+    const today = new Date(Date.now()+7*3600*1000).toISOString().slice(0,10);
+    if(j.annual && j.annual.enabled && j.annual.eligibleFrom && today >= j.annual.eligibleFrom && j.annual.left>0){
+      ANNUAL = j.annual; document.getElementById("chipAnnual").style.display = "";
+    }
+    if(j.compEnabled && j.available>0){ COMP = j; document.getElementById("chipComp").style.display = ""; }
+    const shown = [...document.querySelectorAll("#typeChips .chip")].filter(c=>c.style.display!=="none").length;
+    document.getElementById("typeChips").classList.toggle("four", shown===4);
   }catch(e){ /* ไม่มีสิทธิ์/ตรวจไม่ได้ → ไม่แสดงชิป */ }
 }
 function selectType(code){
@@ -292,6 +311,7 @@ async function doSubmit(){
     const nDays = Math.round((new Date(to+"T00:00:00Z") - new Date(from+"T00:00:00Z"))/86400000) + 1;
     if(nDays > COMP.available){ showStatus("⚠️ " + t("compShort")(COMP.available), "err"); return; }
   }
+  if(selectedType==="annual" && ANNUAL && nDaysSel() > ANNUAL.left){ showStatus("⚠️ " + t("annualShort")(ANNUAL.left), "err"); return; }
   setBusy(true);
   try{
     if(!liff.isLoggedIn()){ liff.login(); return; }
@@ -308,6 +328,8 @@ async function doSubmit(){
 
     showStatus("✅ " + (json.message || t("okMsg")(json.days||1)), "ok");
     btnSubmit.disabled = true;
+    if(selectedType==="sick" && (json.days||1)>3) showStatus("✅ " + (json.message || t("okMsg")(json.days||1)) + " — " + t("sickLong"), "ok");
+    if(selectedType==="annual" && ANNUAL){ ANNUAL.left = Math.max(0, ANNUAL.left - (json.days||1)); renderCompHint(); }
     if(selectedType==="comp_day" && COMP){ COMP.available = Math.max(0, COMP.available - (json.days||1)); COMP.credits = (COMP.credits||[]).slice(json.days||1); renderCompHint(); }
   }catch(err){
     showStatus("⚠️ " + err.message, "err");

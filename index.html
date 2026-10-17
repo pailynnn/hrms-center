@@ -516,7 +516,7 @@ const settings = {
   autoSyncLeaveAtt:true, autoDeductUnpaid:true,
   otCalcType:"flat_rate", otStartTime:"17:30", otDivisorDays:30, otDivisorHours:8, otRoundTo:5, otRequiresApproval:true,
   // [รอบ 18.1] กติกาค่าจ้างใหม่ — มีผลกับ "วันที่ทำงาน" ตั้งแต่ payRulesV2From (งวดเปลี่ยนผ่าน 29 ต.ค.–30 พ.ย. 2569)
-  holidaySubSchema:false, bonusHalfSchema:false, otExemptSchema:false, v2Schema:false, payRulesV2From:"2026-10-29", otMultWorkday:1.5, otMultHoliday:3, hwMultMonthly:1, hwMultDaily:2, blockWeeklyOffCheckin:false,
+  r25Schema:false, annualSchema:false, annualLeaveDays:6, holidaySubSchema:false, bonusHalfSchema:false, otExemptSchema:false, v2Schema:false, payRulesV2From:"2026-10-29", otMultWorkday:1.5, otMultHoliday:3, hwMultMonthly:1, hwMultDaily:2, blockWeeklyOffCheckin:false,
   // [รอบ 18.2] รอบจ่ายใหม่ — v2p2Schema = รัน migration เฟส 2 แล้ว
   v2p2Schema:false, monthlyCalendarFrom:"2026-10-29", semiAEndDay:12, semiAPayDay:15
 };
@@ -537,13 +537,38 @@ function activeCycleKeys(){ return Object.keys(CYCLES).filter(k=>!CYCLES[k].disa
 const LEAVE_TYPES = [
   {code:"personal", name:"ลากิจ", paid:"quota", color:"#3b7bf6", desc:"ใช้โควตาไม่หักเงิน 2 วัน/เดือน — เกินหักตามค่าจ้างต่อวัน"},
   {code:"sick", name:"ลาป่วย", paid:"quota", color:"#ee5d9a", desc:"ใช้โควตารวมกับลากิจ — ป่วย 3 วันขึ้นไปต้องมีใบรับรองแพทย์"},
-  {code:"annual", name:"พักร้อน", paid:"unpaid", color:"#17c3a3", desc:"ยังไม่เปิดใช้ (เฟส 2)"},
+  {code:"annual", name:"พักร้อน", paid:"annual", color:"#17c3a3", desc:"ทำงานครบ 1 ปี ลาได้ 6 วัน/ปี — ไม่หักเงิน ไม่ใช้โควตาลากิจ/ป่วย", needsAnnual:true},
   {code:"unpaid", name:"ลาไม่รับค่าจ้าง", paid:"unpaid", color:"#8a92a6", desc:"หักค่าจ้างตามวันที่ลา"},
   // [รอบ 18.3] ใช้สิทธิหยุดชดเชย — ไม่หักเงิน ไม่ใช้โควตา (DB ตัดสิทธิ์ที่เก่าที่สุดให้เอง · ไม่มีสิทธิ์คงเหลือ = ยื่นไม่ได้)
   {code:"comp_day", name:"หยุดชดเชย", paid:"comp", color:"#f59e0b", desc:"ใช้สิทธิหยุดชดเชยจากวันหยุดบริษัทที่มาทำงาน — ไม่หักเงิน ไม่ใช้โควตาลา · วันที่ลาต้องอยู่หลังวันหยุดที่มาทำงาน", needsV3:true}
 ];
 // ประเภทลาที่เลือกยื่นได้ตอนนี้ (หยุดชดเชยต้องรอ DB เฟส 3)
-function leaveTypesForSubmit(){ return LEAVE_TYPES.filter(t=>!t.needsV3 || settings.compDayEnabled); }
+function leaveTypesForSubmit(){ return LEAVE_TYPES.filter(t=>(!t.needsV3 || settings.compDayEnabled) && (!t.needsAnnual || settings.annualSchema)); }
+// [รอบ 25] ลาพักร้อน: ครบ 1 ปีนับจากวันเริ่มงาน → ปีละ settings.annualLeaveDays วัน (ปีปฏิทิน · ไม่สะสมข้ามปี)
+function annualInfo(empId, year){
+  const e = E(empId); const quota = Number(settings.annualLeaveDays)||6;
+  const sd = (e && e.start) ? thaiDateToJS(e.start) : null;
+  const eligibleFrom = sd ? isoDate(new Date(sd.getFullYear()+1, sd.getMonth(), sd.getDate())) : null;
+  const used = leaves.filter(l=>String(l.emp)===String(empId) && l.type==="annual" && l.supStatus!=="rejected" && l.hrStatus!=="rejected" && String(l.dateISO).slice(0,4)===String(year)).length;
+  return { quota, eligibleFrom, used, left: Math.max(0, quota-used) };
+}
+// ลาป่วยติดกันกี่วัน (ข้ามวันหยุดประจำสัปดาห์/วันหยุดบริษัทได้) — เกิน 3 วันต้องมีใบรับรองแพทย์
+function sickRunLength(empId, dISO){
+  const e = E(empId);
+  const sickSet = new Set(leaves.filter(l=>String(l.emp)===String(empId) && l.type==="sick" && l.supStatus!=="rejected" && l.hrStatus!=="rejected").map(l=>l.dateISO));
+  if(!sickSet.has(dISO)) return 0;
+  const isOff = d => (typeof companyOffDows==="function" && companyOffDows().includes(new Date(d+"T00:00:00").getDay())) || (e && isHolidayFor(d, e));
+  let n = 1;
+  for(const dir of [-1, 1]){
+    let d = addDaysISO(dISO, dir);
+    for(let guard=0; guard<40; guard++){
+      if(sickSet.has(d)){ n++; d = addDaysISO(d, dir); continue; }
+      if(isOff(d)){ d = addDaysISO(d, dir); continue; }
+      break;
+    }
+  }
+  return n;
+}
 
 /* ================== EMPLOYEES ================== */
 // โหลดจริงจาก Supabase (ตาราง employees) หลังล็อกอินสำเร็จ ผ่าน loadEmployees()
@@ -863,6 +888,9 @@ async function loadSettings(){
     has_secret: !!settings.lineChannelSecret, secret_tail: settings.lineChannelSecret.length>=4 ? settings.lineChannelSecret.slice(-4) : null };
   // [รอบ 18.3] เฟส 3 (วันเปิดทำงานในวันหยุดบริษัท · หยุดชดเชย) — DB รัน phase3_migration.sql แล้ว
   settings.v3Schema = Object.prototype.hasOwnProperty.call(data, "comp_day_enabled");
+  // [รอบ 25] ลาพักร้อน (round25_company_rules.sql)
+  settings.annualSchema = Object.prototype.hasOwnProperty.call(data, "annual_leave_days");
+  settings.annualLeaveDays = Number(data.annual_leave_days)||6;
   settings.compDayEnabled = settings.v3Schema && data.comp_day_enabled!==false;
   settings.liffId = data.liff_id || "";
   settings.liffLeaveId = data.liff_leave_id || "";
@@ -1688,14 +1716,17 @@ async function loadCycleStats(cy){
       (Array.isArray(holidayRows)?holidayRows:[]).filter(h=>h.company_works && inR(h.holiday_date) && holidayWorkMember(h, e)).forEach(h=>{
         const a = attByDate.get(h.holiday_date);
         if(!a || hwDates.has(h.holiday_date)) return;
-        if(e.type!=="monthly" && !String(h.daily_resolution||"").trim()){ e.hdPending.push({h, reason:"พนักงานรายวัน — ยังไม่บันทึกข้อสรุปค่าจ้าง"}); return; }
-        if(!h.treatment){ e.hdPending.push({h, reason:"ยังไม่เลือกวิธีจัดการค่าจ้าง"}); return; }
-        if(h.treatment==="pay" && e.type==="monthly"){
+        // [รอบ 25] ค่าเริ่มต้น = รับเงิน (รายเดือน +1 เท่า · รายวันรวม 2 เท่า) · คนที่เลือกสะสม = ค่าจ้างปกติ + สิทธิหยุดชดเชย
+        if(!settings.r25Schema && e.type!=="monthly" && !String(h.daily_resolution||"").trim()){ e.hdPending.push({h, reason:"พนักงานรายวัน — ยังไม่บันทึกข้อสรุปค่าจ้าง"}); return; }
+        const tr = holidayTreatmentFor(h, e);
+        if(!tr){ e.hdPending.push({h, reason:"ยังไม่เลือกวิธีจัดการค่าจ้าง"}); return; }
+        if(tr==="pay" && (e.type==="monthly" || settings.r25Schema)){
           const hrs = Math.min(attendanceWorkHours(a, normalHoursOf(e)), normalHoursOf(e));
           e.hdHours += hrs; e.hdItems.push({h, hours:hrs});
         }
       });
-      e.hdPay = payCeil(e.hdHours*hourlyRateV2(e)*settings.hwMultMonthly);
+      e.hdMult = e.type==="monthly" ? settings.hwMultMonthly : Math.max(0, settings.hwMultDaily - 1);   // รายวัน: ค่าแรงวันนั้นจากการลงเวลา 1 เท่า + เพิ่มอีก (รวม = hwMultDaily)
+      e.hdPay = payCeil(e.hdHours*hourlyRateV2(e)*e.hdMult);
       e.compUsedDays = apprLeaves.filter(l=>l.leave_type==="comp_day").length;
     }
   });
@@ -1744,7 +1775,7 @@ async function approvePayroll(cy){
     const otNote = pay.otHours ? (e.otExempt ? `OT ${fmtHrs(pay.otHours)} ชม. (ไม่รับค่า OT)` : otRemarkFor(e, pay)) : "";
     const hwNote = pay.hwPay ? `ค่าทำงานวันหยุด ${fmtHrs(pay.hwHours)} ชม. (฿${fmt(pay.hwPay)})` : "";
     const dhNote = (e.att && e.att.dailyHolidayDays) ? `ค่าจ้างวันหยุดบริษัท ${e.att.dailyHolidayDays} วัน` : "";
-    const hdNote = pay.hdPay ? `ค่าทำงานวันหยุดบริษัท ${(e.hdItems||[]).map(x=>isoToThaiDisplay(x.h.holiday_date)).join(", ")} ${fmtHrs(pay.hdHours)} ชม. ×${settings.hwMultMonthly} (฿${fmt(pay.hdPay)})` : "";
+    const hdNote = pay.hdPay ? `ค่าทำงานวันหยุดบริษัท ${(e.hdItems||[]).map(x=>isoToThaiDisplay(x.h.holiday_date)).join(", ")} ${fmtHrs(pay.hdHours)} ชม. ×${e.hdMult ?? settings.hwMultMonthly}${e.type!=="monthly"?` (รวมค่าแรงวันนั้น = ×${settings.hwMultDaily})`:""} (฿${fmt(pay.hdPay)})` : "";
     const compNote = e.compUsedDays ? `ใช้วันหยุดชดเชย ${e.compUsedDays} วัน (ไม่หักเงิน)` : "";
     const adjNote = (e.adjustments||[]).filter(a=>a.kind==="add").map(a=>`ปรับจ่ายเพิ่ม${adjRefText(a)?` (อ้างอิงงวด ${adjRefText(a)})`:""}: ${a.reason} ฿${fmtB(a.amount)}`).join(" · ");
     // รายการหักแบบแยกบรรทัด (ชื่อ + จำนวนเงิน + งวดผ่อน) — เก็บเป็น JSON เพื่อโชว์รายละเอียดในสลิปให้พนักงานเข้าใจว่าถูกหักอะไรบ้าง
@@ -2224,6 +2255,9 @@ async function ensureHolidaysLoaded(){
   holidayRows = error?[]:(data||[]);
   if(error){ console.error("loadHolidays", error); toastLoadError("วันหยุด"); }
   // [รอบ 24] มีคอลัมน์ substitute_for (round24_sop_rest.sql) หรือยัง — ไม่มี = จับคู่วันชดเชยจากชื่อแทน
+  // [รอบ 25] การเลือกรายคนของวันเปิดทำงาน — ไม่มีตาราง = ยังไม่รัน round25_company_rules.sql
+  { const ch = await sb.from("holiday_work_choices").select("*");
+    if(ch.error){ settings.r25Schema = false; holidayChoices = []; } else { settings.r25Schema = true; holidayChoices = ch.data||[]; } }
   if(holidayRows.length) settings.holidaySubSchema = Object.prototype.hasOwnProperty.call(holidayRows[0], "substitute_for");
   else if(!error){ const pr = await sb.from("holidays").select("substitute_for").limit(1); settings.holidaySubSchema = !pr.error; }
 }
@@ -2327,7 +2361,14 @@ function holidayWorkMember(h, e){
   if(h.work_scope==="list") return (h.work_employee_ids||[]).map(String).includes(String(e.id));
   return true;
 }
-function holidayMovedFor(h, e){ return !!h && h.treatment==="substitute" && !!e && e.type==="monthly" && holidayWorkMember(h, e); }
+// [รอบ 25] วิธีจัดการค่าจ้างของคนนี้: เลือกรายคน > ค่าของวัน > ค่าเริ่มต้น "รับเงิน" (ก่อนรัน SQL รอบ 25 = ไม่มีค่าเริ่มต้น → รอข้อสรุป)
+let holidayChoices = [];
+function holidayChoiceOf(h, e){ return (holidayChoices||[]).find(c=>String(c.holiday_id)===String(h.id) && String(c.employee_id)===String(e.id)) || null; }
+function holidayTreatmentFor(h, e){
+  const c = settings.r25Schema && e ? holidayChoiceOf(h, e) : null;
+  return (c && c.choice) || h.treatment || (settings.r25Schema ? "pay" : null);
+}
+function holidayMovedFor(h, e){ return !!h && !!e && holidayWorkMember(h, e) && holidayTreatmentFor(h, e)==="substitute" && (settings.r25Schema || e.type==="monthly"); }
 function isHolidayFor(dISO, e){
   return (Array.isArray(holidayRows)?holidayRows:[]).some(h=>
     h.holiday_date===dISO && holidayAppliesTo(h, e) && !holidayMovedFor(h, e) );
@@ -2355,12 +2396,24 @@ async function ensureCompCreditsLoaded(force){
 }
 // สิทธิ์คงเหลือที่ใช้กับวันลา dISO ได้ (วันต้นทางต้องอยู่ก่อนวันลา) · ไม่ระบุวัน = คงเหลือทั้งหมด
 function compBalanceFor(empId, dISO){
-  return (compCredits||[]).filter(c=>String(c.employee_id)===String(empId) && c.status==="available" && (!dISO || c.source_date < dISO))
+  return (compCredits||[]).filter(c=>String(c.employee_id)===String(empId) && c.status==="available" && (!dISO || c.source_date < dISO) && (!dISO || !c.expires_on || dISO <= c.expires_on))
     .reduce((s,c)=>s+(Number(c.days)||0),0);
 }
 async function lvCompHintRefresh(){
   const box = document.getElementById("lvCompHint"); if(!box) return;
   const t = document.getElementById("lvType")?.value;
+  if(t==="annual" || t==="sick"){
+    const selA = document.getElementById("lvEmp");
+    const empA = selA ? Number(selA.value) : loggedInEmployeeId;
+    box.style.display="block";
+    if(t==="sick"){ box.innerHTML = "🩺 ลาป่วยไม่เกิน 3 วันไม่ต้องใช้ใบรับรองแพทย์ · <b>เกิน 3 วันต้องมีใบรับรองแพทย์</b> — ส่งให้ HR"; return; }
+    if(!empA){ box.innerHTML = "เลือกพนักงานเพื่อดูสิทธิลาพักร้อน"; return; }
+    const yA = todayISODate().slice(0,4); const ia = annualInfo(empA, yA);
+    box.innerHTML = !ia.eligibleFrom ? "🏖️ ยังไม่มีวันเริ่มงานในข้อมูลพนักงาน — แจ้ง HR ก่อนลาพักร้อน"
+      : (todayISODate() < ia.eligibleFrom ? `🏖️ ลาพักร้อนได้ตั้งแต่ <b>${isoToThaiDisplay(ia.eligibleFrom)}</b> (ทำงานครบ 1 ปี) · ปีละ ${ia.quota} วัน`
+      : `🏖️ <b>สิทธิพักร้อนปี ${Number(yA)+543} คงเหลือ ${ia.left} / ${ia.quota} วัน</b> · ไม่หักเงิน · ใช้ไม่ครบไม่สะสมข้ามปี · ใช้ต่อกับหยุดชดเชยได้`);
+    return;
+  }
   if(t!=="comp_day"){ box.style.display="none"; return; }
   const sel = document.getElementById("lvEmp");
   const empId = sel ? Number(sel.value) : loggedInEmployeeId;
@@ -2370,7 +2423,7 @@ async function lvCompHintRefresh(){
   const mine = (compCredits||[]).filter(c=>String(c.employee_id)===String(empId));
   const avail = mine.filter(c=>c.status==="available");
   const total = avail.reduce((s,c)=>s+(Number(c.days)||0),0);
-  box.innerHTML = `🎟️ <b>สิทธิหยุดชดเชยคงเหลือ ${fmtHrs(total)} วัน</b>${avail.length?` — จากวันหยุด ${avail.map(c=>`${isoToThaiDisplay(c.source_date)}${Number(c.days)!==1?" ("+fmtHrs(c.days)+" วัน)":""}`).join(", ")}`:""}<br>
+  box.innerHTML = `🎟️ <b>สิทธิหยุดชดเชยคงเหลือ ${fmtHrs(total)} วัน</b>${avail.length?` — จากวันหยุด ${avail.map(c=>`${isoToThaiDisplay(c.source_date)}${Number(c.days)!==1?" ("+fmtHrs(c.days)+" วัน)":""}${c.expires_on?` ใช้ได้ถึง ${isoToThaiDisplay(c.expires_on)}`:""}`).join(", ")}`:""}<br>${avail.some(c=>c.expires_on)?"⏳ ต้องใช้ภายในปีของวันหยุดนั้น ใช้ไม่ทันจะถูกตัดอัตโนมัติ<br>":""}
     ใบลา 1 วันใช้สิทธิ์ 1 วัน (ใช้สิทธิ์ที่เก่าที่สุดก่อน) · วันที่ลาต้องอยู่<b>หลัง</b>วันหยุดที่มาทำงาน · ไม่หักเงิน ไม่ใช้โควตาลา
     ${mine.some(c=>c.status==="reserved")?`<br>⏳ รออนุมัติอยู่ ${mine.filter(c=>c.status==="reserved").length} รายการ`:""}`;
 }
@@ -5639,6 +5692,8 @@ function leaveSubmit(){
         📌 <b>รายเดือน</b>: ลาไม่หักเงิน ${settings.paidLeaveQuota} วัน/เดือน · เกินโควตาหักตามค่าจ้างต่อวัน<br>
         📌 <b>รายวัน</b>: ลา = ไม่ได้ค่าแรง แต่ยื่นไว้จะไม่ขึ้น "ขาดงาน"<br>
         📌 <b>HR อนุมัติ</b> (ขั้นเดียว)<br>
+        📌 ลาป่วยไม่เกิน 3 วันไม่ต้องใช้ใบรับรองแพทย์ · <b>เกิน 3 วันต้องมี</b><br>
+        ${settings.annualSchema?`📌 <b>พักร้อน</b>: ทำงานครบ 1 ปี ลาได้ ${settings.annualLeaveDays} วัน/ปี ไม่หักเงิน<br>`:''}
         📌 ลาหลายวันติดกัน ระบบจะสร้างใบลาแยกทีละวันให้อัตโนมัติ
       </div>
     </div>
@@ -5659,7 +5714,15 @@ async function doSubmitLeave(){
   for(let d=new Date(from+"T00:00:00"); isoDate(d)<=to; d.setDate(d.getDate()+1)){
     dates.push(isoDate(d));   // เดินวันด้วยเวลาท้องถิ่น กันวันเลื่อนข้ามเขตเวลา
   }
-  const isPaid = LT(typeCode)?.paid === "quota" || LT(typeCode)?.paid === "comp";
+  const isPaid = LT(typeCode)?.paid === "quota" || LT(typeCode)?.paid === "comp" || LT(typeCode)?.paid === "annual";
+  if(typeCode==="annual"){
+    const info = annualInfo(empId, dates[0].slice(0,4));
+    if(!info.eligibleFrom){ toast("ยังไม่มีวันเริ่มงานในข้อมูลพนักงาน — HR ต้องกรอกก่อนจึงลาพักร้อนได้"); return; }
+    if(dates[0] < info.eligibleFrom){ toast(`ลาพักร้อนได้เมื่อทำงานครบ 1 ปี (ตั้งแต่ ${isoToThaiDisplay(info.eligibleFrom)})`); return; }
+    const byYear = {}; dates.forEach(d=>{ const y=d.slice(0,4); byYear[y]=(byYear[y]||0)+1; });
+    for(const y of Object.keys(byYear)){ const ii = annualInfo(empId, y); if(byYear[y] > ii.left){ toast(`สิทธิพักร้อนปี ${Number(y)+543} เหลือ ${ii.left} วัน แต่ยื่น ${byYear[y]} วัน`); return; } }
+  }
+  if(typeCode==="sick" && dates.length>3 && !confirm(`ลาป่วย ${dates.length} วัน — ลาป่วยเกิน 3 วันต้องมีใบรับรองแพทย์ (ส่งให้ HR)\nยืนยันยื่นใบลา?`)) return;
   if(typeCode==="comp_day"){
     await ensureCompCreditsLoaded(true);
     const bal = compBalanceFor(empId, dates[0]);
@@ -5694,7 +5757,7 @@ function leaveApprove(){
       <tr><th>พนักงาน</th><th>วันที่ลา</th><th>ประเภท</th><th>ยื่นเมื่อ</th><th>ตรงเวลา</th><th>สถานะ</th><th style="text-align:center">การดำเนินการ</th></tr>
       ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);return `<tr id="lv-${l.id}">
         <td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td>${l.date}</td>
-        <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}<div style="color:var(--muted);font-size:11.5px">${l.note}</div></td>
+        <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}${(l.type==="sick" && sickRunLength(l.emp, l.dateISO)>3)?`<div><span class="pill red" style="font-size:10px">🩺 ป่วยติดกัน ${sickRunLength(l.emp, l.dateISO)} วัน — ต้องมีใบรับรองแพทย์</span></div>`:''}<div style="color:var(--muted);font-size:11.5px">${l.note}</div></td>
         <td class="num">${l.submitted}</td>
         <td>${l.onTime?'<span class="pill green">✓</span>':'<span class="pill red">ช้า</span>'}</td>
         <td>${leaveStatus(l)}</td>
@@ -8858,8 +8921,12 @@ function holidayCounterPills(rows, y){
 }
 function holidayTreatLabel(h){
   if(!h.company_works) return "";
-  if(h.treatment==="substitute") return `<span class="pill green">เลื่อนวันหยุด → หยุดชดเชย</span>`;
-  if(h.treatment==="pay") return `<span class="pill blue">จ่ายค่าทำงานวันหยุด</span>`;
+  const nSub = settings.r25Schema ? (holidayChoices||[]).filter(c=>String(c.holiday_id)===String(h.id) && c.choice==="substitute").length : 0;
+  const nPay = settings.r25Schema ? (holidayChoices||[]).filter(c=>String(c.holiday_id)===String(h.id) && c.choice==="pay").length : 0;
+  const extra = settings.r25Schema ? ((h.treatment==="substitute"?nPay:nSub) ? ` <span class="hint" style="font-size:10.5px">· ${h.treatment==="substitute"?`รับเงิน ${nPay} คน`:`สะสมวันหยุด ${nSub} คน`}</span>` : "") : "";
+  if(h.treatment==="substitute") return `<span class="pill green">เลื่อนวันหยุด → หยุดชดเชย</span>${extra}`;
+  if(h.treatment==="pay") return `<span class="pill blue">จ่ายค่าทำงานวันหยุด</span>${extra}`;
+  if(settings.r25Schema) return `<span class="pill blue">รับเงินเพิ่ม 1 เท่า (ค่าเริ่มต้น)</span>${extra}`;
   return `<span class="pill red">รอข้อสรุป</span>`;
 }
 function holidayScopeLabel(h){
@@ -8898,7 +8965,7 @@ function holidayWorksPanel(rows, y, canEdit){
         <td style="white-space:nowrap">${isoToThaiDisplay(h.holiday_date)}</td><td>${h.name}</td><td style="font-size:12px">${holidayScopeLabel(h)}</td>
         <td style="font-size:12px">${h.work_reason||"—"}</td>
         <td>${holidayTreatLabel(h)}${h.treatment==="substitute"&&h.treatment_verified_by?`<div class="hint" style="font-size:10.5px">ตรวจเงื่อนไขแล้ว: ${E(h.treatment_verified_by)?.name||"#"+h.treatment_verified_by}${h.treatment_verified_at?" · "+isoToThaiDisplay(String(h.treatment_verified_at).slice(0,10)):""}</div>`:''}${h.daily_resolution?`<div class="hint" style="font-size:10.5px">รายวัน: ${h.daily_resolution}</div>`:''}</td>
-        <td class="num">${h.treatment==="substitute"?`${cs.length} คน`:'—'}</td>
+        <td class="num">${(h.treatment==="substitute"||cs.length)?`${cs.length} คน`:'—'}</td>
         <td>${canEdit?`<button class="btn ghost xs" onclick="openHolidayWorkModal('${h.id}')">⚙️</button>`:''}</td></tr>`; }).join("")}
       </table>`}
       </div>
@@ -8910,7 +8977,7 @@ function holidayWorksPanel(rows, y, canEdit){
       ${!ready?'<div class="hint" style="padding:10px 0">⏳ กำลังโหลด...</div>':credits.length===0?'<div class="hint" style="padding:10px 0">ยังไม่มีสิทธิหยุดชดเชยในปีนี้</div>':`
       <table style="margin-top:10px"><tr><th>พนักงาน</th><th>จากวันหยุด</th><th class="num">วัน</th><th>สถานะ</th><th>ใช้วันที่</th><th>หมายเหตุ</th><th></th></tr>
       ${credits.map(c=>`<tr>
-        <td>${E(c.employee_id)?.name||("#"+c.employee_id)}</td><td style="white-space:nowrap">${isoToThaiDisplay(c.source_date)}</td>
+        <td>${E(c.employee_id)?.name||("#"+c.employee_id)}</td><td style="white-space:nowrap">${isoToThaiDisplay(c.source_date)}${c.expires_on?`<div class="hint" style="font-size:10.5px">ใช้ได้ถึง ${isoToThaiDisplay(c.expires_on)}</div>`:''}</td>
         <td class="num">${canEdit&&c.status==="available"?`<select style="width:70px" onchange="updateCompCredit(${c.id},{days:Number(this.value)})"><option value="1" ${Number(c.days)===1?'selected':''}>1</option><option value="0.5" ${Number(c.days)===0.5?'selected':''}>0.5</option></select>`:fmtHrs(c.days)}</td>
         <td>${stTh[c.status]||c.status}</td><td>${c.used_date?isoToThaiDisplay(c.used_date):'—'}</td><td style="font-size:11.5px">${c.note||''}</td>
         <td>${canEdit&&c.status==="available"?`<button class="btn danger xs" onclick="updateCompCredit(${c.id},{status:'void'},'ยกเลิกสิทธิ์นี้?')">ยกเลิก</button>`:canEdit&&c.status==="void"?`<button class="btn ghost xs" onclick="updateCompCredit(${c.id},{status:'available'})">คืนสิทธิ์</button>`:''}</td>
@@ -8998,7 +9065,8 @@ function renderHolidayWorkModal(keep){
       <div style="border-top:1px solid var(--line);margin:12px 0 0;padding-top:12px">
         <b style="font-size:13.5px">วิธีจัดการค่าจ้างของวันนี้</b>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;font-size:13px">
-          <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="" ${!v.treatment?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>ยังไม่เลือก</b> — รายการของคนที่มาทำงานเป็น "รอข้อสรุป" ไม่คิดเงินเพิ่ม และ<b>ยืนยันจ่ายงวดที่ครอบคลุมวันนี้ไม่ได้</b></span></label>
+          ${settings.r25Schema?`<label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="" ${!v.treatment?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>รับเงินเพิ่ม 1 เท่า (ค่าเริ่มต้นของบริษัท)</b> — รายเดือน +1 เท่าของชั่วโมงที่ทำ · รายวันรวม 2 เท่า · ใครอยากสะสมเป็นวันหยุดแทน ให้ตั้งรายคนด้านล่าง</span></label>`:''}
+          <label style="display:${settings.r25Schema?'none':'flex'};gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="" ${(!v.treatment&&!settings.r25Schema)?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>ยังไม่เลือก</b> — รายการของคนที่มาทำงานเป็น "รอข้อสรุป" ไม่คิดเงินเพิ่ม และ<b>ยืนยันจ่ายงวดที่ครอบคลุมวันนี้ไม่ได้</b></span></label>
           <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="substitute" ${v.treatment==="substitute"?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>เลื่อนวันหยุด → หยุดชดเชย</b> — รายเดือนที่มาทำงานได้ค่าจ้างปกติ ไม่จ่ายเพิ่ม + ได้สิทธิหยุดชดเชย 1 วัน (วันนั้นนับเป็นวันทำงาน: สาย/ขาด/OT ×${settings.otMultWorkday} ตามปกติ)</span></label>
           <label style="display:flex;gap:8px;cursor:pointer"><input type="radio" name="hwTreat" value="pay" ${v.treatment==="pay"?'checked':''} onchange="renderHolidayWorkModal(hwFormValues())"> <span><b>จ่ายค่าทำงานวันหยุด</b> — รายเดือนได้เพิ่ม ×${settings.hwMultMonthly} ของค่าจ้างต่อชั่วโมง ตามชั่วโมงที่ลงเวลา (ไม่เกินชั่วโมงปกติ) · เกินเวลาให้ยื่น OT วันหยุด ×${settings.otMultHoliday}</span></label>
         </div>
@@ -9007,13 +9075,44 @@ function renderHolidayWorkModal(keep){
           ${law?`<div class="hint" style="margin-top:6px;font-size:11px">อ้างอิง พ.ร.บ.คุ้มครองแรงงาน ม.29 วรรคท้าย — เลื่อนวันหยุดตามประเพณีไปหยุดวันอื่นได้เฉพาะงานตามลักษณะที่กำหนด หรือมีข้อตกลงกับลูกจ้าง · ถ้าไม่เข้าเงื่อนไข ให้เลือก "จ่ายค่าทำงานวันหยุด"</div>`:''}
           <div class="field" style="margin-top:8px"><label>หลักฐาน / ข้อตกลงกับพนักงาน *</label><textarea id="hwTreatNote" rows="2" placeholder="เช่น หนังสือตกลงเลื่อนวันหยุด ลงชื่อพนักงานครบ 17 ต.ค. 69">${v.treatment_note||''}</textarea></div>
         </div>`:`<input type="hidden" id="hwTreatNote" value="${(v.treatment_note||'').replace(/"/g,'&quot;')}">`}
-        ${hasDaily?`<div class="field" style="margin-top:10px"><label>ข้อสรุปค่าจ้างพนักงานรายวันในกลุ่มนี้ (ยังไม่มีสูตรอัตโนมัติ — ใส่ยอดผ่าน Override ในหน้าทำจ่าย)</label><textarea id="hwDaily" rows="2" placeholder="ว่าง = รายวันที่มาทำงานเป็น &quot;รอข้อสรุป&quot;">${v.daily_resolution||''}</textarea></div>`:''}
+        ${(settings.r25Schema && v.company_works) ? holidayChoiceListHtml(h, members, v.treatment) : ''}
+        ${(hasDaily && !settings.r25Schema)?`<div class="field" style="margin-top:10px"><label>ข้อสรุปค่าจ้างพนักงานรายวันในกลุ่มนี้ (ยังไม่มีสูตรอัตโนมัติ — ใส่ยอดผ่าน Override ในหน้าทำจ่าย)</label><textarea id="hwDaily" rows="2" placeholder="ว่าง = รายวันที่มาทำงานเป็น &quot;รอข้อสรุป&quot;">${v.daily_resolution||''}</textarea></div>`:''}
       </div>`:''}`}
     </div>
     <div class="modal-foot">
       <button class="btn ghost" onclick="closeModal()">ยกเลิก</button>
       ${may1?'':`<button class="btn primary" onclick="saveHolidayWork()">💾 บันทึก</button>`}
     </div>`;
+}
+// [รอบ 25] เลือกรายคน: รับเงิน 1 เท่า หรือสะสมเป็นวันหยุด (ใช้ภายในปีนั้น)
+function holidayChoiceListHtml(h, members, dayTreatment){
+  if(!members.length) return "";
+  const def = dayTreatment==="substitute" ? "สะสมวันหยุด" : "รับเงิน";
+  return `<div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px">
+    <b style="font-size:13px">เลือกรายคน</b> <span class="hint">— พนักงานไม่รับเงิน 1 เท่าแล้วสะสมเป็นวันหยุดได้ (ใช้ภายในปี ${Number(h.holiday_date.slice(0,4))+543} · ใช้ไม่ครบตัดทิ้ง)</span>
+    <div style="max-height:200px;overflow:auto;margin-top:6px">
+    ${members.map(e=>{ const c = holidayChoiceOf(h, e); const val = c ? c.choice : ""; return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12.5px">
+      <span style="flex:1">${e.code||""} ${e.name}${e.type!=="monthly"?' <span class="hint">(รายวัน)</span>':''}</span>
+      <select class="hwChoice" data-emp="${e.id}" data-orig="${val}" style="width:190px;font-size:12px">
+        <option value="" ${val===""?'selected':''}>ตามค่าของวัน (${def})</option>
+        <option value="pay" ${val==="pay"?'selected':''}>รับเงิน 1 เท่า</option>
+        <option value="substitute" ${val==="substitute"?'selected':''}>ไม่รับเงิน → สะสมวันหยุด</option>
+      </select></div>`; }).join("")}
+    </div></div>`;
+}
+async function saveHolidayChoices(h){
+  const sels = [...document.querySelectorAll(".hwChoice")];
+  const changed = sels.filter(x=>x.value!==x.dataset.orig);
+  if(!changed.length) return true;
+  for(const x of changed){
+    const empId = Number(x.dataset.emp);
+    const r = x.value
+      ? await sb.from("holiday_work_choices").upsert({ holiday_id:h.id, employee_id:empId, choice:x.value, decided_by:loggedInEmployeeId }, { onConflict:"holiday_id,employee_id" })
+      : await sb.from("holiday_work_choices").delete().eq("holiday_id", h.id).eq("employee_id", empId);
+    if(r.error){ toast(`บันทึกการเลือกของ ${E(empId)?.name||empId} ไม่สำเร็จ: ${r.error.message}`); return false; }
+  }
+  logAudit("settings","บันทึกการเลือกรับเงิน/สะสมวันหยุด", `${h.name} ${isoToThaiDisplay(h.holiday_date)} · ${changed.map(x=>`${E(Number(x.dataset.emp))?.name||x.dataset.emp}: ${x.value==="substitute"?"สะสมวันหยุด":x.value==="pay"?"รับเงิน":"ตามค่าของวัน"}`).join(", ")}`);
+  return true;
 }
 async function saveHolidayWork(){
   const st = hwModalState; if(!st) return;
@@ -9036,6 +9135,7 @@ async function saveHolidayWork(){
   const { data, error } = await sb.from("holidays").update(payload).eq("id", h.id).select();
   if(error){ toast("บันทึกไม่สำเร็จ: "+error.message); return; }
   if(!data || !data.length){ toast("บันทึกไม่สำเร็จ (ไม่มีสิทธิ์แก้วันหยุด)"); return; }
+  if(settings.r25Schema && data[0].company_works && !(await saveHolidayChoices(data[0]))) return;
   const r = data[0];
   logAudit("settings", "ตั้งค่าวันเปิดทำงานในวันหยุด", `${h.name} ${isoToThaiDisplay(h.holiday_date)} · ${r.company_works?`เปิดทำงาน (${holidayScopeLabel(r)}) · ${r.treatment==="substitute"?"เลื่อนวันหยุด → หยุดชดเชย":r.treatment==="pay"?"จ่ายค่าทำงานวันหยุด":"รอข้อสรุป"}`:"ไม่เปิดทำงาน"}`);
   closeModal();
