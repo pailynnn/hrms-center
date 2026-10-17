@@ -2160,8 +2160,7 @@ function statusPill(s){return s==="active"?'<span class="pill green">ปฏิ�
 function leaveStatus(l){
   if(l.supStatus==="rejected"||l.hrStatus==="rejected") return '<span class="pill red">ไม่อนุมัติ</span>';
   if(l.supStatus==="approved"&&l.hrStatus==="approved") return '<span class="pill green">อนุมัติแล้ว</span>';
-  if(l.supStatus==="approved"&&l.hrStatus==="pending") return '<span class="pill blue">รอ HR</span>';
-  return '<span class="pill amber">รอหัวหน้า</span>';
+  return '<span class="pill amber">รอ HR อนุมัติ</span>';   // [รอบ 18.4] ใบลาเหลือขั้นเดียว
 }
 function pendingCount(){return leaves.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").length;}
 function updateBadge(){const b=document.getElementById("leaveBadge");const c=pendingCount();b.textContent=c;b.style.display=c?"inline-block":"none";}
@@ -2473,14 +2472,12 @@ function computeNotifications(){
       ? leaves
       : leaves.filter(l=>{const e=E(l.emp); return e && me && e.supervisor===me.name;});
     scope.filter(l=>(l.supStatus==="pending"||l.hrStatus==="pending")&&l.supStatus!=="rejected"&&l.hrStatus!=="rejected").forEach(l=>{
-      // หัวหน้างานเห็นเฉพาะที่ถึงคิวตัวเอง · HR เห็นทั้งที่รอหัวหน้าและที่รอ HR
-      if(!canViewAll() && l.supStatus!=="pending") return;
+      // [รอบ 18.4] ใบลาเหลือขั้นเดียว — HR เห็นทุกใบที่ยังไม่จบ
       const emp = E(l.emp);
-      const waitHr = l.hrStatus==="pending" && l.supStatus==="approved";
       items.push({
         key:`leave_${l.id}_${l.supStatus}_${l.hrStatus}`, icon:"✅",
         title:`ใบลารออนุมัติ: ${emp?emp.name:'พนักงาน #'+l.emp}`,
-        sub:`${LT(l.type).name} · ${l.date} · ${waitHr?'รอ HR อนุมัติ':'รอหัวหน้างาน'}`,
+        sub:`${LT(l.type).name} · ${l.date} · รอ HR อนุมัติ`,
         nav: goTo('leave','leave','approve',`lv-${l.id}`)
       });
     });
@@ -3105,7 +3102,7 @@ function pgMyDashboard(){
   const myAtt = attendanceToday.find(a=>a.emp===me.id);
   const myLeaves = leaves.filter(l=>l.emp===me.id).sort((a,b)=>(parseThaiDate(b.date)||0)-(parseThaiDate(a.date)||0));
   const pendingMine = myLeaves.filter(l=>l.supStatus==="pending"||l.hrStatus==="pending").length;
-  const teamPending = isTeamLead() ? leaves.filter(l=>{const e=E(l.emp); return e && e.supervisor===me.name && l.supStatus==="pending";}).length : 0;
+  const teamPending = 0;   // [รอบ 18.4] หัวหน้าทีมไม่อนุมัติลาแล้ว
   return `
   <div class="card" style="background:linear-gradient(135deg,#1e2432,#161b26);color:#fff;margin-bottom:16px">
     <div style="display:flex;align-items:center;gap:14px">
@@ -3118,7 +3115,7 @@ function pgMyDashboard(){
     <div class="card" style="text-align:center"><div style="font-size:24px">🕐</div><div class="display" style="font-size:20px;font-weight:700">${myAtt?myAtt.in:"—"}</div><div class="hint">เข้างานวันนี้</div></div>
     <div class="card" style="text-align:center"><div style="font-size:24px">🎫</div><div class="display" style="font-size:20px;font-weight:700">${me.type==="monthly"?(settings.paidLeaveQuota-me.leaveUsed):"—"}</div><div class="hint">โควตาลาคงเหลือ (วัน)</div></div>
     <div class="card" style="text-align:center"><div style="font-size:24px">📋</div><div class="display" style="font-size:20px;font-weight:700">${pendingMine}</div><div class="hint">ใบลารอการอนุมัติ</div></div>
-    ${isTeamLead()?`<div class="card" style="text-align:center;background:var(--accent-soft)"><div style="font-size:24px">✅</div><div class="display" style="font-size:20px;font-weight:700;color:#c8760a">${teamPending}</div><div class="hint">ใบลาทีมรออนุมัติ</div></div>`:''}
+    ${canApproveLeave()?`<div class="card" style="text-align:center;background:var(--accent-soft)"><div style="font-size:24px">✅</div><div class="display" style="font-size:20px;font-weight:700;color:#c8760a">${teamPending}</div><div class="hint">ใบลาทีมรออนุมัติ</div></div>`:''}
   </div>
 
   <div class="grid" style="grid-template-columns:1fr 1fr">
@@ -3128,7 +3125,7 @@ function pgMyDashboard(){
         <button class="btn ghost" style="flex-direction:column;padding:14px;gap:6px" onclick="setSub('leave','submit');go('leave',document.querySelector('[data-page=leave]'))"><span style="font-size:22px">📝</span>ยื่นลา</button>
         <button class="btn ghost" style="flex-direction:column;padding:14px;gap:6px" onclick="setSub('payroll','ess');go('payroll',document.querySelector('[data-page=payroll]'))"><span style="font-size:22px">🧾</span>สลิปของฉัน</button>
         <button class="btn ghost" style="flex-direction:column;padding:14px;gap:6px" onclick="go('attendance',document.querySelector('[data-page=attendance]'))"><span style="font-size:22px">🕐</span>ลงเวลา</button>
-        ${isTeamLead()?`<button class="btn ghost" style="flex-direction:column;padding:14px;gap:6px" onclick="setSub('leave','approve');go('leave',document.querySelector('[data-page=leave]'))"><span style="font-size:22px">✅</span>อนุมัติลาทีม</button>`:`<button class="btn ghost" style="flex-direction:column;padding:14px;gap:6px" onclick="go('news',document.querySelector('[data-page=news]'))"><span style="font-size:22px">📢</span>ข่าวประกาศ</button>`}
+        ${canApproveLeave()?`<button class="btn ghost" style="flex-direction:column;padding:14px;gap:6px" onclick="setSub('leave','approve');go('leave',document.querySelector('[data-page=leave]'))"><span style="font-size:22px">✅</span>อนุมัติลาทีม</button>`:`<button class="btn ghost" style="flex-direction:column;padding:14px;gap:6px" onclick="go('news',document.querySelector('[data-page=news]'))"><span style="font-size:22px">📢</span>ข่าวประกาศ</button>`}
       </div>
     </div>
     <div class="card">
@@ -3143,7 +3140,7 @@ function pgMyDashboard(){
     </div>
   </div>
   <div class="card" style="margin-top:16px;background:#f8f9fc">
-    <div class="hint">🔒 บัญชีของคุณเป็นระดับ "${roleOf(me.id)}" — เห็นได้เฉพาะข้อมูลของตัวเอง${isTeamLead()?"และลูกทีมที่ดูแล":""} เท่านั้น ข้อมูลพนักงานคนอื่นและเงินเดือนทั้งบริษัทจะเห็นได้เฉพาะ HR และ Super Admin</div>
+    <div class="hint">🔒 บัญชีของคุณเป็นระดับ "${roleOf(me.id)}" — เห็นได้เฉพาะข้อมูลของตัวเอง${seesTeamHr()?"และลูกทีมที่ดูแล":""} เท่านั้น ข้อมูลพนักงานคนอื่นและเงินเดือนทั้งบริษัทจะเห็นได้เฉพาะ HR และ Super Admin</div>
   </div>`;
 }
 window.qa = (i)=>[
@@ -3270,7 +3267,7 @@ function pgEmployees(){
 }
 function pgMyProfile(){
   const me = myEmp();
-  const team = isTeamLead() ? employees.filter(e=>e.supervisor===me.name) : [];
+  const team = seesTeamHr() ? employees.filter(e=>e.supervisor===me.name) : [];
   return `
   <div class="card">
     <h3>👤 ข้อมูลของฉัน</h3>
@@ -3293,7 +3290,7 @@ function pgMyProfile(){
       <div style="padding:12px;background:#f8f9fc;border-radius:10px;grid-column:span 2"><div class="hint">ที่อยู่</div><b>${me.address||"—"}</b></div>
     </div>
   </div>
-  ${isTeamLead()?`
+  ${seesTeamHr()?`
   <div class="card" style="margin-top:16px">
     <h3>👥 ลูกทีมของฉัน (${team.length} คน)</h3>
     <div class="hint">ในฐานะหัวหน้างาน คุณเห็นข้อมูลพื้นฐานของลูกทีมได้ เพื่อใช้อนุมัติการลาและติดตามการเข้างาน — ไม่รวมข้อมูลเงินเดือน</div>
@@ -3960,35 +3957,7 @@ function attPaySchedule(){
   const reqs = payScheduleReqRows.slice().sort((a,b)=>(a.status==="pending"?0:1)-(b.status==="pending"?0:1));
   const upcoming = scheduleHistory.filter(h=>String(h.effective_from)>today);
   return `
-  <div class="card" style="margin-bottom:16px">
-    <h3>📆 สร้างรอบจ่าย</h3>
-    <div class="hint">เลือกประเภทรอบ → ระบบเติมช่วงข้อมูลและวันจ่ายให้ (วันจ่ายตรงวันหยุด → เลื่อนเป็นวันทำงานก่อนหน้า) ตรวจวันจ่ายแล้วกดสร้าง</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:12px">
-      <div class="field"><label>ประเภทรอบ</label><select onchange="psForm.cycle=this.value;psForm.off=0;render('attendance')">${cys.map(k=>`<option value="${k}" ${psForm.cycle===k?'selected':''}>${cycleTh(k)}</option>`).join("")}</select></div>
-      <div class="field"><label>งวด</label><select onchange="psForm.off=Number(this.value);render('attendance')">${[-1,0,1,2].map(o=>{ const q = periodByOffset(psForm.cycle, o); return `<option value="${o}" ${psForm.off===o?'selected':''}>${o===0?'งวดปัจจุบัน':o<0?'งวดก่อนหน้า':'ถัดไป '+o+' งวด'} · ${periodLabel(q)}${periodTag(psForm.cycle, q)}</option>`; }).join("")}</select></div>
-      <div class="field"><label>วันจ่าย</label><input id="psPayDate" type="date" value="${exists?exists.pay_date:suggested}" ${exists?'disabled':''}></div>
-      <button class="btn primary" onclick="psCreate()" ${exists?'disabled':''}>${exists?'✓ สร้างแล้ว':'➕ สร้างรอบ'}</button>
-    </div>
-    <div class="hint" style="margin-top:8px">ช่วงข้อมูล <b>${periodLabel(P)}</b>${periodTag(psForm.cycle, P)} · วันจ่ายที่ระบบเสนอ ${isoToThaiDisplay(suggested)} (วัน${DOW_TH[new Date(suggested+"T00:00:00").getDay()]}) · พนักงานในรอบ <b>${countIn(psForm.cycle, P)} คน</b></div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px">
-    <h3>🗂️ รอบจ่ายที่สร้างแล้ว</h3>
-    ${payrollPeriodRows.length===0?'<div class="hint" style="text-align:center;padding:18px">ยังไม่มีรอบจ่าย</div>':`
-    <table style="margin-top:10px">
-      <tr><th>รอบ</th><th>ช่วงข้อมูล</th><th>วันจ่าย</th><th class="num">พนักงาน</th><th>สถานะ</th><th>ผู้สร้าง</th><th style="text-align:center">จัดการ</th></tr>
-      ${payrollPeriodRows.map(r=>{ const p = {start:r.start_date, end:r.end_date}; const editable = r.status==="created"; return `<tr>
-        <td><b>${cycleTh(r.cycle)}</b>${r.half?` <span class="pill gray">งวด ${r.half}</span>`:''}${isTransitionPeriod(r.cycle,p)?' <span class="pill blue">เปลี่ยนผ่าน</span>':''}</td>
-        <td style="font-size:12.5px">${periodLabel(p)}</td>
-        <td>${editable?`<input type="date" id="psPay_${r.id}" value="${r.pay_date}" style="padding:5px 8px;border:1.5px solid var(--line);border-radius:8px;font-size:12px">`:isoToThaiDisplay(r.pay_date)}</td>
-        <td class="num">${countIn(r.cycle, p)} คน</td>
-        <td>${psStatusPill(r.status)}</td>
-        <td style="font-size:12px">${(E(r.created_by)||{}).name||'—'}</td>
-        <td style="text-align:center;white-space:nowrap">${editable?`<button class="btn ghost xs" onclick="psSavePayDate(${r.id})">💾 วันจ่าย</button>${isHR?` <button class="btn ghost xs" onclick="psDelete(${r.id})">🗑️</button>`:''}`:'<span class="hint">—</span>'}</td>
-      </tr>`; }).join("")}
-    </table>`}
-  </div>
-
+  <!-- [รอบ 18.4] ตัดส่วน "สร้างรอบจ่าย / รอบจ่ายที่สร้างแล้ว" ออก — วันจ่ายคำนวณให้อัตโนมัติ (payDateFor) และสถานะงวดบันทึกเองตอน HR อนุมัติ/ยืนยันจ่าย -->
   <div class="card" style="margin-bottom:16px">
     <h3>🔁 เปลี่ยนรอบจ่ายพนักงาน</h3>
     <div class="hint">มีผลวันที่ 1 ของเดือน (เร็วที่สุด ${isoToThaiDisplay(minEff)}) · ก่อนวันที่มีผลจ่ายตามรอบเดิมจนจบงวด — ระบบนับต่อจากวันสุดท้ายที่รอบเดิมจ่ายให้ ไม่ซ้ำ ไม่ตกหล่น${isHR?'':' · ส่งคำขอแล้วรอ HR อนุมัติ'}</div>
@@ -4119,7 +4088,7 @@ function attHolidayWork(){
   const canRecord = canEditAttendance();   // HR · Super Admin · ผู้ช่วย HR
   const canReview = canSeePayroll();       // HR · Super Admin
   const month = hwMonth || todayISODate().slice(0,7);
-  const rows = holidayWorkRows.filter(r=>String(r.work_date).slice(0,7)===month);
+  const rows = holidayWorkRows.filter(r=>String(r.work_date).slice(0,7)===month && (!onlyOwnHr() || String(r.employee_id)===String(loggedInEmployeeId)));
   const pendingCnt = holidayWorkRows.filter(r=>r.status==="pending").length;
   const returnedCnt = holidayWorkRows.filter(r=>r.status==="returned").length;
   const editing = hwEditId ? holidayWorkRows.find(r=>String(r.id)===String(hwEditId)) : null;
@@ -4162,7 +4131,7 @@ function attHolidayWork(){
   const listCard = `
   <div class="card">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <h3>📋 รายการทำงานวันหยุด ${canRecord||isTeamLead()?'':'ของฉัน'}</h3>
+      <h3>📋 รายการทำงานวันหยุด ${canRecord||seesTeamHr()?'':'ของฉัน'}</h3>
       ${canReview&&pendingCnt?`<span class="pill blue">รออนุมัติ ${pendingCnt}</span>`:''}
       ${canRecord&&returnedCnt?`<span class="pill amber">ส่งกลับแก้ไข ${returnedCnt}</span>`:''}
       <div style="margin-left:auto"><input type="month" value="${month}" onchange="hwMonth=this.value;render('attendance')" style="padding:6px 10px;border:1.5px solid var(--line);border-radius:8px"></div>
@@ -4303,7 +4272,7 @@ async function hwReview(id, status){
 
 function pgAttendance(){
   const t = subTab.attendance || "today";
-  const isPlain = !canViewAll() && !isTeamLead();
+  const isPlain = !canViewAll() && !seesTeamHr();
   const tab = (k,label,icon,badge)=>`<button class="${t===k?'on':''}" onclick="setSub('attendance','${k}')">${icon} ${label}${badge?' <span class="dot"></span>':''}</button>`;
   const otPending = otRequests.filter(o=>o.status==="pending" && String(o.emp)!==String(loggedInEmployeeId)).length;
   const missingCount = Array.isArray(missingRows)?missingRows.length:0;
@@ -4635,6 +4604,7 @@ function otRateCardHtml(me){
       🗓️ วันหยุดที่ได้รับแจ้งให้ทำงาน ไม่ต้องยื่น OT — ผู้ช่วย HR บันทึกให้ในแท็บ "ทำงานวันหยุด"</div>${v2Note}`;
 }
 function fmt2(n){ return (Math.round((Number(n)||0)*100)/100).toLocaleString("th-TH",{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function otVisible(){ return onlyOwnHr() ? otRequests.filter(o=>String(o.emp)===String(loggedInEmployeeId)) : otRequests; }
 function attOt(){
   const canPickOthers = canSubmitForOthers();
   const canApprove = canApproveOt();
@@ -4667,7 +4637,7 @@ function attOt(){
     <h3>📋 รายการขอ OT ${canApprove?'(ของทีม/ทั้งหมดที่คุณมีสิทธิ์เห็น)':'ของฉัน'}</h3>
     <table style="margin-top:10px">
       <tr><th>วันที่</th><th>พนักงาน</th><th>ช่วงเวลาที่ทำ</th><th class="num">ชั่วโมง</th><th class="num">คิดเป็นเงิน</th><th>เหตุผล</th><th>สถานะ</th><th style="text-align:center">การดำเนินการ</th></tr>
-      ${otRequests.length===0?'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">ยังไม่มีรายการขอ OT</td></tr>':otRequests.map(o=>{
+      ${otVisible().length===0?'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">ยังไม่มีรายการขอ OT</td></tr>':otVisible().map(o=>{
         const e=E(o.emp); if(!e) return '';
         const isMine = String(o.emp)===String(loggedInEmployeeId);
         const showApprove = canApprove && o.status==="pending" && (!isMine || canViewAll());
@@ -4702,7 +4672,7 @@ function attToday(){
       </div>` : "";
   const visibleIds = visibleEmployees().map(e=>e.id);
   const attRows = attendanceToday.filter(a=>visibleIds.includes(a.emp));
-  const isPlainEmployee = !canViewAll() && !isTeamLead();
+  const isPlainEmployee = !canViewAll() && !seesTeamHr();
   const myAtt = myTodayAttendance();
   const hasCheckedIn = !!myAtt;
   const hasCheckedOut = !!(myAtt && myAtt.checkOutRaw);
@@ -5153,7 +5123,7 @@ async function loadAttLog(){
   attLogRows = rows.reverse(); // วันล่าสุดขึ้นก่อน
 }
 function setAttLogEmp(id){
-  if(!(canSeePayroll()||isTeamLead())){ return; } // ผู้ช่วย HR/พนักงานทั่วไปสลับไปดูของคนอื่นไม่ได้ — กันไว้ในฟังก์ชันด้วย เผื่อมีคนเรียกตรงๆ ผ่าน console (ปุ่ม/dropdown ในหน้าเว็บก็ไม่โชว์ให้กดอยู่แล้ว)
+  if(!(canSeePayroll()||seesTeamHr())){ return; } // ผู้ช่วย HR/พนักงานทั่วไปสลับไปดูของคนอื่นไม่ได้ — กันไว้ในฟังก์ชันด้วย เผื่อมีคนเรียกตรงๆ ผ่าน console (ปุ่ม/dropdown ในหน้าเว็บก็ไม่โชว์ให้กดอยู่แล้ว)
   attLogEmpId = Number(id); attLogRows = null; render("attendance");
 }
 function setAttLogMonth(v){ attLogMonth = v || null; attLogRows = null; render("attendance"); }
@@ -5192,7 +5162,7 @@ function attLogRowHtml(r){
 function attLog(){
   // HR/Super Admin เลือกดูของใครก็ได้ทั้งบริษัท · หัวหน้างานเลือกดูได้เฉพาะลูกทีมตัวเอง (RLS ตาราง attendances เพิ่ม policy supervisor_reads_team_attendance ให้แล้ว)
   // ผู้ช่วย HR ตัดสิทธิ์เลือกดูคนอื่นออกตามที่ผู้ใช้ระบุ — เห็นได้แค่ของตัวเองเหมือนพนักงานทั่วไป (แม้ RLS ฝั่ง read จะยังเปิดกว้างกว่านี้ก็ตาม — กันไว้ที่ชั้น UI)
-  const canPickAny = canSeePayroll() || isTeamLead();
+  const canPickAny = canSeePayroll() || seesTeamHr();   // [รอบ 18.4] หัวหน้าทีมดู Log ได้แค่ของตัวเอง
   const pickList = visibleEmployees().filter(e=>e.status!=="terminated");
   // คำนวณ "id ที่ควรเห็น" ใหม่ทุกครั้งที่ render (ไม่ใช่แค่ตอน attLogEmpId ยังว่าง) — กันกรณี state เก่าค้างมาจากตอนที่ยังมีสิทธิ์เลือกคนอื่น
   // (เช่น ผู้ช่วย HR เคยเลือกดูของคนอื่นไว้ก่อนรอบนี้ตัดสิทธิ์ หรือมีคนเรียก setAttLogEmp ตรงๆ ผ่าน console) ต้องบังคับกลับมาเป็นของตัวเองเสมอถ้าไม่มีสิทธิ์เลือกคนอื่นแล้ว
@@ -5249,7 +5219,7 @@ function attLoc(){
 /* ================== PAGE: LEAVE ================== */
 function pgLeave(){
   const t = subTab.leave;
-  const isPlainEmp = !canViewAll() && !isTeamLead();
+  const isPlainEmp = !canViewAll() && !seesTeamHr();
   // พนักงานทั่วไปไม่เห็นประเภทลา/ปฏิทินการลา — ถ้าแท็บปัจจุบันเป็นอันที่ถูกซ่อน เด้งกลับแดชบอร์ด
   if(isPlainEmp && (t==="types"||t==="calendar"||t==="report")){ subTab.leave="dashboard"; return pgLeave(); }
   const tt = subTab.leave;
@@ -5326,7 +5296,7 @@ function myVisibleLeaves(){
   if(canViewAll()) return leaves;
   const me = myEmp();
   if(!me) return [];
-  if(isTeamLead()) return leaves.filter(l=>{const e=E(l.emp); return e && (e.id===me.id || e.supervisor===me.name);});
+  if(seesTeamHr()) return leaves.filter(l=>{const e=E(l.emp); return e && (e.id===me.id || e.supervisor===me.name);});
   return leaves.filter(l=>l.emp===me.id);
 }
 
@@ -5378,13 +5348,12 @@ function leaveMyDash(){
   <div class="card">
     <h3>🗓️ ประวัติการลาของฉัน</h3>
     <table style="margin-top:10px">
-      <tr><th>วันที่ลา</th><th>ประเภท</th><th>เหตุผล</th><th>ระดับหัวหน้า</th><th>ระดับ HR</th></tr>
-      ${data.length===0?'<tr><td colspan="5" class="hint" style="text-align:center;padding:16px">ยังไม่มีประวัติการลา</td></tr>':data.map(l=>{const lt=LT(l.type);return `<tr id="lvmine-${l.id}">
+      <tr><th>วันที่ลา</th><th>ประเภท</th><th>เหตุผล</th><th>สถานะ</th></tr>
+      ${data.length===0?'<tr><td colspan="4" class="hint" style="text-align:center;padding:16px">ยังไม่มีประวัติการลา</td></tr>':data.map(l=>{const lt=LT(l.type);return `<tr id="lvmine-${l.id}">
         <td>${l.date}</td>
         <td style="color:${lt.color}">${lt.name}</td>
         <td class="hint" style="font-size:12.5px">${l.note||"—"}</td>
-        <td>${l.supStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.supStatus==='rejected'?'<span class="pill red">✕</span>':'<span class="pill amber">รอ</span>'}</td>
-        <td>${l.hrStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.hrStatus==='rejected'?'<span class="pill red">✕</span>':l.supStatus==='approved'?'<span class="pill blue">รอ HR</span>':'<span class="pill gray">รอหัวหน้า</span>'}</td>
+        <td>${leaveStatus(l)}</td>
       </tr>`;}).join("")}
     </table>
   </div>
@@ -5529,7 +5498,7 @@ function leaveSubmit(){
         📌 ยื่นช้าจะติดธง "แจ้งช้า" ให้หัวหน้าพิจารณา<br>
         📌 <b>รายเดือน</b>: ลาไม่หักเงิน ${settings.paidLeaveQuota} วัน/เดือน · เกินโควตาหักตามค่าจ้างต่อวัน<br>
         📌 <b>รายวัน</b>: ลา = ไม่ได้ค่าแรง แต่ยื่นไว้จะไม่ขึ้น "ขาดงาน"<br>
-        📌 อนุมัติ <b>2 ระดับ</b>: หัวหน้า → HR<br>
+        📌 <b>HR อนุมัติ</b> (ขั้นเดียว)<br>
         📌 ลาหลายวันติดกัน ระบบจะสร้างใบลาแยกทีละวันให้อัตโนมัติ
       </div>
     </div>
@@ -5573,27 +5542,24 @@ async function doSubmitLeave(){
   logAudit("leave","ยื่นใบลา", `${E(empId)?.name||""} · ${LT(typeCode)?.name||typeCode} ${dates.length} วัน (${isoToThaiDisplay(from)}${to!==from?" – "+isoToThaiDisplay(to):""})`);
   updateBadge();
   setSub("leave","approve");
-  toast(`ยื่นใบลาสำเร็จ ✓ (${dates.length} วัน) ส่งไปที่หัวหน้าแล้ว`);
+  toast(`ยื่นใบลาสำเร็จ ✓ (${dates.length} วัน) ส่งให้ HR อนุมัติแล้ว`);
 }
 
 function leaveApprove(){
   return `
   <div class="card">
-    <h3>✅ อนุมัติการลา (2 ระดับ: หัวหน้า → HR)</h3>
-    <div class="hint">ใบลาที่หัวหน้าอนุมัติแล้วจะเด้งมาให้ HR อนุมัติต่อ · ปฏิเสธที่ระดับไหนก็จบทันที${!canViewAll()?' · แสดงเฉพาะใบลาของทีมคุณ':''}</div>
+    <h3>✅ อนุมัติการลา (HR อนุมัติขั้นเดียว)</h3>
+    <div class="hint">ใบลาทุกใบส่งตรงถึง HR · อนุมัติแล้วบันทึกเข้าตารางเวลาให้อัตโนมัติ${!canViewAll()?' · แสดงเฉพาะใบลาของทีมคุณ':''}</div>
     <table style="margin-top:12px">
-      <tr><th>พนักงาน</th><th>วันที่ลา</th><th>ประเภท</th><th>ยื่นเมื่อ</th><th>ตรงเวลา</th><th>ระดับหัวหน้า</th><th>ระดับ HR</th><th style="text-align:center">การดำเนินการ</th></tr>
+      <tr><th>พนักงาน</th><th>วันที่ลา</th><th>ประเภท</th><th>ยื่นเมื่อ</th><th>ตรงเวลา</th><th>สถานะ</th><th style="text-align:center">การดำเนินการ</th></tr>
       ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);return `<tr id="lv-${l.id}">
         <td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td>${l.date}</td>
         <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}<div style="color:var(--muted);font-size:11.5px">${l.note}</div></td>
         <td class="num">${l.submitted}</td>
         <td>${l.onTime?'<span class="pill green">✓</span>':'<span class="pill red">ช้า</span>'}</td>
-        <td>${l.supStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.supStatus==='rejected'?'<span class="pill red">✕</span>':'<span class="pill amber">รอ</span>'}</td>
-        <td>${l.hrStatus==='approved'?'<span class="pill green">✓ อนุมัติ</span>':l.hrStatus==='rejected'?'<span class="pill red">✕</span>':l.supStatus==='approved'?'<span class="pill blue">รอ HR</span>':'<span class="pill gray">รอหัวหน้า</span>'}</td>
+        <td>${leaveStatus(l)}</td>
         <td style="white-space:nowrap;text-align:center">${
-          l.supStatus==="pending"?`<button class="btn green xs" onclick="actLeave(${l.id},'sup','approved')">หัวหน้าอนุมัติ</button>
-                                    <button class="btn danger xs" onclick="actLeave(${l.id},'sup','rejected')">ปฏิเสธ</button>`:
-          (l.hrStatus==="pending"&&l.supStatus==="approved"&&canViewAll())?`<button class="btn primary xs" onclick="actLeave(${l.id},'hr','approved')">HR อนุมัติ</button>
+          (l.hrStatus==="pending"&&l.supStatus!=="rejected"&&canApproveLeave())?`<button class="btn primary xs" onclick="actLeave(${l.id},'hr','approved')">✓ อนุมัติ</button>
                                     <button class="btn danger xs" onclick="actLeave(${l.id},'hr','rejected')">ปฏิเสธ</button>`:
           '<span class="hint" style="font-size:11.5px">-- จบขั้นตอน --</span>'}</td>
       </tr>`;}).join("")}
@@ -5621,9 +5587,11 @@ async function actLeave(id,level,status){
   const l=leaves.find(x=>x.id===id); if(!l) return;
   const e=E(l.emp);
   const nowISO = new Date().toISOString();
+  // [รอบ 18.4] ขั้นเดียว: HR อนุมัติ = ผ่านขั้นหัวหน้าไปพร้อมกัน (DB ทำซ้ำให้ด้วย trigger trg_leave_single_stage)
   const payload = level==="sup"
     ? { supervisor_status: status, supervisor_approved_by: loggedInEmployeeId, supervisor_approved_at: nowISO }
-    : { hr_status: status, hr_approved_by: loggedInEmployeeId, hr_approved_at: nowISO };
+    : Object.assign({ hr_status: status, hr_approved_by: loggedInEmployeeId, hr_approved_at: nowISO },
+        (status==="approved" && l.supStatus==="pending") ? { supervisor_status:"approved", supervisor_approved_by: loggedInEmployeeId, supervisor_approved_at: nowISO } : {});
   const { data: upd, error } = await sb.from("leave_requests").update(payload).eq("id", id).select("id");
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
   if(!upd || upd.length===0){
@@ -5633,23 +5601,23 @@ async function actLeave(id,level,status){
   }
 
   const bothApprovedNow = status==="approved" && (
-    (level==="sup" && l.hrStatus==="approved") || (level==="hr" && l.supStatus==="approved")
+    (level==="sup" && l.hrStatus==="approved") || level==="hr"
   );
   if(bothApprovedNow){
     await syncLeaveToAttendance(l.emp, l.dateISO);
     notifyLineBestEffort(l.emp, `✅ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ได้รับการอนุมัติแล้วครบทุกขั้นตอน — HRMS CENTER`);
   } else if(status==="rejected"){
     // แจ้งกลับ LINE ทันทีเมื่อไม่อนุมัติ (ไม่ว่าระดับหัวหน้าหรือ HR)
-    const who = level==="sup" ? "หัวหน้างาน" : "ฝ่ายบุคคล (HR)";
+    const who = "ฝ่ายบุคคล (HR)";
     notifyLineBestEffort(l.emp, `❌ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ไม่ได้รับการอนุมัติจาก${who} — หากมีข้อสงสัยกรุณาติดต่อ${who}โดยตรง · HRMS CENTER`);
   } else if(status==="approved" && level==="sup"){
     // หัวหน้าอนุมัติแล้ว รอ HR — แจ้งความคืบหน้า
     notifyLineBestEffort(l.emp, `⏳ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ผ่านการอนุมัติจากหัวหน้างานแล้ว รอ HR อนุมัติขั้นสุดท้าย — HRMS CENTER`);
   }
   await loadLeaves();
-  logAudit("leave", `${status==='approved'?'อนุมัติ':'ปฏิเสธ'}ใบลา (ระดับ${level==='sup'?'หัวหน้า':' HR'})`, `${e?e.name:'พนักงาน'} · ${l.date||l.dateISO||""}`);
+  logAudit("leave", `${status==='approved'?'อนุมัติ':'ปฏิเสธ'}ใบลา`, `${e?e.name:'พนักงาน'} · ${l.date||l.dateISO||""}`);
   updateBadge();
-  toast(`${level==='sup'?'หัวหน้า':'HR'} ${status==='approved'?'อนุมัติ':'ปฏิเสธ'} ใบลาของ ${e?e.name:'พนักงาน'} แล้ว ${bothApprovedNow?'· Sync เข้า Attendance แล้ว':''}`);
+  toast(`${status==='approved'?'อนุมัติ':'ปฏิเสธ'} ใบลาของ ${e?e.name:'พนักงาน'} แล้ว ${bothApprovedNow?'· Sync เข้า Attendance แล้ว':''}`);
   render("leave");
 }
 // เมื่อใบลาผ่านการอนุมัติครบ 2 ระดับ ให้บันทึกสถานะ "ลา" ลงตาราง attendances ของวันนั้นให้อัตโนมัติ
@@ -6748,9 +6716,13 @@ function canEditAttendance(){ return canSeePayroll() || isHrAssistant(); }
 // ยื่นขอ OT / ยื่นใบลา "แทนพนักงานคนอื่น" ได้ — ผู้ช่วย HR ยื่นได้ แต่ดูข้อ canApproveOt() เรื่องการอนุมัติ
 function canSubmitForOthers(){ return canSeePayroll() || isHrAssistant(); }
 // อนุมัติ OT: ผู้ช่วย HR ยื่นได้แต่ "กดอนุมัติไม่ได้" (ต้องให้ HR อนุมัติ) · ระดับ DB ก็ไม่มี policy UPDATE ให้ role นี้เช่นกัน
-function canApproveOt(){ return (canViewAll() || isTeamLead()) && !isHrAssistant(); }
+// [รอบ 18.4] ผู้ใช้สั่ง 17 ต.ค.: หัวหน้าทีมไม่อนุมัติลา/OT แล้ว — HR/Super Admin อนุมัติคนเดียว (ใบลาเหลือขั้นเดียว)
+function canApproveOt(){ return canSeePayroll(); }
 function canManageAssets(){ return canSeePayroll() || isHrAssistant(); }
-function canApproveLeave(){ return canViewAll() || isTeamLead(); } // รวมผู้ช่วย HR (อนุมัติลาได้)
+function canApproveLeave(){ return canSeePayroll(); }   // [รอบ 18.4] HR/SA เท่านั้น (ผู้ช่วย HR เดิมกดได้แต่ DB ไม่เคยยอมบันทึก)
+// [รอบ 18.4] หัวหน้าทีมเห็นเวลา/ลา/OT/ทำงานวันหยุดของตัวเองเท่านั้น · CEO (T000) ยังเห็นภาพรวมตามเดิม
+function seesTeamHr(){ return isTeamLead() && isCeoT000(); }
+function onlyOwnHr(){ return isTeamLead() && !isCeoT000(); }
 function canAccessPayroll(){ return canSeePayroll(); }
 // [รอบ 17.15] ยื่นขอเบิกเงินล่วงหน้า "ของตัวเอง" = ทำได้ทุก role ที่ผูกกับพนักงานในระบบ
 // (พนักงานทั่วไป · ผู้ช่วย HR · หัวหน้าทีม · HR · Super Admin) — DB RLS policy self_insert_salary_advances
@@ -6761,6 +6733,8 @@ function canAccessAdmin(){ return canSeePayroll(); }
 function visibleEmployees(){
   // RLS ของ Supabase กรองแถวที่มองเห็นได้ตาม role มาให้ตั้งแต่ตอน loadEmployees() แล้ว
   // (admin/hr เห็นทุกคน, หัวหน้างานเห็นทีมตัวเอง, พนักงานเห็นแค่ตัวเอง)
+  // [รอบ 18.4] หัวหน้าทีม (ยกเว้น CEO) ในหน้าเวลา/ลา เห็นแค่ตัวเอง — รายชื่อลูกทีมยังใช้ในโมดูลโครงการได้ตามเดิม
+  if(onlyOwnHr()) return employees.filter(e=>String(e.id)===String(loggedInEmployeeId));
   return employees;
 }
 function noAccessCard(msg){
