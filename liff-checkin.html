@@ -81,6 +81,7 @@
   .status.show{display:block}
   .status.ok{background:var(--ok-bg);color:var(--ok);border-color:rgba(52,211,153,.25)}
   .status.err{background:var(--err-bg);color:var(--err);border-color:rgba(248,113,113,.25)}
+  .status.off{background:rgba(251,191,36,.12);color:#fbbf24;border-color:rgba(251,191,36,.3)}
   .status.info{background:var(--info-bg);color:var(--info);border-color:rgba(96,165,250,.25)}
   .btnrow{display:flex;gap:11px;margin-bottom:11px}
   button.act{
@@ -414,10 +415,10 @@ async function doAction(action){
     const res = await fetch(CHECKIN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idToken, lat: coords?.lat, lng: coords?.lng, action })
+      body: JSON.stringify({ idToken, lat: coords?.lat, lng: coords?.lng, action, lang })
     });
     const json = await res.json().catch(()=>({error:t("srvErr")}));
-    if(!res.ok || json.error) throw new Error(json.error || t("genErr"));
+    if(!res.ok || json.error){ if(json.code==="weekly_off") BLOCK_IN = json.error; throw new Error(json.error || t("genErr")); }
 
     showStatus("✅ " + json.message, "ok");
     if(action === "in") btnIn.disabled = true; else { btnIn.disabled = true; btnOut.disabled = true; checkTodayReport(); }
@@ -425,8 +426,25 @@ async function doAction(action){
     showStatus("⚠️ " + err.message, "err");
   }finally{
     if(statusBox.className.indexOf("info") > -1) statusBox.className = "status";
-    btnIn.disabled = statusBox.className.indexOf("ok")>-1 ? true : false;
+    btnIn.disabled = (statusBox.className.indexOf("ok")>-1 || !!BLOCK_IN) ? true : false;
   }
+}
+
+/* [รอบ 23] ตรวจล่วงหน้าตอนเปิดหน้า: วันหยุดประจำสัปดาห์ + HR ตั้งปิดลงเวลาใน LINE → ปิดปุ่มเข้างานพร้อมบอกเหตุผล */
+let BLOCK_IN = null;
+async function precheckToday(){
+  try{
+    const idToken = liff.getIDToken(); if(!idToken) return;
+    const res = await fetch(CHECKIN_URL, { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ idToken, action:"check", lang }) });
+    const j = await res.json().catch(()=>null);
+    if(!res.ok || !j || j.error) return;            // ตรวจไม่ได้ → ปล่อยให้กดตามปกติ (ฝั่งเซิร์ฟเวอร์ตรวจซ้ำอยู่แล้ว)
+    if(j.blockedIn){
+      BLOCK_IN = j.reason || "";
+      btnIn.disabled = true;
+      showStatus("🏖️ " + BLOCK_IN, "off");
+    }
+  }catch(e){ /* เงียบ */ }
 }
 
 /* ================= รายงานประจำวัน: ดูเป็นภาพฟอร์ม + แชร์ PDF ================= */
@@ -751,6 +769,7 @@ async function init(){
     document.getElementById("displayName").textContent = profile.displayName || "";
     // ถ้าวันนี้บันทึกรายงานประจำวันไปแล้ว -> โชว์ปุ่มเปิดดูรายงาน (ภาพฟอร์ม + แชร์ PDF)
     checkTodayReport();
+    precheckToday();
   }catch(err){
     showStatus("⚠️ " + err.message, "err");
     btnIn.disabled = true; btnOut.disabled = true;

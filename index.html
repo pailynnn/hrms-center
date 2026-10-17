@@ -516,7 +516,7 @@ const settings = {
   autoSyncLeaveAtt:true, autoDeductUnpaid:true,
   otCalcType:"flat_rate", otStartTime:"17:30", otDivisorDays:30, otDivisorHours:8, otRoundTo:5, otRequiresApproval:true,
   // [รอบ 18.1] กติกาค่าจ้างใหม่ — มีผลกับ "วันที่ทำงาน" ตั้งแต่ payRulesV2From (งวดเปลี่ยนผ่าน 29 ต.ค.–30 พ.ย. 2569)
-  v2Schema:false, payRulesV2From:"2026-10-29", otMultWorkday:1.5, otMultHoliday:3, hwMultMonthly:1, hwMultDaily:2, blockWeeklyOffCheckin:false,
+  otExemptSchema:false, v2Schema:false, payRulesV2From:"2026-10-29", otMultWorkday:1.5, otMultHoliday:3, hwMultMonthly:1, hwMultDaily:2, blockWeeklyOffCheckin:false,
   // [รอบ 18.2] รอบจ่ายใหม่ — v2p2Schema = รัน migration เฟส 2 แล้ว
   v2p2Schema:false, monthlyCalendarFrom:"2026-10-29", semiAEndDay:12, semiAPayDay:15
 };
@@ -680,6 +680,7 @@ function mapEmployeeRow(row){
     att:{workDays:0, absent:0, lateMin:0}, leaveUsed:0, extra:0, files:[], deductions:[], wfh:!!row.wfh,
     // [รอบ 18.1] ชั่วโมงทำงานปกติต่อวัน (ใช้คิดค่าจ้างต่อชั่วโมง) + วันหยุดประจำสัปดาห์รายคน (null = ใช้ค่าบริษัท)
     normalHours: Number(row.normal_hours_per_day)||8,
+    otExempt: (Object.prototype.hasOwnProperty.call(row, "ot_exempt") ? (settings.otExemptSchema = true, !!row.ot_exempt) : false),   // [รอบ 23] ไม่รับค่า OT
     weeklyOffDow: (row.weekly_off_dow===null||row.weekly_off_dow===undefined) ? null : Number(row.weekly_off_dow)
   };
 }
@@ -940,6 +941,7 @@ function dayOffKindFor(e, dISO){
 }
 // ยอดเงินของคำขอ OT 1 ใบ (ใช้แสดงในตาราง) — วันหยุด ×3 · วันทำงาน ×1.5 · ก่อนวันเริ่มกติกาใหม่ = สูตรเดิม
 function otRequestPay(e, o){
+  if(e && e.otExempt) return 0;   // [รอบ 23] พนักงานไม่รับค่า OT
   const dISO = o.dateISO || o.work_date;
   const h = Number(o.hours)||0;
   if(!payV2On(dISO)) return Math.round(h*calcOTHourlyFor(e));
@@ -951,7 +953,7 @@ function holidayWorkAmount(e, r){
   const h = hourlyRateV2(e);
   const mult = e.type==="monthly" ? settings.hwMultMonthly
     : (r.day_kind==="company_holiday" ? settings.hwMultDaily - 1 : settings.hwMultDaily);
-  return (Number(r.normal_hours)||0)*h*mult + (Number(r.ot_hours)||0)*h*settings.otMultHoliday;
+  return (Number(r.normal_hours)||0)*h*mult + (e.otExempt ? 0 : (Number(r.ot_hours)||0)*h*settings.otMultHoliday);   // [รอบ 23] ไม่รับ OT = ส่วน OT เป็น 0
 }
 function fmtHrs(h){ return String(Math.round((Number(h)||0)*100)/100); }
 // ===== OT แบบกรอก "เวลาเริ่ม – เวลาสิ้นสุด" (แทนการกรอกจำนวนชั่วโมงเอง) =====
@@ -1016,6 +1018,7 @@ async function submitOt(){
   if(hours<=0 || hours>12){ toast(`ช่วงเวลานี้ได้ ${hours} ชม. — ต้องอยู่ระหว่าง 0.5 – 12 ชม. กรุณาตรวจสอบเวลาอีกครั้ง`); return; }
   // [รอบ 18.1] วันหยุดของพนักงาน (ตั้งแต่วันเริ่มกติกาใหม่) ไม่ยื่น OT — ชั่วโมงทั้งหมดอยู่ใน "บันทึกทำงานวันหยุด" รายการเดียว กันคิดซ้ำ
   const _otEmp = E(empId) || myEmp();
+  if(_otEmp && _otEmp.otExempt){ toast(canPickOthers ? `${_otEmp.name} ไม่รับค่า OT — ไม่ต้องยื่น OT` : "บัญชีของคุณไม่ได้รับค่า OT — ไม่ต้องยื่น OT (สอบถาม HR)"); return; }   // [รอบ 23]
   if(_otEmp && payV2On(dateISO) && dayOffKindFor(_otEmp, dateISO)){
     toast("วันที่นี้เป็นวันหยุดของพนักงาน — ไม่ต้องยื่น OT · ให้ผู้ช่วย HR บันทึกที่แท็บ \"ทำงานวันหยุด\" แทน");
     return;
@@ -1554,6 +1557,13 @@ async function loadCycleStats(cy){
     covRows = cr.error ? [] : (cr.data||[]);
   }
   // เบิกเงินล่วงหน้าที่อนุมัติแล้ว และผูกไว้กับ "งวดนี้" โดยตรง (ผูกอัตโนมัติตอนยื่นขอ) — รายการเก่าก่อนอัปเดตระบบที่ยังไม่มีงวดผูก (target_cycle_start เป็น null) จะยังคงพฤติกรรมเดิมคือรอหักในงวดถัดไปที่ปิด
+  // [รอบ 23] รายการปรับจ่ายที่รอเข้างวด (ยังไม่ผูกงวด หรือผูกกับงวดนี้ตอนอนุมัติแล้ว) — ไม่มีตาราง = ข้าม
+  let adjRows = [];
+  if(canSeePayroll() && payAdjSchema!==false && members.length){
+    const ar = await sb.from("pay_adjustments").select("*").eq("status","pending").in("employee_id", members.map(e=>e.id));
+    if(ar.error){ if(isMissingRelation(ar.error)) payAdjSchema = false; else console.warn("pay_adjustments", ar.error); }
+    else { payAdjSchema = true; adjRows = (ar.data||[]).filter(a=>!a.applied_start || (a.applied_cycle===cy && a.applied_start===period.start && a.applied_end===period.end)); }
+  }
   const advRes = await sb.from("salary_advances").select("*").eq("status","approved");
   const advances = advRes.error?[]:(advRes.data||[]).filter(a=>
     (a.target_cycle_start===period.start && a.target_cycle_end===period.end) || !a.target_cycle_start
@@ -1606,6 +1616,9 @@ async function loadCycleStats(cy){
     e.prorateFactor = (fullExpected>0 && expected<fullExpected) ? (expected/fullExpected) : 1;
     e.override = overrides.find(o=>String(o.employee_id)===String(e.id)) || null;
     e.advances = advances.filter(a=>String(a.employee_id)===String(e.id));
+    e.adjustments = adjRows.filter(a=>String(a.employee_id)===String(e.id));   // [รอบ 23]
+    e.adjAdd = round2(e.adjustments.filter(a=>a.kind==="add").reduce((s,a)=>s+(Number(a.amount)||0),0));
+    e.adjDeduct = round2(e.adjustments.filter(a=>a.kind==="deduct").reduce((s,a)=>s+(Number(a.amount)||0),0));
     const att = (attRes.data||[]).filter(a=>String(a.employee_id)===String(e.id) && inR(a.work_date));
     // วันทำงานที่นับจ่าย: ลงเวลาปกติ/สาย + วันที่ HR ยืนยันย้อนหลังว่ามาทำงาน (manual — กรณีลืมลงเวลา)
     const workDays = att.filter(a=>a.status==="normal"||a.status==="late"||a.status==="manual").length;
@@ -1656,7 +1669,7 @@ async function loadCycleStats(cy){
         if(hol) e.otHoursHoliday += h; else e.otHoursWork += h;
       } else { otOld += h*calcOTHourlyFor(e); e.otHoursOld += h; }
     });
-    e.otPay = Math.round(otOld) + payCeil(otNew);
+    e.otPay = e.otExempt ? 0 : Math.round(otOld) + payCeil(otNew);   // [รอบ 23] ไม่รับค่า OT
     // [รอบ 18.1] ค่าทำงานวันหยุด (บันทึกโดยผู้ช่วย HR · HR อนุมัติแล้ว) — 1 คน 1 วัน 1 รายการ (DB กันซ้ำ)
     e.hwRecords = ((hwRes && hwRes.data) || []).filter(r=>String(r.employee_id)===String(e.id) && inR(r.work_date));
     e.hwHours = e.hwRecords.reduce((s,r)=>s+(Number(r.normal_hours)||0)+(Number(r.ot_hours)||0),0);
@@ -1725,17 +1738,19 @@ async function approvePayroll(cy){
     const pay = calcPay(e);
     const dedNotes = runDeductions(e).map(x=>`${x.d.label}${x.amount!==x.d.amount?` ฿${fmt(x.amount)} (แบ่งหักสองงวด)`:""} (งวดที่ ${x.d.monthsPaid+1}/${x.d.monthsTotal})`).join(", ");
     const bonusNotes = (e.runCycle==="semimonthly" && e.semiHalf==="A") ? "" : bonusRecords.filter(b=>String(b.emp)===String(e.id)&&b.status==="รวมงวดนี้").map(b=>`${b.type}: ${b.reason||"-"}`).join(", ");
-    const otNote = pay.otHours ? otRemarkFor(e, pay) : "";
+    const otNote = pay.otHours ? (e.otExempt ? `OT ${fmtHrs(pay.otHours)} ชม. (ไม่รับค่า OT)` : otRemarkFor(e, pay)) : "";
     const hwNote = pay.hwPay ? `ค่าทำงานวันหยุด ${fmtHrs(pay.hwHours)} ชม. (฿${fmt(pay.hwPay)})` : "";
     const dhNote = (e.att && e.att.dailyHolidayDays) ? `ค่าจ้างวันหยุดบริษัท ${e.att.dailyHolidayDays} วัน` : "";
     const hdNote = pay.hdPay ? `ค่าทำงานวันหยุดบริษัท ${(e.hdItems||[]).map(x=>isoToThaiDisplay(x.h.holiday_date)).join(", ")} ${fmtHrs(pay.hdHours)} ชม. ×${settings.hwMultMonthly} (฿${fmt(pay.hdPay)})` : "";
     const compNote = e.compUsedDays ? `ใช้วันหยุดชดเชย ${e.compUsedDays} วัน (ไม่หักเงิน)` : "";
+    const adjNote = (e.adjustments||[]).filter(a=>a.kind==="add").map(a=>`ปรับจ่ายเพิ่ม${adjRefText(a)?` (อ้างอิงงวด ${adjRefText(a)})`:""}: ${a.reason} ฿${fmtB(a.amount)}`).join(" · ");
     // รายการหักแบบแยกบรรทัด (ชื่อ + จำนวนเงิน + งวดผ่อน) — เก็บเป็น JSON เพื่อโชว์รายละเอียดในสลิปให้พนักงานเข้าใจว่าถูกหักอะไรบ้าง
     const dedItems = [];
     if(pay.absentDeduct) dedItems.push({label:"หักขาดงาน/ลาเกินโควตา", amount: pay.absentDeduct});
     if(pay.unpaidLeaveDeduct) dedItems.push({label:`หักลาไม่รับค่าจ้าง (${e.att.unpaidLeave} วัน)`, amount: pay.unpaidLeaveDeduct});
     if(pay.lateDeduct)   dedItems.push({label:`หักมาสาย (${pay.lateBillable} นาทีที่เกินผ่อนผัน ${settings.lateGraceMinutes} นาที/วัน)`, amount: pay.lateDeduct});
     if(pay.advanceDeduct) dedItems.push({label:"หักเบิกเงินล่วงหน้า (หักครั้งเดียวงวดนี้)", amount: pay.advanceDeduct});
+    (e.adjustments||[]).filter(a=>a.kind==="deduct").forEach(a=>dedItems.push({label:"ปรับจ่าย (หักคืน)", amount: Number(a.amount)||0, note:[a.reason, adjRefText(a)?`อ้างอิงงวด ${adjRefText(a)}`:""].filter(Boolean).join(" · ")}));
     runDeductions(e).forEach(x=>{
       const d = x.d;
       dedItems.push({
@@ -1751,12 +1766,25 @@ async function approvePayroll(cy){
       other_deductions: pay.lateDeduct + pay.otherDeduct,
       deduction_remarks: [pay.unpaidLeaveDeduct?`หักลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน ฿${fmt(pay.unpaidLeaveDeduct)}`:"", pay.lateDeduct?`หักมาสาย ${pay.lateBillable} นาที (สายรวม ${e.att.lateMin} น. ผ่อนผัน ${settings.lateGraceMinutes} น./วัน) ฿${fmt(pay.lateDeduct)}`:"", pay.advanceDeduct?`หักเบิกเงินล่วงหน้า ฿${fmt(pay.advanceDeduct)} (หักครั้งเดียวงวดนี้)`:"", dedNotes].filter(Boolean).join(" · ") || null,
       deduction_items: dedItems.length ? JSON.stringify(dedItems) : null,
-      addition_amount: pay.extra, addition_remarks: [otNote, hwNote, hdNote, dhNote, compNote, bonusNotes].filter(Boolean).join(" · ") || null,
+      addition_amount: pay.extra, addition_remarks: [otNote, hwNote, hdNote, dhNote, compNote, adjNote, bonusNotes].filter(Boolean).join(" · ") || null,
       net_pay: pay.net, status: "approved"
     };
   });
   const { error } = await sb.from("payroll_records").insert(rows);
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  _bankSnap = {}; _bankPayRecs = null;
+  // [รอบ 23] จองรายการปรับจ่ายเข้างวดนี้ (ยืนยันจ่ายแล้วจึงเป็น "จ่าย/หักแล้ว") · อนุมัติซ้ำ = ล้างการจองเดิมแล้วจองใหม่
+  if(payAdjSchema){
+    const clr = await sb.from("pay_adjustments").update({ applied_cycle:null, applied_start:null, applied_end:null })
+      .eq("status","pending").eq("applied_cycle", cy).eq("applied_start", p.start).eq("applied_end", p.end);
+    if(clr.error) console.warn("approvePayroll adj clear", clr.error);
+    const adjIds = list.flatMap(e=>(e.adjustments||[]).map(a=>a.id));
+    if(adjIds.length){
+      const rs = await sb.from("pay_adjustments").update({ applied_cycle:cy, applied_start:p.start, applied_end:p.end }).in("id", adjIds).eq("status","pending");
+      if(rs.error){ console.error("approvePayroll adj reserve", rs.error); toast("⚠️ อนุมัติงวดแล้ว แต่ผูกรายการปรับจ่ายเข้างวดไม่สำเร็จ: " + rs.error.message); }
+    }
+    payAdjRows = null;
+  }
   payrollState.status[cy] = "approved";
   payrollHistLoaded = false; // ให้ประวัติงวด/สลิปย้อนหลังโหลดใหม่
   await syncPayrollPeriod(cy, p, "approved");
@@ -1813,6 +1841,14 @@ async function confirmPayroll(cy){
       if(rb.error){ console.error("confirmPayroll bonus apply", e.id, rb.error); writeFails.push(`${e.name}: โบนัส`); }
     }
   }
+  // [รอบ 23] รายการปรับจ่ายที่จองไว้กับงวดนี้ → จ่าย/หักแล้ว
+  if(payAdjSchema){
+    const ra = await sb.from("pay_adjustments").update({ status:"applied", applied_at: new Date().toISOString() })
+      .eq("status","pending").eq("applied_cycle", cy).eq("applied_start", p.start).eq("applied_end", p.end);
+    if(ra.error){ console.error("confirmPayroll adj apply", ra.error); writeFails.push("รายการปรับจ่าย"); }
+    payAdjRows = null;
+  }
+  _bankSnap = {}; _bankPayRecs = null;
   await Promise.all([loadDeductions(), loadBonuses()]);
   await autoDisposeFullyPaidAssets(); // ผ่อนครบ → โอนกรรมสิทธิ์ทรัพย์สินเป็นของพนักงานอัตโนมัติ
   await loadAssets();
@@ -2317,12 +2353,13 @@ function calcPay(e){
     : Math.max(0, (e.att.lateMin||0) - (Number(settings.lateGraceMinutes)||0)); // fallback กรณี e.att ถูกแก้มือ (saveFixAttendance)
   const lateDeduct = settings.latePolicy==="deduct" ? lateBillable*settings.latePerMin : 0;
   const advanceDeduct = (e.advances||[]).reduce((s,a)=>s+(Number(a.amount)||0),0); // เบิกล่วงหน้าที่อนุมัติแล้ว รอหักงวดนี้
+  const adjAdd = Number(e.adjAdd)||0, adjDeduct = Number(e.adjDeduct)||0;   // [รอบ 23] รายการปรับจ่าย (อ้างอิงงวดเดิม)
   const otherDeduct = runDeductions(e).reduce((s,x)=>s+x.amount,0)
-    + advanceDeduct
+    + advanceDeduct + adjDeduct
     + (ov ? (Number(ov.extra_deduction)||0) : 0);
-  const extra = (e.extra||0) + (e.otPay||0) + (e.hwPay||0) + (e.hdPay||0) + (ov ? (Number(ov.extra_addition)||0) : 0);   // [รอบ 18.3] + ค่าทำงานวันหยุดบริษัทที่เปิดทำงาน
+  const extra = (e.extra||0) + (e.otPay||0) + (e.hwPay||0) + (e.hdPay||0) + adjAdd + (ov ? (Number(ov.extra_addition)||0) : 0);   // [รอบ 18.3] + ค่าทำงานวันหยุดบริษัทที่เปิดทำงาน
   const net = base + extra - absentDeduct - unpaidLeaveDeduct - lateDeduct - otherDeduct;
-  return {base, extra, otPay:e.otPay||0, otHours:e.otHours||0, hwPay:e.hwPay||0, hwHours:e.hwHours||0, hdPay:e.hdPay||0, hdHours:e.hdHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, paidWorkDays, ov, prorate, semiHalf};
+  return {adjAdd, adjDeduct, base, extra, otPay:e.otPay||0, otHours:e.otHours||0, hwPay:e.hwPay||0, hwHours:e.hwHours||0, hdPay:e.hdPay||0, hdHours:e.hdHours||0, absentDeduct, unpaidLeaveDeduct, lateDeduct, lateBillable, otherDeduct, advanceDeduct, net, dayRate, effWorkDays, paidWorkDays, ov, prorate, semiHalf};
 }
 function activeDeductions(e){return (e.deductions||[]).filter(d=>d.monthsPaid<d.monthsTotal);}
 const THAI_BANKS = ["KBANK (กสิกรไทย)","SCB (ไทยพาณิชย์)","BBL (กรุงเทพ)","KTB (กรุงไทย)","BAY (กรุงศรีอยุธยา)","TTB (ทหารไทยธนชาต)","GSB (ออมสิน)","BAAC (ธ.ก.ส.)","UOB (ยูโอบี)","CIMB (ซีไอเอ็มบี)"];
@@ -3611,6 +3648,10 @@ function empInfoForm(e){
     <div class="field"><label>อัตราค่าจ้าง (บาท) *</label><input id="empRate" type="number" value="${e.rate||0}"></div>
     ${settings.v2Schema?`<div class="field"><label>ชั่วโมงทำงานปกติ/วัน</label><input id="empNormalHours" type="number" min="1" max="12" step="0.5" value="${fmtHrs(normalHoursOf(e))}"></div>
     <div class="field"><label>วันหยุดประจำสัปดาห์</label><select id="empWeeklyOff"><option value="">ตามบริษัท (${settings.weeklyHoliday})</option>${["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"].map((d,i)=>`<option value="${i}" ${e.weeklyOffDow===i?'selected':''}>${d}</option>`).join("")}</select></div>`:''}
+    ${(settings.otExemptSchema && canSeePayroll())?`<div class="field" style="grid-column:span 2;display:flex;align-items:center;gap:10px;background:#fff7ed;padding:10px 12px;border-radius:9px">
+      <input type="checkbox" id="empOtExempt" ${e.otExempt?'checked':''} style="width:auto">
+      <label for="empOtExempt" style="margin:0;font-size:13px;color:var(--ink)">🚫 ไม่รับค่า OT <span class="hint">— ค่า OT และชั่วโมง OT ในวันหยุดคิดเป็น 0 · พนักงานยื่น OT ไม่ได้ (ค่าทำงานวันหยุดชั่วโมงปกติยังได้ตามเดิม)</span></label>
+    </div>`:''}
     <div class="field"><label>วันเริ่มงาน *</label><input id="empStart" type="date" value="${beToISO(e.start)}"></div>
     <div class="field"><label>อายุงาน</label><input value="${tenureText(e)}" disabled style="background:#f3f5f9;color:var(--muted)"></div>
     <div class="field" id="wfhWrap" style="grid-column:span 2;display:${e.type==='monthly'?'flex':'none'};align-items:center;gap:10px;background:#f8f9fc;padding:10px 12px;border-radius:9px">
@@ -3753,6 +3794,8 @@ async function saveEmp(id,isNew){
     const wo = val("empWeeklyOff");
     payload.weekly_off_dow = wo==="" ? null : Number(wo);
   }
+  // [รอบ 23] ไม่รับ OT — ส่งเฉพาะเมื่อมีคอลัมน์แล้ว และผู้แก้เป็น HR/Super Admin
+  if(settings.otExemptSchema && canSeePayroll() && document.getElementById("empOtExempt")) payload.ot_exempt = document.getElementById("empOtExempt").checked;
   if(isNew) payload.color = randomEmpColor();
 
   setBusy(true);
@@ -5781,11 +5824,12 @@ function pgPayroll(){
     ${tab("advance","เบิกล่วงหน้า","💳")}
     ${tab("deductions","หักประจำ/ผ่อนชำระ","💸")}
     ${tab("bonus","โบนัส/ปรับเงิน","💎")}
+    ${tab("adjust","รายการปรับจ่าย","🔧")}
     ${tab("structure","ฐานเงินเดือน","🏗️")}
     ${tab("report","ประวัติ/รายงาน","📈")}
     ${tab("ess","Self-Service","👤")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${({dashboard:pyDash,run:pyRun,structure:pyStruct,slip:pySlip,advance:pyAdvance,deductions:pyDeductions,bonus:pyBonus,report:pyReport,ess:pyESS})[t]()}`;
+  ${({dashboard:pyDash,run:pyRun,structure:pyStruct,slip:pySlip,advance:pyAdvance,deductions:pyDeductions,bonus:pyBonus,adjust:pyAdjust,report:pyReport,ess:pyESS})[t]()}`;
 }
 
 function pyDash(){
@@ -6156,7 +6200,7 @@ function pyAttOT(){
         <td class="num">${e.att.absent||"—"}</td>
         <td class="num">${e.leaveUsed||"—"}</td>
         <td class="num">${e.att.lateMin||"—"}</td>
-        <td class="num">${e.otHours?`<b>${e.otHours} ชม.</b><div style="font-size:10.5px;color:var(--muted)">฿${fmt(e.otPay||0)}</div>`:"—"}${e.hwHours?`<div style="font-size:10.5px;color:var(--green);margin-top:2px">🗓️ วันหยุด ${fmtHrs(e.hwHours)} ชม. ฿${fmt(e.hwPay||0)}</div>`:''}${(e.att&&e.att.dailyHolidayDays)?`<div style="font-size:10.5px;color:var(--muted)">🎌 ค่าจ้างวันหยุด ${e.att.dailyHolidayDays} วัน</div>`:''}${e.hdPay?`<div style="font-size:10.5px;color:var(--green)">🏗️ วันหยุดบริษัท ${fmtHrs(e.hdHours)} ชม. ฿${fmt(e.hdPay)}</div>`:''}${(e.hdPending&&e.hdPending.length)?`<div style="margin-top:2px"><span class="pill red" style="font-size:10px">⏳ รอข้อสรุป ${e.hdPending.length}</span></div>`:''}${e.compUsedDays?`<div style="font-size:10.5px;color:var(--muted)">🎟️ หยุดชดเชย ${e.compUsedDays} วัน</div>`:''}</td>
+        <td class="num">${e.otHours?`<b>${e.otHours} ชม.</b><div style="font-size:10.5px;color:var(--muted)">${e.otExempt?'ไม่รับค่า OT':'฿'+fmt(e.otPay||0)}</div>`:"—"}${e.hwHours?`<div style="font-size:10.5px;color:var(--green);margin-top:2px">🗓️ วันหยุด ${fmtHrs(e.hwHours)} ชม. ฿${fmt(e.hwPay||0)}</div>`:''}${(e.att&&e.att.dailyHolidayDays)?`<div style="font-size:10.5px;color:var(--muted)">🎌 ค่าจ้างวันหยุด ${e.att.dailyHolidayDays} วัน</div>`:''}${e.hdPay?`<div style="font-size:10.5px;color:var(--green)">🏗️ วันหยุดบริษัท ${fmtHrs(e.hdHours)} ชม. ฿${fmt(e.hdPay)}</div>`:''}${(e.hdPending&&e.hdPending.length)?`<div style="margin-top:2px"><span class="pill red" style="font-size:10px">⏳ รอข้อสรุป ${e.hdPending.length}</span></div>`:''}${e.compUsedDays?`<div style="font-size:10.5px;color:var(--muted)">🎟️ หยุดชดเชย ${e.compUsedDays} วัน</div>`:''}</td>
         <td><input type="number" value="${e.extra}" min="0" style="width:110px;padding:6px 10px;border:1.5px solid var(--line);border-radius:8px;text-align:right" onchange="E('${e.id}').extra=Number(this.value)||0;toast('อัปเดตยอดเพิ่มพิเศษแล้ว (จะถูกบันทึกจริงเมื่อกดอนุมัติงวด)')"></td>
       </tr>`).join("")}
     </table>
@@ -6188,10 +6232,10 @@ function pyCalc(){
         <td class="num"><b>${e.att.workDays}</b></td>
         <td class="num" style="font-size:12px">${e.att.leaveDays||0} / ${e.att.absent||0} / ${e.att.lateCount||0}${e.att.missing?'<div><span class="pill amber" style="font-size:9.5px">🧐 รอตรวจ '+e.att.missing+'</span></div>':''}</td>
         <td class="num">฿${fmt(p.base)}${p.prorate<1?`<div style="font-size:10px;color:#c8760a">เข้ากลางรอบ · ฿${fmt(e.rate/30)}/วัน × ${p.paidWorkDays} วัน${(e.att.paidDays>e.att.workDays)?' (รวมวันหยุดบริษัท '+(e.att.paidDays-e.att.workDays)+' วัน)':''}</div>`:''}</td>
-        <td class="num" style="color:${p.extra?'var(--green)':'inherit'}">${p.extra?'+฿'+fmt(p.extra):'—'}</td>
+        <td class="num" style="color:${p.extra?'var(--green)':'inherit'}">${p.extra?'+฿'+fmt(p.extra):'—'}${p.adjAdd?`<div style="font-size:10px;color:var(--muted)">🔧 ปรับจ่าย +฿${fmtB(p.adjAdd)}</div>`:''}${e.otExempt&&e.otHours?'<div style="font-size:10px;color:var(--muted)">ไม่รับค่า OT</div>':''}</td>
         <td class="num" style="color:${(p.absentDeduct+p.unpaidLeaveDeduct)?'var(--red)':'inherit'}">${(p.absentDeduct+p.unpaidLeaveDeduct)?'-฿'+fmt(p.absentDeduct+p.unpaidLeaveDeduct):'—'}${p.unpaidLeaveDeduct?`<div style="font-size:10px;color:var(--muted)">ลาไม่รับค่าจ้าง ${e.att.unpaidLeave} วัน</div>`:''}</td>
         <td class="num" style="color:${p.lateDeduct?'var(--red)':'var(--muted)'}">${settings.latePolicy==='record'?'<span style="font-size:11px">ปิดอยู่</span>':(p.lateDeduct?'-฿'+fmt(p.lateDeduct):'—')}</td>
-        <td class="num" style="color:${p.otherDeduct?'var(--red)':'var(--muted)'}">${p.otherDeduct?'-฿'+fmt(p.otherDeduct):'—'}${activeDeductions(e).length?`<div style="font-size:10.5px;color:var(--muted)">${activeDeductions(e).map(d=>d.label+' ('+d.monthsPaid+'/'+d.monthsTotal+')').join(', ')}</div>`:''}</td>
+        <td class="num" style="color:${p.otherDeduct?'var(--red)':'var(--muted)'}">${p.otherDeduct?'-฿'+fmt(p.otherDeduct):'—'}${p.adjDeduct?`<div style="font-size:10px;color:var(--muted)">🔧 ปรับจ่ายหักคืน ฿${fmtB(p.adjDeduct)}</div>`:''}${activeDeductions(e).length?`<div style="font-size:10.5px;color:var(--muted)">${activeDeductions(e).map(d=>d.label+' ('+d.monthsPaid+'/'+d.monthsTotal+')').join(', ')}</div>`:''}</td>
         <td class="num"><b style="font-size:15px">฿${fmt(p.net)}</b></td>
         <td style="white-space:nowrap">${locked?'🔒':`<button class="btn ghost xs" onclick="openOverrideModal('${e.id}')">💵 Override เงิน</button>`}</td>
       </tr>`).join("")}
@@ -6329,6 +6373,14 @@ async function unlockPayroll(cy){
   const rAdv = await sb.from("salary_advances").update({ status:"approved", deducted_cycle_start:null, deducted_cycle_end:null })
     .eq("deducted_cycle_start", p.start).eq("deducted_cycle_end", p.end).eq("status","deducted");
   if(rAdv.error){ console.error("unlockPayroll advance revert", rAdv.error); unlockFails.push("เบิกเงินล่วงหน้า"); }
+  // [รอบ 23] รายการปรับจ่ายที่จ่าย/หักในงวดนี้ → กลับเป็น "รอเข้างวด"
+  if(payAdjSchema!==false){
+    const rAdj = await sb.from("pay_adjustments").update({ status:"pending", applied_cycle:null, applied_start:null, applied_end:null, applied_at:null })
+      .eq("applied_cycle", cy).eq("applied_start", p.start).eq("applied_end", p.end).in("status", ["pending","applied"]);
+    if(rAdj.error && !isMissingRelation(rAdj.error)){ console.error("unlockPayroll adj revert", rAdj.error); unlockFails.push("รายการปรับจ่าย"); }
+    payAdjRows = null;
+  }
+  _bankSnap = {}; _bankPayRecs = null;
   await Promise.all([loadDeductions(), loadBonuses()]);
   advanceRows = null; // ให้หน้าเบิกล่วงหน้าโหลดสถานะใหม่ครั้งถัดไปที่เปิด
   payrollState.status[cy] = "draft";
@@ -7023,6 +7075,7 @@ function openSlip(id, overrideNet, periodLabel, isHist){
               ${irow("Absence / Over Quota", p.absentDeduct?"-฿"+fmt(p.absentDeduct):"—")}
               ${irow(`Late Arrival${p.lateDeduct?` (${p.lateBillable} min เกินผ่อนผัน ${settings.lateGraceMinutes} min/day)`:""}`, p.lateDeduct?"-฿"+fmt(p.lateDeduct):"—")}
               ${p.advanceDeduct?irow("Salary Advance Repayment","-฿"+fmt(p.advanceDeduct)):""}
+              ${p.adjDeduct?irow("Pay Adjustment (ปรับจ่ายหักคืน)","-฿"+fmtB(p.adjDeduct)):""}
               ${activeDeductions(e).length
                 ? activeDeductions(e).map(d=>irow(d.label+" (งวดที่ "+(d.monthsPaid+1)+"/"+d.monthsTotal+")", "-฿"+fmt(d.amount))).join("")
                 : (p.advanceDeduct?"":irow("Other Deductions","—"))}
@@ -7058,34 +7111,63 @@ function openSlip(id, overrideNet, periodLabel, isHist){
 }
 
 let _bankExportRows = [];
-let _bankExportPeriod = "";
+let _bankExportMeta = null;
+let _bankSnap = {};          // [รอบ 23] key "cy|start|end" → แถว payroll_records ที่อนุมัติ/จ่ายแล้ว (ยอดจริงที่ต้องโอน)
+let _bankPayRecs = null;     // null | "loading" | array — งวดที่อนุมัติ/จ่ายแล้วช่วง ~2.5 เดือน ใช้รวมไฟล์ตามวันจ่าย
+let _bankCombDate = "";
+function bankSnapFor(cy, p){
+  const k = `${cy}|${p.start}|${p.end}`;
+  if(_bankSnap[k]===undefined){
+    _bankSnap[k] = "loading";
+    sb.from("payroll_records").select("employee_id,net_pay,status").eq("cycle", cy).eq("cycle_start_date", p.start).eq("cycle_end_date", p.end).in("status",["approved","paid"])
+      .then(({data, error})=>{ _bankSnap[k] = error ? [] : (data||[]); if(error) console.warn("bankSnapFor", error); if(currentPage==="payroll") render("payroll"); });
+  }
+  return Array.isArray(_bankSnap[k]) ? _bankSnap[k] : null;
+}
+function bankRowOf(e, net, extra){
+  const pi = payInfo(e);
+  return Object.assign({ name:e.name, code:e.code||"", method:pi.methodLabel, dest:pi.ok?pi.dest:"ยังไม่มีข้อมูล", payee:e.payeeName||e.name, relation:e.payeeRelation||"", net:Number(net)||0, ok:pi.ok }, extra||{});
+}
+function bankSheetRows(rows, withCycle){
+  return rows.map(r=>{
+    const o = {};
+    if(withCycle){ o["รอบจ่าย"] = r.cycleName; o["งวด"] = r.period; }
+    o["พนักงาน"] = r.name; o["รหัสพนักงาน"] = r.code; o["ช่องทาง"] = r.method; o["เลขบัญชี/พร้อมเพย์"] = r.dest;
+    o["ชื่อผู้รับเงิน"] = r.payee; o["ความสัมพันธ์"] = r.relation; o["ยอดโอน (บาท)"] = r.net; o["สถานะ"] = r.ok?"พร้อมโอน":"รอกรอกข้อมูล";
+    return o;
+  });
+}
+function bankTotalRow(rows, withCycle){
+  const o = {}; if(withCycle){ o["รอบจ่าย"] = ""; o["งวด"] = ""; }
+  Object.assign(o, {"พนักงาน":"", "รหัสพนักงาน":"", "ช่องทาง":"", "เลขบัญชี/พร้อมเพย์":"", "ชื่อผู้รับเงิน":"", "ความสัมพันธ์":"ยอดรวม", "ยอดโอน (บาท)": rows.reduce((s,r)=>s+(r.net||0),0), "สถานะ": `${rows.length} รายการ`});
+  return o;
+}
+function safeFileName(t){ return String(t).replace(/[\\/:*?"<>|]+/g,"-").replace(/\s+/g,"_"); }
 function exportBankExcel(){
   if(typeof XLSX==="undefined"){ toast("ไม่สามารถโหลดไลบรารี Excel ได้ ลองใหม่อีกครั้ง"); return; }
   if(!_bankExportRows.length){ toast("ไม่มีข้อมูลสำหรับ Export"); return; }
-  const data = _bankExportRows.map(r=>({
-    "พนักงาน": r.name,
-    "รหัสพนักงาน": r.code,
-    "ช่องทาง": r.method,
-    "ปลายทาง": r.dest,
-    "ยอดโอน (บาท)": r.net,
-    "สถานะ": r.ok?"พร้อมโอน":"รอกรอกข้อมูล"
-  }));
-  const total = _bankExportRows.reduce((s,r)=>s+(r.net||0),0);
-  data.push({"พนักงาน":"", "รหัสพนักงาน":"", "ช่องทาง":"", "ปลายทาง":"ยอดรวม", "ยอดโอน (บาท)": total, "สถานะ":""});
+  const m = _bankExportMeta || {};
+  const data = bankSheetRows(_bankExportRows, false);
+  data.push(bankTotalRow(_bankExportRows, false));
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "สรุปยอดโอน");
-  XLSX.writeFile(wb, `สรุปโอนเงินเดือน_${_bankExportPeriod||"งวดนี้"}.xlsx`);
-  toast("ดาวน์โหลด Excel สรุปยอดแล้ว ✓");
+  XLSX.utils.book_append_sheet(wb, ws, "ยอดโอน");
+  XLSX.writeFile(wb, safeFileName(`โอนเงินเดือน_${m.cycleName||""}_งวด_${m.period||"งวดนี้"}_จ่าย_${m.payDate||""}${m.live?"_ร่าง":""}.xlsx`));
+  toast("ดาวน์โหลดไฟล์โอนของรอบนี้แล้ว ✓");
 }
 function pyBank(){
   const cy = payrollState.cycle;
   const st = payrollState.status[cy];
-  const list = runMembers(cy);
-  const total = list.reduce((s,e)=>s+calcPay(e).net,0);
-  const banks = ["KBANK (กสิกร)", "SCB (ไทยพาณิชย์)", "BBL (กรุงเทพ)", "KTB (กรุงไทย)"];
-  _bankExportRows = list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return {name:e.name, code:e.code, method:pi.methodLabel, dest:pi.ok?pi.dest:"ยังไม่มีข้อมูล", net:p.net, ok:pi.ok};});
-  _bankExportPeriod = CYCLES[cy].period;
+  const P = activePeriod(cy);
+  // [รอบ 23] อนุมัติ/จ่ายแล้ว → ใช้ยอดที่บันทึกตอนอนุมัติ (ตรงกับสลิป) · ฉบับร่าง → คำนวณสด
+  const snap = (st==="approved"||st==="paid") ? bankSnapFor(cy, P) : null;
+  const live = !snap;
+  const list = snap ? snap.map(r=>E(r.employee_id)).filter(Boolean) : runMembers(cy);
+  const netOf = e => snap ? (Number((snap.find(r=>String(r.employee_id)===String(e.id))||{}).net_pay)||0) : calcPay(e).net;
+  const total = list.reduce((s,e)=>s+netOf(e),0);
+  const payDate = payDateFor(cy, P);
+  _bankExportRows = list.map(e=>bankRowOf(e, netOf(e)));
+  _bankExportMeta = { cycleName: CYCLES[cy].name, period: periodLabel(P), payDate: isoToThaiDisplay(payDate), live };
   const payBar = st==="paid"
     ? `<div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#e4f7ee,#fff);border:1px solid #bfe8d2"><b style="font-size:14.5px">🔒 งวดนี้จ่ายและปิดงวดแล้ว (Locked)</b><div class="hint" style="margin-top:3px">สลิป PDF พร้อมแจกจ่าย — พนักงานเปิดดูของตัวเองได้ใน Self-Service ทันที</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn primary sm" onclick="setSub('payroll','slip')">🧾 ไปหน้าสลิปเงินเดือน →</button>${canUnlockPayroll()?`<button class="btn danger sm" onclick="unlockPayroll('${cy}')">🔓 เปิดงวดอีกครั้ง</button>`:''}</div></div>`
     : st==="approved"
@@ -7093,35 +7175,221 @@ function pyBank(){
     : `<div class="card" style="margin-bottom:16px"><div class="hint">⏳ ยังไม่ได้อนุมัติงวดนี้ — กลับไปขั้น "ตรวจ & อนุมัติ" ก่อน</div><button class="btn ghost sm" style="margin-top:6px" onclick="goRunStep(4)">← ไปอนุมัติงวด</button></div>`;
   return payBar + `
   <div class="card">
-    <h3>🏦 โอนเงินธนาคาร — ${CYCLES[cy].name}</h3>
-    <div class="hint">สร้างไฟล์ Payroll Batch ตามมาตรฐานธนาคาร (K-Cash Connect, SCB Business Net, BBL iCash ฯลฯ) · หรือส่งออก CSV/Excel</div>
-
-    <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:14px">
-      <div class="field"><label>เลือกธนาคารต้นทาง (บัญชีบริษัท)</label><select>${banks.map(b=>`<option>${b}</option>`).join("")}</select></div>
-      <div class="field"><label>รูปแบบไฟล์</label><select><option>TXT (K-Cash Connect)</option><option>CSV (SCB Business Net)</option><option>TXT (BBL iCash)</option><option>Excel (สรุปทั่วไป)</option></select></div>
-    </div>
+    <h3>🏦 ไฟล์โอนเงิน — ${CYCLES[cy].name}</h3>
+    <div class="hint">งวด ${periodLabel(P)} · วันจ่าย <b>${isoToThaiDisplay(payDate)}</b> · ${live
+      ? ((st==="approved"||st==="paid") ? 'กำลังโหลดยอดที่อนุมัติ...' : '<span style="color:#c8760a">ยอดคำนวณสด (ฉบับร่าง) — อนุมัติงวดก่อนจึงใช้โอนจริง</span>')
+      : '✓ ยอดตามที่อนุมัติงวด (ตรงกับสลิป)'} · ไฟล์ Excel ใช้กรอก/อัปโหลดโอนในเว็บธนาคาร</div>
 
     <table style="margin-top:16px">
       <tr><th>พนักงาน</th><th>ช่องทาง</th><th>ปลายทาง</th><th class="num">ยอดโอน</th><th>สถานะ</th></tr>
-      ${list.map(e=>{const p=calcPay(e);const pi=payInfo(e);return `<tr>
+      ${list.map(e=>{const pi=payInfo(e);return `<tr>
         <td>${empCell(e)}</td>
         <td><span class="pill ${pi.methodLabel==='พร้อมเพย์'?'purple':'blue'}">${pi.methodLabel}</span></td>
         <td style="font-family:monospace;font-size:12.5px">${pi.ok?pi.dest:'<span style="color:var(--red);font-family:inherit">⚠ ยังไม่มีข้อมูล</span>'}${pi.payeeLine}</td>
-        <td class="num"><b>฿${fmt(p.net)}</b></td>
+        <td class="num"><b>฿${fmt(netOf(e))}</b></td>
         <td>${pi.ok?'<span class="pill green">พร้อมโอน</span>':'<span class="pill red">รอกรอกข้อมูล</span>'}</td>
       </tr>`;}).join("")}
-      <tr style="background:#f8f9fc"><td colspan="3" style="text-align:right;font-weight:600">ยอดรวม</td>
+      <tr style="background:#f8f9fc"><td colspan="3" style="text-align:right;font-weight:600">ยอดรวม ${list.length} คน</td>
       <td class="num"><b class="display" style="font-size:18px;color:var(--accent)">฿${fmt(total)}</b></td><td></td></tr>
     </table>
 
     <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
-      <button class="btn primary" onclick="toast('เดโม่: สร้างไฟล์ TXT พร้อมอัปโหลดขึ้น K-Cash Connect (${list.length} รายการ · ฿${fmt(total)})')">📥 ดาวน์โหลดไฟล์โอนธนาคาร</button>
-      <button class="btn ghost" onclick="exportBankExcel()">📊 Excel สรุปยอด</button>
-      <button class="btn ghost" onclick="toast('เดโม่: ส่งไฟล์ผ่าน API ธนาคารโดยตรง')">🔗 ส่งผ่าน API ธนาคาร</button>
+      <button class="btn primary" onclick="exportBankExcel()">📥 ไฟล์โอน Excel — รอบนี้</button>
     </div>
-
-    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#e9f0ff;border-radius:10px">💡 ระบบรองรับ Payroll Batch มาตรฐานของธนาคารชั้นนำ · ประหยัดเวลาไม่ต้องนั่งกรอกทีละบัญชีในเว็บธนาคาร</div>
+  </div>
+  ${bankCombinedCard()}`;
+}
+/* [รอบ 23] รวมไฟล์โอนตามวันจ่าย — เช่น สิ้นเดือน = รายเดือน + ครึ่งเดือนงวด B (ใช้เฉพาะงวดที่อนุมัติ/จ่ายแล้ว) */
+function bankPayGroups(){
+  if(_bankPayRecs===null){
+    _bankPayRecs = "loading";
+    sb.from("payroll_records").select("employee_id,cycle,cycle_start_date,cycle_end_date,net_pay,status").in("status",["approved","paid"])
+      .gte("cycle_end_date", addDaysISO(todayISODate(), -75))
+      .then(({data, error})=>{ _bankPayRecs = error ? [] : (data||[]); if(error) console.warn("bankPayGroups", error); if(currentPage==="payroll") render("payroll"); });
+  }
+  if(!Array.isArray(_bankPayRecs)) return null;
+  const groups = new Map();
+  _bankPayRecs.forEach(r=>{
+    const P = { start:r.cycle_start_date, end:r.cycle_end_date };
+    const pd = payDateFor(r.cycle, P);
+    if(!groups.has(pd)) groups.set(pd, new Map());
+    const g = groups.get(pd); const k = `${r.cycle}|${P.start}|${P.end}`;
+    if(!g.has(k)) g.set(k, { cy:r.cycle, P, recs:[] });
+    g.get(k).recs.push(r);
+  });
+  return [...groups.entries()].sort((a,b)=>a[0]<b[0]?1:-1).map(([date, g])=>({ date, parts:[...g.values()].sort((a,b)=>a.cy<b.cy?-1:1) }));
+}
+function bankCombinedCard(){
+  const groups = bankPayGroups();
+  const head = `<h3>📦 รวมไฟล์โอนตามวันจ่าย</h3><div class="hint">รวมทุกรอบที่จ่ายวันเดียวกันเป็นไฟล์เดียว (เช่น สิ้นเดือน = รายเดือน + ครึ่งเดือนงวด B) · ใช้เฉพาะงวดที่<b>อนุมัติแล้ว</b> · ในไฟล์มีแผ่นรวม + แยกแผ่นตามรอบ</div>`;
+  if(groups===null) return `<div class="card" style="margin-top:16px">${head}<div class="hint" style="margin-top:10px">กำลังโหลด...</div></div>`;
+  if(!groups.length) return `<div class="card" style="margin-top:16px">${head}<div class="hint" style="margin-top:10px">ยังไม่มีงวดที่อนุมัติแล้วในช่วงนี้</div></div>`;
+  const today = todayISODate();
+  if(!_bankCombDate || !groups.some(g=>g.date===_bankCombDate)){
+    const upcoming = groups.filter(g=>g.date>=today).sort((a,b)=>a.date<b.date?-1:1)[0];
+    _bankCombDate = (upcoming || groups[0]).date;
+  }
+  const g = groups.find(x=>x.date===_bankCombDate);
+  const sum = part => part.recs.reduce((s,r)=>s+(Number(r.net_pay)||0),0);
+  const cyName = cy => (CYCLES[cy]||{}).name || cy;
+  return `<div class="card" style="margin-top:16px">${head}
+    <div class="grid" style="grid-template-columns:minmax(220px,360px) auto;gap:12px;margin-top:12px;align-items:end">
+      <div class="field"><label>วันจ่าย</label><select onchange="_bankCombDate=this.value;render('payroll')">${groups.map(x=>`<option value="${x.date}" ${x.date===_bankCombDate?'selected':''}>${isoToThaiDisplay(x.date)} · ${x.parts.map(pt=>cyName(pt.cy)).join(" + ")} · ฿${fmt(x.parts.reduce((s,pt)=>s+sum(pt),0))}</option>`).join("")}</select></div>
+      <div><button class="btn primary" onclick="exportBankCombined()">📥 ไฟล์โอนรวม Excel</button></div>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th>รอบจ่าย</th><th>งวด</th><th class="num">จำนวนคน</th><th class="num">ยอดโอน</th><th>สถานะงวด</th></tr>
+      ${g.parts.map(pt=>`<tr><td><b>${cyName(pt.cy)}</b></td><td style="font-size:12.5px">${periodLabel(pt.P)}</td><td class="num">${pt.recs.length}</td><td class="num">฿${fmt(sum(pt))}</td>
+        <td>${pt.recs.every(r=>r.status==="paid")?'<span class="pill green">จ่ายแล้ว</span>':'<span class="pill blue">อนุมัติแล้ว — รอโอน</span>'}</td></tr>`).join("")}
+      <tr style="background:#f8f9fc"><td colspan="2" style="text-align:right;font-weight:600">รวมวันจ่าย ${isoToThaiDisplay(g.date)}</td><td class="num"><b>${g.parts.reduce((s,pt)=>s+pt.recs.length,0)}</b></td><td class="num"><b class="display" style="font-size:16px;color:var(--accent)">฿${fmt(g.parts.reduce((s,pt)=>s+sum(pt),0))}</b></td><td></td></tr>
+    </table>
   </div>`;
+}
+function exportBankCombined(){
+  if(typeof XLSX==="undefined"){ toast("ไม่สามารถโหลดไลบรารี Excel ได้ ลองใหม่อีกครั้ง"); return; }
+  const groups = bankPayGroups() || [];
+  const g = groups.find(x=>x.date===_bankCombDate);
+  if(!g){ toast("ไม่มีข้อมูลสำหรับ Export"); return; }
+  const cyName = cy => (CYCLES[cy]||{}).name || cy;
+  const wb = XLSX.utils.book_new();
+  const all = [];
+  const perSheet = [];
+  g.parts.forEach(pt=>{
+    const rows = pt.recs.map(r=>{ const e = E(r.employee_id) || { name:"พนักงาน #"+r.employee_id, code:"", payMethod:"bank" };
+      return bankRowOf(e, r.net_pay, { cycleName: cyName(pt.cy), period: periodLabel(pt.P) }); })
+      .sort((a,b)=>String(a.code).localeCompare(String(b.code)));
+    all.push(...rows); perSheet.push([cyName(pt.cy), rows]);
+  });
+  const sumData = bankSheetRows(all, true); sumData.push(bankTotalRow(all, true));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sumData), "รวมโอน");
+  perSheet.forEach(([name, rows], i)=>{
+    const d = bankSheetRows(rows, false); d.push(bankTotalRow(rows, false));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d), String(name).replace(/[\\/?*\[\]:]/g,"-").slice(0,28) || ("รอบ"+(i+1)));
+  });
+  XLSX.writeFile(wb, safeFileName(`โอนเงินเดือนรวม_จ่าย_${isoToThaiDisplay(g.date)}.xlsx`));
+  logAudit("payroll","ดาวน์โหลดไฟล์โอนรวม", `วันจ่าย ${isoToThaiDisplay(g.date)} · ${g.parts.map(pt=>cyName(pt.cy)).join(" + ")} · ${all.length} รายการ`);
+  toast(`ดาวน์โหลดไฟล์โอนรวมแล้ว ✓ (${all.length} รายการ)`);
+}
+
+/* ============ [รอบ 23] รายการปรับจ่าย (pay_adjustments) — แก้ยอดหลังปิดงวด โดยไม่แก้สลิปเดิม ============
+   HR บันทึกส่วนต่าง (จ่ายเพิ่ม / หักคืน) อ้างอิงงวดเดิม → loadCycleStats ดึงเข้า "งวดถัดไป" ของพนักงานคนนั้นอัตโนมัติ
+   อนุมัติงวด = จองรายการไว้กับงวด · ยืนยันจ่าย = จ่าย/หักแล้ว (applied) · ปลดล็อกงวด = กลับเป็นรอเข้างวด
+   ไม่มีตาราง (ยังไม่รัน round23_dev.sql) → แท็บแจ้งให้รัน SQL · การคำนวณเงินเดือนข้ามส่วนนี้ */
+let payAdjSchema = null;   // null = ยังไม่รู้ · true/false
+let payAdjRows = null;     // null | "loading" | array
+let _adjRefOpts = [];
+function isMissingRelation(err){
+  const m = String((err && (err.message||err.details)) || ""); const c = String((err && err.code) || "");
+  return c==="42P01" || c==="PGRST205" || /does not exist|Could not find the table|schema cache/i.test(m);
+}
+function round2(n){ return Math.round((Number(n)||0)*100)/100; }
+function fmtB(n){ return (Number(n)||0).toLocaleString("th-TH",{maximumFractionDigits:2}); }
+function adjRefText(a){ return (a && a.ref_start && a.ref_end) ? `${isoToThaiDisplay(a.ref_start)} – ${isoToThaiDisplay(a.ref_end)}` : ""; }
+async function loadPayAdjustments(){
+  const { data, error } = await sb.from("pay_adjustments").select("*").order("created_at",{ascending:false}).limit(500);
+  if(error){
+    if(isMissingRelation(error)) payAdjSchema = false; else { console.error("loadPayAdjustments", error); toastLoadError("รายการปรับจ่าย"); }
+    payAdjRows = []; return;
+  }
+  payAdjSchema = true; payAdjRows = data||[];
+}
+function adjStatusPill(a){
+  if(a.status==="void") return `<span class="pill gray">ยกเลิก</span>${a.void_reason?`<div class="hint" style="font-size:10.5px">${escHtml(a.void_reason)}</div>`:''}`;
+  const per = (a.applied_start&&a.applied_end) ? `${isoToThaiDisplay(a.applied_start)} – ${isoToThaiDisplay(a.applied_end)}` : "";
+  if(a.status==="applied") return `<span class="pill green">✓ ${a.kind==="add"?"จ่ายแล้ว":"หักแล้ว"}</span><div class="hint" style="font-size:10.5px">งวด ${per}${a.applied_cycle&&CYCLES[a.applied_cycle]?` · ${CYCLES[a.applied_cycle].name}`:''}</div>`;
+  if(a.applied_start) return `<span class="pill blue">📌 อยู่ในงวดที่อนุมัติแล้ว</span><div class="hint" style="font-size:10.5px">งวด ${per} · รอยืนยันจ่าย</div>`;
+  return `<span class="pill amber">⏳ รอเข้างวดถัดไป</span>`;
+}
+function pyAdjust(){
+  if(payAdjRows===null){ payAdjRows="loading"; loadPayAdjustments().then(()=>{ if(currentPage==="payroll") render("payroll"); }); }
+  const loading = !Array.isArray(payAdjRows);
+  if(!loading && payAdjSchema===false) return `
+  <div class="card">
+    <h3>🔧 รายการปรับจ่าย</h3>
+    <div class="hint" style="margin-top:8px;padding:12px;background:#fff9f0;border-radius:10px">ยังไม่ได้เปิดใช้ — ให้ผู้ดูแลระบบรันไฟล์ <b>round23_dev.sql</b> ใน Supabase SQL Editor ก่อน (ระหว่างนี้แก้ยอดผ่าน Override ในงวดถัดไปได้ตามเดิม)</div>
+  </div>`;
+  const rows = loading ? [] : payAdjRows;
+  const actives = employees.filter(e=>e.status!=="terminated" && !e.isSystemTest);
+  const pend = rows.filter(a=>a.status==="pending");
+  const sumOf = (arr,k) => arr.filter(a=>a.kind===k).reduce((s,a)=>s+(Number(a.amount)||0),0);
+  return `
+  <div class="card" style="margin-bottom:16px">
+    <h3>🔧 รายการปรับจ่าย — แก้ยอดหลังปิดงวด</h3>
+    <div class="hint">งวดที่ยืนยันจ่ายแล้ว<b>ไม่แก้สลิปเดิม</b> — บันทึกส่วนต่างที่นี่ อ้างอิงงวดเดิม แล้วระบบรวมเข้า <b>งวดถัดไปของพนักงานคนนั้น</b> ให้เอง (จ่ายเพิ่ม → รายรับ · หักคืน → รายการหัก) พร้อมหมายเหตุในสลิปงวดถัดไป</div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:12px;align-items:end">
+      <div class="field"><label>พนักงาน *</label><select id="adjEmp" onchange="adjLoadRefs()"><option value="">-- เลือกพนักงาน --</option>${actives.map(e=>`<option value="${e.id}">${escHtml(e.code||"")} ${escHtml(e.name)}</option>`).join("")}</select></div>
+      <div class="field"><label>ประเภท *</label><select id="adjKind"><option value="add">➕ จ่ายเพิ่ม (จ่ายขาด/ค้างจ่าย)</option><option value="deduct">➖ หักคืน (จ่ายเกิน)</option></select></div>
+      <div class="field"><label>จำนวนเงิน (บาท) *</label><input id="adjAmount" type="number" min="0.01" step="0.01" placeholder="0.00"></div>
+      <div class="field"><label>อ้างอิงงวดเดิม</label><select id="adjRef"><option value="">— เลือกพนักงานก่อน —</option></select></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>เหตุผล * <span class="hint">(พนักงานเห็นในสลิปงวดถัดไป)</span></label><input id="adjReason" maxlength="200" placeholder="เช่น OT วันที่ 12 ต.ค. ตกหล่น 3 ชม. / คิดค่าทำงานวันหยุดเกิน"></div>
+    <div style="margin-top:12px"><button class="btn primary" id="adjSaveBtn" onclick="savePayAdjustment()">💾 บันทึกรายการปรับจ่าย</button></div>
+  </div>
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <h3>📋 รายการทั้งหมด</h3>
+      <span class="pill amber" style="margin-left:auto">รอเข้างวด: +฿${fmtB(sumOf(pend,"add"))} / -฿${fmtB(sumOf(pend,"deduct"))}</span>
+    </div>
+    ${loading?'<div class="hint" style="margin-top:10px">กำลังโหลด...</div>':!rows.length?'<div class="hint" style="margin-top:10px">ยังไม่มีรายการปรับจ่าย</div>':`
+    <div style="overflow-x:auto"><table style="margin-top:12px;min-width:760px">
+      <tr><th>พนักงาน</th><th>รายการ</th><th class="num">จำนวน</th><th>อ้างอิงงวด</th><th>สถานะ</th><th>บันทึกเมื่อ</th><th></th></tr>
+      ${rows.map(a=>{ const e=E(a.employee_id); return `<tr style="${a.status==='void'?'opacity:.55':''}">
+        <td>${e?empCell(e):'#'+a.employee_id}</td>
+        <td style="font-size:12.5px"><b style="color:${a.kind==='add'?'var(--green)':'var(--red)'}">${a.kind==='add'?'➕ จ่ายเพิ่ม':'➖ หักคืน'}</b><div style="color:var(--muted);font-size:11.5px">${escHtml(a.reason||"")}</div></td>
+        <td class="num"><b>${a.kind==='add'?'+':'-'}฿${fmtB(a.amount)}</b></td>
+        <td style="font-size:12px">${adjRefText(a)||'—'}${a.ref_cycle&&CYCLES[a.ref_cycle]?`<div class="hint" style="font-size:10.5px">${CYCLES[a.ref_cycle].name}</div>`:''}</td>
+        <td>${adjStatusPill(a)}</td>
+        <td style="font-size:11.5px">${a.created_at?new Date(a.created_at).toLocaleString("th-TH",{dateStyle:"medium",timeStyle:"short"}):""}${a.created_by&&E(a.created_by)?`<div class="hint" style="font-size:10.5px">${escHtml(E(a.created_by).name)}</div>`:''}</td>
+        <td>${(a.status==="pending" && !a.applied_start)?`<button class="btn ghost xs" onclick="voidPayAdjustment(${a.id})">ยกเลิก</button>`:''}</td>
+      </tr>`; }).join("")}
+    </table></div>`}
+    <div class="hint" style="margin-top:12px;padding:10px 12px;background:#f8f9fc;border-radius:10px">📌 อนุมัติงวด = รายการถูกผูกกับงวดนั้น (ยกเลิกไม่ได้จนกว่าจะอนุมัติงวดใหม่โดยไม่มีรายการนี้ หรือปลดล็อกงวด) · ยืนยันจ่าย = จ่าย/หักแล้ว (แก้/ลบไม่ได้)</div>
+  </div>`;
+}
+async function adjLoadRefs(){
+  const sel = document.getElementById("adjRef"); const empId = Number(document.getElementById("adjEmp")?.value);
+  if(!sel) return;
+  if(!empId){ sel.innerHTML = '<option value="">— เลือกพนักงานก่อน —</option>'; return; }
+  sel.innerHTML = '<option value="">กำลังโหลด...</option>';
+  const { data, error } = await sb.from("payroll_records").select("cycle,cycle_start_date,cycle_end_date,net_pay,status")
+    .eq("employee_id", empId).eq("status","paid").order("cycle_end_date",{ascending:false}).limit(12);
+  _adjRefOpts = error ? [] : (data||[]);
+  sel.innerHTML = '<option value="">— ไม่ระบุ —</option>' + _adjRefOpts.map((r,i)=>`<option value="${i}">${isoToThaiDisplay(r.cycle_start_date)} – ${isoToThaiDisplay(r.cycle_end_date)} · ${(CYCLES[r.cycle]||{}).name||r.cycle} · สุทธิ ฿${fmt(Number(r.net_pay)||0)}</option>`).join("");
+  if(_adjRefOpts.length) sel.value = "0";
+}
+async function savePayAdjustment(){
+  if(!canSeePayroll()){ toast("เฉพาะ HR / Super Admin"); return; }
+  const empId = Number(document.getElementById("adjEmp").value);
+  const kind = document.getElementById("adjKind").value;
+  const amount = round2(document.getElementById("adjAmount").value);
+  const reason = document.getElementById("adjReason").value.trim();
+  const refIdx = document.getElementById("adjRef").value;
+  if(!empId){ toast("กรุณาเลือกพนักงาน"); return; }
+  if(!(amount>0)){ toast("จำนวนเงินต้องมากกว่า 0"); return; }
+  if(!reason){ toast("กรุณาระบุเหตุผล"); return; }
+  const ref = refIdx!=="" ? _adjRefOpts[Number(refIdx)] : null;
+  const btn = document.getElementById("adjSaveBtn"); if(btn) btn.disabled = true;
+  const { error } = await sb.from("pay_adjustments").insert({ employee_id: empId, kind, amount, reason,
+    ref_cycle: ref?ref.cycle:null, ref_start: ref?ref.cycle_start_date:null, ref_end: ref?ref.cycle_end_date:null, created_by: loggedInEmployeeId });
+  if(btn) btn.disabled = false;
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  logAudit("payroll","บันทึกรายการปรับจ่าย", `${E(empId)?.name||empId} · ${kind==="add"?"จ่ายเพิ่ม":"หักคืน"} ฿${fmtB(amount)} · ${reason}${ref?` · อ้างอิงงวด ${isoToThaiDisplay(ref.cycle_start_date)} – ${isoToThaiDisplay(ref.cycle_end_date)}`:""}`);
+  await loadPayAdjustments();
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
+  render("payroll");
+  toast("บันทึกแล้ว ✓ จะรวมเข้างวดถัดไปของพนักงานคนนี้");
+}
+async function voidPayAdjustment(id){
+  const a = (Array.isArray(payAdjRows)?payAdjRows:[]).find(x=>x.id===id); if(!a) return;
+  if(a.applied_start){ toast("รายการนี้อยู่ในงวดที่อนุมัติแล้ว — ยกเลิกไม่ได้"); return; }
+  const why = prompt("เหตุผลที่ยกเลิกรายการนี้", ""); if(why===null) return;
+  const { error } = await sb.from("pay_adjustments").update({ status:"void", void_reason: why.trim()||null }).eq("id", id).eq("status","pending").is("applied_start", null);
+  if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  logAudit("payroll","ยกเลิกรายการปรับจ่าย", `${E(a.employee_id)?.name||a.employee_id} · ฿${fmtB(a.amount)} · ${a.reason}${why?` · เหตุผล: ${why}`:""}`);
+  await loadPayAdjustments();
+  await Promise.all(activeCycleKeys().map(cy=>loadCycleStats(cy)));
+  render("payroll");
+  toast("ยกเลิกรายการแล้ว");
 }
 
 /* ============ SALARY ADVANCE — เบิกเงินล่วงหน้า (ตาราง salary_advances) ============ */

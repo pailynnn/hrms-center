@@ -67,6 +67,9 @@
     padding:12px 6px;border-radius:14px;border:1.5px solid var(--line-2);background:var(--ink);
     transition:.15s;
   }
+  .chips.four{grid-template-columns:1fr 1fr}
+  .comphint{display:none;margin-top:9px;padding:10px 12px;border-radius:12px;font-size:11.5px;line-height:1.6;
+    background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:#fcd34d}
   .chip .ic{font-size:19px;display:block;margin-bottom:4px}
   .chip .tt{font-size:12px;font-weight:600;color:var(--txt);display:block}
   .chip .st{font-size:9.5px;color:var(--muted);display:block;margin-top:1px}
@@ -144,7 +147,11 @@
         <button class="chip" data-type="unpaid" onclick="selectType('unpaid')">
           <span class="ic">📄</span><span class="tt" id="typeUnpaidTh">ลาไม่รับค่าจ้าง</span><span class="st" id="typeUnpaidMm">လစာမဲ့ခွင့်</span>
         </button>
+        <button class="chip" data-type="comp_day" id="chipComp" style="display:none" onclick="selectType('comp_day')">
+          <span class="ic">🎟️</span><span class="tt" id="typeCompTh">หยุดชดเชย</span><span class="st" id="typeCompMm">အစားထိုးနားရက်</span>
+        </button>
       </div>
+      <div class="comphint" id="compHint"></div>
     </div>
 
     <div class="section">
@@ -166,7 +173,7 @@
 
     <button class="submit" id="btnSubmit" onclick="doSubmit()">📤 <span id="txtSubmit">ยื่นใบลา</span></button>
 
-    <div class="footer" id="txtFooter">ใบลาจะส่งไปที่หัวหน้างานอนุมัติก่อน แล้วส่งต่อ HR</div>
+    <div class="footer" id="txtFooter">ใบลาจะส่งตรงถึง HR อนุมัติ</div>
   </div>
 
 <script>
@@ -189,26 +196,30 @@ const L = {
     profileSub: "พนักงาน",
     typeLabel: "ประเภทการลา", dateLabel: "วันที่ลา", from: "เริ่ม", to: "ถึง (ถ้าลาหลายวัน)",
     reasonLabel: "เหตุผลเพิ่มเติม (ไม่บังคับ)", reasonPh: "ระบุรายละเอียดเพิ่มเติม ถ้ามี...",
-    submit: "ยื่นใบลา", footer: "ใบลาจะส่งไปที่หัวหน้างานอนุมัติก่อน แล้วส่งต่อ HR",
+    submit: "ยื่นใบลา", footer: "ใบลาจะส่งตรงถึง HR อนุมัติ",
     rule: "📌 เลือกประเภทลาที่ตรงที่สุด HR จะเห็นเป็นภาษาไทยเสมอไม่ว่าคุณเลือกภาษาไหน · ยื่นก่อนเวลาตัดรอบของบริษัทเพื่อไม่ให้ติดธง \"แจ้งช้า\"",
     needType: "กรุณาเลือกประเภทการลา", needDate: "กรุณาเลือกวันที่เริ่มลา", badRange: "วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม",
     submitting: "กำลังส่งใบลา...", idErr: "ยืนยันตัวตนกับ LINE ไม่สำเร็จ — เปิดหน้านี้ผ่านแอป LINE อีกครั้ง",
     srvErr: "เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง", genErr: "เกิดข้อผิดพลาด", noCfg: "ยังไม่ได้ตั้งค่า LIFF ID สำหรับยื่นลา",
     loginLine: "กำลังเข้าสู่ระบบผ่าน LINE...",
-    okMsg: (n)=>`ยื่นใบลาสำเร็จ ✓ (${n} วัน) ส่งไปที่หัวหน้างานแล้ว`
+    okMsg: (n)=>`ยื่นใบลาสำเร็จ ✓ (${n} วัน) ส่งให้ HR อนุมัติแล้ว`,
+    compHint: (n, src)=>`🎟️ สิทธิหยุดชดเชยคงเหลือ ${n} วัน${src?` (จากวันหยุด ${src})`:""} · ลา 1 วันใช้ 1 สิทธิ์ · วันที่ลาต้องอยู่หลังวันหยุดที่มาทำงาน`,
+    compShort: (n)=>`สิทธิหยุดชดเชยคงเหลือ ${n} วัน — เลือกวันลาไม่เกินนี้`
   },
   mm: {
     subtitle: "LINE မှ ခွင့်လျှောက်ရန် · ရွေးရုံသာ ရိုက်ရန်မလို",
     profileSub: "ဝန်ထမ်း",
     typeLabel: "ခွင့်အမျိုးအစား", dateLabel: "ခွင့်ရက်စွဲ", from: "စတင်", to: "အထိ (ရက်များစွာဆိုလျှင်)",
     reasonLabel: "အသေးစိတ် (မဖြစ်မနေမလို)", reasonPh: "ရှိလျှင် အသေးစိတ်ဖော်ပြပါ...",
-    submit: "ခွင့်တင်ရန်", footer: "ခွင့်လျှောက်လွှာကို အကြီးအကဲ အတည်ပြုပြီးမှ HR ထံ ပို့ပါမည်",
+    submit: "ခွင့်တင်ရန်", footer: "ခွင့်လျှောက်လွှာကို HR ထံ တိုက်ရိုက် ပို့ပါမည်",
     rule: "📌 သင့်အခြေအနေနှင့်အနီးဆုံး အမျိုးအစားကို ရွေးပါ — ဘာသာစကားမည်သို့ရွေးထားစေ HR က ထိုင်းလိုသာမြင်ရမည် · နောက်ကျမှုအမှတ်အသားမရှိစေရန် ကုမ္ပဏီသတ်မှတ်အချိန်မတိုင်မီ တင်ပါ",
     needType: "ခွင့်အမျိုးအစားကို ရွေးပါ", needDate: "ခွင့်စတင်မည့်ရက်ကို ရွေးပါ", badRange: "အဆုံးရက်သည် အစရက်ထက် စောနေသည်",
     submitting: "ခွင့်လျှောက်လွှာ ပို့နေသည်...", idErr: "LINE ဖြင့် အတည်မပြုနိုင်ပါ — LINE app မှ ပြန်ဖွင့်ပါ",
     srvErr: "ဆာဗာ တုံ့ပြန်မှု မှားယွင်းနေသည်", genErr: "အမှားဖြစ်ပွားခဲ့သည်", noCfg: "ခွင့်တင်ရန် LIFF ID သတ်မှတ်မရသေးပါ",
     loginLine: "LINE မှတစ်ဆင့် ဝင်ရောက်နေသည်...",
-    okMsg: (n)=>`ခွင့်လျှောက်လွှာ ပို့ပြီးပါပြီ ✓ (${n} ရက်) အကြီးအကဲထံ ပို့ပြီးပါပြီ`
+    okMsg: (n)=>`ခွင့်လျှောက်လွှာ ပို့ပြီးပါပြီ ✓ (${n} ရက်) HR ထံ ပို့ပြီးပါပြီ`,
+    compHint: (n, src)=>`🎟️ ကျန်ရှိသော အစားထိုးနားရက် ${n} ရက်${src?` (${src} အားလပ်ရက်မှ)`:""} · ခွင့် ၁ ရက် = ၁ ရက်သုံး · ခွင့်ရက်သည် အလုပ်လာခဲ့သော အားလပ်ရက်နောက်ပိုင်း ဖြစ်ရမည်`,
+    compShort: (n)=>`ကျန်ရှိသော အစားထိုးနားရက် ${n} ရက် — ဤထက်မပိုရွေးပါ`
   }
 };
 let lang = localStorage.getItem("hrmsLiffLang") || "th";
@@ -229,16 +240,40 @@ function setLang(x){
   document.getElementById("langTh").classList.toggle("on", x==="th");
   document.getElementById("langMm").classList.toggle("on", x==="mm");
   // ป้ายชื่อบนชิป: ไทยเด่นเสมอ (HR เห็นไทย) + คำแปลเป็นตัวรอง สลับตำแหน่งเด่น/รองตามภาษาที่เลือก
-  const pairs = [["typePersonalTh","ลากิจ","typePersonalMm","ကိုယ်ရေးခွင့်"],["typeSickTh","ลาป่วย","typeSickMm","နာမကျန်းခွင့်"],["typeUnpaidTh","ลาไม่รับค่าจ้าง","typeUnpaidMm","လစာမဲ့ခွင့်"]];
+  const pairs = [["typePersonalTh","ลากิจ","typePersonalMm","ကိုယ်ရေးခွင့်"],["typeSickTh","ลาป่วย","typeSickMm","နာမကျန်းခွင့်"],["typeUnpaidTh","ลาไม่รับค่าจ้าง","typeUnpaidMm","လစာမဲ့ခွင့်"],["typeCompTh","หยุดชดเชย","typeCompMm","အစားထိုးနားရက်"]];
   pairs.forEach(([idTh,th,idMm,mm])=>{
     document.getElementById(idTh).textContent = x==="mm" ? mm : th;
     document.getElementById(idMm).textContent = x==="mm" ? th : mm;
   });
+  renderCompHint();
   syncLangToServer(x);
+}
+/* [รอบ 23] หยุดชดเชย: แสดงชิปเมื่อมีสิทธิ์คงเหลือ (ถาม liff-leave-submit action "balance") */
+let COMP = null;   // {available, credits:[{source_date,days}]}
+function fmtD(iso){ const [y,m,d]=String(iso).split("-"); return lang==="mm" ? `${+d}/${+m}/${y}` : `${+d}/${+m}/${+y+543}`; }
+function renderCompHint(){
+  const box = document.getElementById("compHint"); if(!box) return;
+  if(!COMP || !(COMP.available>0) || selectedType!=="comp_day"){ box.style.display="none"; return; }
+  const src = (COMP.credits||[]).slice(0,4).map(c=>fmtD(c.source_date)).join(", ");
+  box.textContent = t("compHint")(COMP.available, src);
+  box.style.display = "block";
+}
+async function loadCompBalance(){
+  try{
+    const idToken = liff.getIDToken(); if(!idToken) return;
+    const res = await fetch(SUBMIT_URL, { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ idToken, action:"balance", lang }) });
+    const j = await res.json().catch(()=>null);
+    if(!res.ok || !j || !j.compEnabled || !(j.available>0)) return;
+    COMP = j;
+    document.getElementById("chipComp").style.display = "";
+    document.getElementById("typeChips").classList.add("four");
+  }catch(e){ /* ไม่มีสิทธิ์/ตรวจไม่ได้ → ไม่แสดงชิป */ }
 }
 function selectType(code){
   selectedType = code;
   document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("on", c.dataset.type===code));
+  renderCompHint();
 }
 
 const statusBox = document.getElementById("statusBox");
@@ -253,7 +288,10 @@ async function doSubmit(){
   if(!from){ showStatus("⚠️ " + t("needDate"), "err"); return; }
   if(to < from){ showStatus("⚠️ " + t("badRange"), "err"); return; }
   const reason = document.getElementById("reason").value.trim();
-
+  if(selectedType==="comp_day" && COMP){
+    const nDays = Math.round((new Date(to+"T00:00:00Z") - new Date(from+"T00:00:00Z"))/86400000) + 1;
+    if(nDays > COMP.available){ showStatus("⚠️ " + t("compShort")(COMP.available), "err"); return; }
+  }
   setBusy(true);
   try{
     if(!liff.isLoggedIn()){ liff.login(); return; }
@@ -270,6 +308,7 @@ async function doSubmit(){
 
     showStatus("✅ " + (json.message || t("okMsg")(json.days||1)), "ok");
     btnSubmit.disabled = true;
+    if(selectedType==="comp_day" && COMP){ COMP.available = Math.max(0, COMP.available - (json.days||1)); COMP.credits = (COMP.credits||[]).slice(json.days||1); renderCompHint(); }
   }catch(err){
     showStatus("⚠️ " + err.message, "err");
     btnSubmit.disabled = false;
@@ -293,6 +332,7 @@ async function init(){
     document.getElementById("profile").style.display = "flex";
     document.getElementById("avatar").src = profile.pictureUrl || "";
     document.getElementById("displayName").textContent = profile.displayName || "";
+    loadCompBalance();
   }catch(err){
     showStatus("⚠️ " + err.message, "err");
     btnSubmit.disabled = true;
