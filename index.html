@@ -570,6 +570,297 @@ function sickRunLength(empId, dISO){
   return n;
 }
 
+/* ===== [รอบ 18.9] ใบรับรองแพทย์แนบใบลา (ตาราง leave_attachments · ไฟล์ใน bucket employee-files/<emp>/leave-cert/) =====
+   • ยังไม่รัน round27_leave_certs.sql → leaveAttSchema=false: ไม่แสดงช่องแนบ (บอกให้ส่งรูปทางแชต) ทุกอย่างทำงานแบบเดิม
+   • HR/SA เปิดดูภาพใหญ่ + ดาวน์โหลด · เจ้าของดูของตัวเอง · ผู้ช่วย HR แนบแทนได้แต่เปิดดูไม่ได้ (RLS)
+   • ไฟล์ถูกลบอัตโนมัติหลัง settings.leaveCertDays วัน (ค่าเริ่มต้น 45) — แจ้ง HR ให้สำรองไว้ใน Google Drive */
+let leaveAtt = [];            // แถว leave_attachments ที่ผู้ใช้นี้เห็น
+let leaveAttSchema = null;    // null = ยังไม่รู้ · true/false
+let lvCertDraft = [];         // รูปที่เลือกในฟอร์มยื่นลา [{dataUrl, name, size}]
+const LEAVE_CERT_MAX = 5;     // ต่อใบลา (DB กันซ้ำ)
+const LEAVE_CERT_PER_SUBMIT = 3;
+function leaveCertDays(){ return Number(settings.leaveCertDays)||45; }
+async function loadLeaveAttachments(){
+  const { data, error } = await sb.from("leave_attachments").select("*").order("created_at", {ascending:true});
+  if(error){
+    const missing = error.code==="42P01" || error.code==="PGRST205" || /leave_attachments/.test(error.message||"");
+    leaveAttSchema = missing ? false : (leaveAttSchema===true);
+    if(!missing) console.warn("leave_attachments", error);
+    leaveAtt = []; return;
+  }
+  leaveAttSchema = true; leaveAtt = data||[];
+}
+const _tsKey = ts => ts ? new Date(ts).getTime() : null;
+// ใบลาทั้งชุดที่ยื่นพร้อมกัน (employee + request_timestamp เดียวกัน)
+function leaveGroupOf(l){
+  if(!l) return [];
+  const k = _tsKey(l.reqTs);
+  if(k==null) return [l];
+  return leaves.filter(x=>String(x.emp)===String(l.emp) && _tsKey(x.reqTs)===k).sort((a,b)=>String(a.dateISO).localeCompare(String(b.dateISO)));
+}
+function certsForLeave(l){
+  if(!l || !leaveAtt.length) return [];
+  const k = _tsKey(l.reqTs);
+  const ids = new Set(leaveGroupOf(l).map(x=>String(x.id)));
+  return leaveAtt.filter(a=>String(a.employee_id)===String(l.emp) && ((k!=null && _tsKey(a.request_timestamp)===k) || (a.leave_request_id!=null && ids.has(String(a.leave_request_id)))));
+}
+// แสดงเฉพาะแถวแรกของชุด เพื่อไม่ให้ป้ายซ้ำทุกวัน
+function isFirstOfGroup(l){ const g = leaveGroupOf(l); return !g.length || String(g[0].id)===String(l.id); }
+function canAttachCert(l){
+  if(!leaveAttSchema || !l || l.type!=="sick") return false;
+  if(l.supStatus==="rejected" || l.hrStatus==="rejected") return false;
+  if(certsForLeave(l).length >= LEAVE_CERT_MAX) return false;
+  return String(l.emp)===String(loggedInEmployeeId) || canSeePayroll() || isHrAssistant();
+}
+function canViewCerts(l){ return !!l && (canSeePayroll() || String(l.emp)===String(loggedInEmployeeId)); }
+// ป้าย/ปุ่มในตาราง (หน้าอนุมัติลา + ประวัติของฉัน)
+function leaveCertCell(l){
+  if(!leaveAttSchema || !l || !isFirstOfGroup(l)) return "";
+  const certs = certsForLeave(l);
+  const live = certs.filter(a=>!a.purged_at).length;
+  let h = "";
+  if(certs.length && canViewCerts(l)){
+    h += `<button class="btn ghost xs" style="margin-top:4px" onclick="openLeaveCertModal(${l.id})">📎 ใบรับรองแพทย์ ${certs.length} รูป${live<certs.length?` (ลบแล้ว ${certs.length-live})`:""}</button>`;
+  } else if(certs.length){
+    h += `<span class="pill green" style="font-size:10px;margin-top:4px">📎 แนบใบรับรองแพทย์แล้ว ${certs.length} รูป</span>`;
+  }
+  if(canAttachCert(l)) h += ` <button class="btn ghost xs" style="margin-top:4px" onclick="pickLeaveCert(${l.id})">➕ แนบใบรับรองแพทย์</button>`;
+  return h ? `<div>${h}</div>` : "";
+}
+// ===== เตรียมรูป: HEIC → JPEG · ย่อด้านยาว ≤ 1600px · ≤ ~950 KB (LINE ใช้เป็นภาพตัวอย่างได้) =====
+function _loadScriptOnce(src){
+  return new Promise((res, rej)=>{
+    if(document.querySelector(`script[src="${src}"]`)){ res(); return; }
+    const s = document.createElement("script"); s.src = src; s.onload = ()=>res(); s.onerror = ()=>rej(new Error("load")); document.head.appendChild(s);
+  });
+}
+function _isHeic(f){ return /hei[cf]/i.test(f.type||"") || /\.hei[cf]$/i.test(f.name||""); }
+function _drawCert(img, w0, h0){
+  let max = 1600, q = 0.82, d = "";
+  for(let i=0; i<4; i++){
+    let w = w0, h = h0;
+    if(w>h && w>max){ h = Math.round(h*max/w); w = max; } else if(h>=w && h>max){ w = Math.round(w*max/h); h = max; }
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    const ctx = cv.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+    d = cv.toDataURL("image/jpeg", q);
+    if(!d || d.indexOf("data:image/jpeg")!==0 || d.length < 1000) throw new Error("canvas");
+    if(d.length*0.75 <= 950*1024) return d;
+    max = Math.round(max*0.8); q = Math.max(0.6, q-0.08);
+  }
+  return d;
+}
+async function prepareCertImage(file){
+  if(!file || !file.size) throw new Error("ไฟล์ว่าง");
+  if(file.size > 25*1024*1024) throw new Error("ไฟล์ใหญ่เกิน 25 MB");
+  let src = file;
+  if(_isHeic(file)){
+    try{
+      if(!window.heic2any) await _loadScriptOnce("https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js");
+      const out = await window.heic2any({ blob:file, toType:"image/jpeg", quality:0.85 });
+      src = Array.isArray(out) ? out[0] : out;
+    }catch(e){ console.warn("heic2any", e); }
+  }
+  try{
+    return await new Promise((resolve, reject)=>{
+      const img = new Image(); const url = URL.createObjectURL(src);
+      img.onload = ()=>{ URL.revokeObjectURL(url); try{ resolve(_drawCert(img, img.naturalWidth||img.width, img.naturalHeight||img.height)); }catch(e){ reject(e); } };
+      img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error("img")); };
+      img.src = url;
+    });
+  }catch(e1){
+    if(typeof createImageBitmap!=="function") throw new Error("เปิดรูปนี้ไม่ได้ — ลองถ่ายใหม่หรือบันทึกเป็น JPG");
+    const bmp = await createImageBitmap(src);
+    return _drawCert(bmp, bmp.width, bmp.height);
+  }
+}
+function _dataUrlToBlob(d){
+  const [head, b64] = d.split(","); const mime = (head.match(/data:([^;]+)/)||[])[1] || "image/jpeg";
+  const bin = atob(b64); const u8 = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], {type:mime});
+}
+async function readCertFiles(files, limit){
+  const ok = [], bad = [];
+  for(const f of [...files].slice(0, limit)){
+    try{ const d = await prepareCertImage(f); ok.push({dataUrl:d, name:f.name||"รูป", size:Math.round(d.length*0.75)}); }
+    catch(e){ bad.push(`${f.name||"รูป"} (${e.message||"เปิดไม่ได้"})`); }
+  }
+  if(files.length > limit) bad.push(`เลือกได้สูงสุด ${limit} รูป`);
+  return { ok, bad };
+}
+// ===== ฟอร์มยื่นลา =====
+function lvCertBoxHtml(){
+  if(leaveAttSchema===false) return `<div class="hint" style="padding:10px 12px;border:1px dashed var(--line);border-radius:10px">📎 ใบรับรองแพทย์: ส่งรูปให้ HR ทางแชต LINE</div>`;
+  return `<div style="padding:12px;border:2px dashed var(--line);border-radius:10px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="btn ghost sm" style="cursor:pointer;margin:0">📷 เลือกรูปใบรับรองแพทย์<input type="file" id="lvCertInput" accept="image/*,.heic,.heif" multiple style="display:none" onchange="lvCertAdd(this)"></label>
+        <span class="hint">ไม่บังคับ · สูงสุด ${LEAVE_CERT_PER_SUBMIT} รูป · ส่งตรงถึง HR ทาง LINE · ลาป่วยเกิน 3 วันต้องแนบ</span>
+      </div>
+      <div id="lvCertList" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:${lvCertDraft.length?"10px":"0"}">${lvCertDraft.map((c,i)=>`
+        <div style="position:relative;width:84px;height:84px;border-radius:8px;overflow:hidden;border:1px solid var(--line)">
+          <img src="${c.dataUrl}" alt="" style="width:100%;height:100%;object-fit:cover">
+          <button class="btn danger xs" style="position:absolute;top:2px;right:2px;padding:0 6px" onclick="lvCertRemove(${i})" title="เอาออก">✕</button>
+        </div>`).join("")}</div>
+      <div id="lvCertMsg" class="hint" style="margin-top:6px;color:var(--danger,#e94f4f)"></div>
+    </div>`;
+}
+function lvCertBoxRefresh(){
+  const wrap = document.getElementById("lvCertWrap"); if(!wrap) return;
+  const t = document.getElementById("lvType")?.value;
+  wrap.style.display = t==="sick" ? "" : "none";
+  const box = document.getElementById("lvCertBox"); if(box) box.innerHTML = lvCertBoxHtml();
+}
+async function lvCertAdd(input){
+  const files = [...(input.files||[])]; input.value = "";
+  if(!files.length) return;
+  const room = LEAVE_CERT_PER_SUBMIT - lvCertDraft.length;
+  if(room<=0){ toast(`แนบได้สูงสุด ${LEAVE_CERT_PER_SUBMIT} รูปต่อการยื่น`); return; }
+  toast("⏳ กำลังเตรียมรูป...");
+  const { ok, bad } = await readCertFiles(files, room);
+  lvCertDraft = lvCertDraft.concat(ok);
+  lvCertBoxRefresh();
+  const msg = document.getElementById("lvCertMsg");
+  if(bad.length){ if(msg) msg.textContent = "⚠️ ใช้ไม่ได้: " + bad.join(", "); toast("⚠️ บางรูปใช้ไม่ได้"); }
+  else toast(`เพิ่มรูปแล้ว ${ok.length} รูป ✓`);
+}
+function lvCertRemove(i){ lvCertDraft.splice(i,1); lvCertBoxRefresh(); }
+// ===== อัปโหลด + บันทึก + แจ้ง HR ทาง LINE =====
+async function uploadLeaveCerts(empId, group, items){
+  // group = { firstId, reqTs, from, to }
+  const done = [], failed = [];
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g,"").slice(0,14);
+  for(let i=0;i<items.length;i++){
+    const it = items[i];
+    const path = `${empId}/leave-cert/${stamp}_${Math.random().toString(36).slice(2,8)}_${i+1}.jpg`;
+    const blob = _dataUrlToBlob(it.dataUrl);
+    const up = await sb.storage.from("employee-files").upload(path, blob, { contentType:"image/jpeg" });
+    if(up.error){ failed.push(`${it.name}: ${up.error.message}`); continue; }
+    // ไม่ต่อ .select() — ผู้ช่วย HR อ่านตารางนี้ไม่ได้ (RETURNING จะไม่ผ่าน RLS)
+    const ins = await sb.from("leave_attachments").insert({
+      employee_id: empId, leave_request_id: group.firstId || null, request_timestamp: group.reqTs || null,
+      leave_from: group.from || null, leave_to: group.to || null, kind:"medical_cert",
+      storage_path: path, mime_type:"image/jpeg", size_bytes: blob.size, file_name: it.name || null, source:"web"
+    });
+    if(ins.error){ failed.push(`${it.name}: ${ins.error.message}`); continue; }
+    done.push(path);
+  }
+  if(done.length && !canSeePayroll()) notifyHrLeaveCerts(done);   // HR แนบเอง = ไม่ต้องแจ้งตัวเอง
+  return { done, failed };
+}
+// แจ้ง HR ทาง LINE (ส่งรูปตรงเข้าแชต + เตือนสำรองไฟล์) — edge leave-cert-notify · best-effort
+async function notifyHrLeaveCerts(paths){
+  try{
+    const { data: sess } = await sb.auth.getSession();
+    const token = sess?.session?.access_token; if(!token) return null;
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/leave-cert-notify`, {
+      method:"POST", headers:{ "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+token },
+      body: JSON.stringify({ paths })
+    });
+    return await res.json().catch(()=>null);
+  }catch(e){ console.warn("leave-cert-notify", e); return null; }
+}
+// แนบเพิ่มให้ใบลาที่ยื่นไปแล้ว
+let _certTargetLeave = null;
+function pickLeaveCert(leaveId){
+  _certTargetLeave = leaveId;
+  let inp = document.getElementById("lvCertLater");
+  if(!inp){
+    inp = document.createElement("input"); inp.type = "file"; inp.id = "lvCertLater"; inp.accept = "image/*,.heic,.heif"; inp.multiple = true; inp.style.display = "none";
+    inp.onchange = ()=>attachCertsToLeave(_certTargetLeave, inp);
+    document.body.appendChild(inp);
+  }
+  inp.value = ""; inp.click();
+}
+async function attachCertsToLeave(leaveId, input){
+  const l = leaves.find(x=>String(x.id)===String(leaveId)); if(!l) return;
+  const files = [...(input.files||[])]; input.value = "";
+  if(!files.length) return;
+  const room = Math.min(LEAVE_CERT_PER_SUBMIT, LEAVE_CERT_MAX - certsForLeave(l).length);
+  if(room<=0){ toast(`ใบลานี้แนบครบ ${LEAVE_CERT_MAX} รูปแล้ว`); return; }
+  toast("⏳ กำลังเตรียมรูป...");
+  const { ok, bad } = await readCertFiles(files, room);
+  if(!ok.length){ toast("⚠️ ใช้ไม่ได้: " + bad.join(", ")); return; }
+  const g = leaveGroupOf(l);
+  const r = await uploadLeaveCerts(l.emp, { firstId: g[0]?.id || l.id, reqTs: l.reqTs, from: g[0]?.dateISO || l.dateISO, to: g[g.length-1]?.dateISO || l.dateISO }, ok);
+  await loadLeaveAttachments();
+  logAudit("leave", "แนบใบรับรองแพทย์", `${E(l.emp)?.name||""} · ${r.done.length} รูป (${l.date})`);
+  const fail = r.failed.concat(bad);
+  toast(r.done.length ? `แนบใบรับรองแพทย์ ${r.done.length} รูปแล้ว ✓${canSeePayroll()?"":" ส่งให้ HR แล้ว"}${fail.length?` · ไม่สำเร็จ ${fail.length}`:""}` : "แนบไม่สำเร็จ: " + fail.join(", "));
+  const mb = document.getElementById("modalBg");
+  if(mb && mb.classList.contains("show") && document.getElementById("certModalMark")) openLeaveCertModal(leaveId);
+  else render(currentPage || "leave");
+}
+// ===== modal ดูภาพใหญ่ + ดาวน์โหลด =====
+function certPurgeDate(a){ const d = new Date(a.created_at || Date.now()); d.setDate(d.getDate() + leaveCertDays()); return isoDate(d); }
+function certFileName(a, i){
+  const e = E(a.employee_id); const d = a.leave_from || (a.created_at||"").slice(0,10);
+  return `ใบรับรองแพทย์_${(e&&e.code)||a.employee_id}_${d}_${i+1}.jpg`;
+}
+async function openLeaveCertModal(leaveId){
+  const l = leaves.find(x=>String(x.id)===String(leaveId)); if(!l) return;
+  const certs = certsForLeave(l); const e = E(l.emp); const g = leaveGroupOf(l);
+  const range = g.length>1 ? `${isoToThaiDisplay(g[0].dateISO)} – ${isoToThaiDisplay(g[g.length-1].dateISO)} (${g.length} วัน)` : l.date;
+  const urls = {};
+  await Promise.all(certs.filter(a=>!a.purged_at).map(async a=>{
+    const { data } = await sb.storage.from("employee-files").createSignedUrl(a.storage_path, 600);
+    urls[a.id] = data?.signedUrl || "";
+  }));
+  const live = certs.filter(a=>!a.purged_at);
+  const purgeOn = live.length ? live.map(certPurgeDate).sort()[0] : null;
+  document.getElementById("modalBox").className = "modal modal-lg";
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modal-head" id="certModalMark"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">📎</div>
+      <div><h3 style="font-size:16px">ใบรับรองแพทย์ — ${e?e.name:"พนักงาน"}</h3>
+      <div class="hint">${LT(l.type).name} ${range} · ${certs.length} รูป</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    ${purgeOn?`<div style="margin:12px 0;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f5d39b;font-size:12.5px;line-height:1.7">
+      🗂️ ระบบเก็บรูปไว้ ${leaveCertDays()} วัน แล้วลบอัตโนมัติ — ${canSeePayroll()?`<b>ดาวน์โหลดแล้วบันทึกสำรองไว้ใน Google Drive ของบริษัท</b> ก่อน <b>${isoToThaiDisplay(purgeOn)}</b>`:`ลบประมาณ <b>${isoToThaiDisplay(purgeOn)}</b>`}
+    </div>`:""}
+    <div style="display:flex;flex-direction:column;gap:14px;max-height:68vh;overflow:auto">
+      ${certs.map((a,i)=>a.purged_at
+        ? `<div class="hint" style="padding:14px;border:1px dashed var(--line);border-radius:10px">🗑️ รูปที่ ${i+1} ถูกลบตามกำหนด ${leaveCertDays()} วันแล้ว (${isoToThaiDisplay(String(a.purged_at).slice(0,10))})</div>`
+        : `<div style="border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#f8f9fc">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;position:sticky;top:0;background:#f8f9fc;border-bottom:1px solid var(--line);z-index:1">
+              <span class="hint">รูปที่ ${i+1} · ${a.source==="line"?"ส่งทาง LINE":"แนบในเว็บ"} · ${new Date(a.created_at).toLocaleString("th-TH",{dateStyle:"medium",timeStyle:"short"})}${a.hr_downloaded_at&&canSeePayroll()?` · ✅ ดาวน์โหลดแล้ว`:""}</span>
+              <span style="flex:1"></span>
+              <button class="btn ghost xs" onclick="window.open('${urls[a.id]}','_blank')">🔍 เปิดภาพเต็ม</button>
+              <button class="btn primary xs" onclick="downloadLeaveCert(${a.id}, ${i})">⬇️ ดาวน์โหลด</button>
+            </div>
+            <img src="${urls[a.id]}" alt="ใบรับรองแพทย์ รูปที่ ${i+1}" style="display:block;width:100%;max-height:none;object-fit:contain;cursor:zoom-in;background:#fff" onclick="window.open(this.src,'_blank')">
+</div>`).join("")}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+      ${live.length>1?`<button class="btn primary sm" onclick="downloadAllLeaveCerts(${l.id})">⬇️ ดาวน์โหลดทั้งหมด (${live.length})</button>`:""}
+      ${canAttachCert(l)?`<button class="btn ghost sm" onclick="pickLeaveCert(${l.id})">➕ แนบเพิ่ม</button>`:""}
+      <span style="flex:1"></span><button class="btn ghost sm" onclick="closeModal()">ปิด</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function downloadLeaveCert(attId, idx){
+  const a = leaveAtt.find(x=>String(x.id)===String(attId)); if(!a || a.purged_at) return;
+  const name = certFileName(a, idx||0);
+  const { data, error } = await sb.storage.from("employee-files").createSignedUrl(a.storage_path, 300, { download: name });
+  if(error){ toast("ดาวน์โหลดไม่สำเร็จ: " + error.message); return; }
+  // โหลดเป็น blob แล้วบันทึกด้วยชื่อไฟล์ที่ตั้งไว้ (ลิงก์ข้ามโดเมนตรง ๆ อาจเปิดทับหน้าเว็บ) · ไม่ได้ → เปิดแท็บใหม่
+  try{
+    const res = await fetch(data.signedUrl); if(!res.ok) throw new Error(String(res.status));
+    const obj = URL.createObjectURL(await res.blob());
+    const link = document.createElement("a"); link.href = obj; link.download = name; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(()=>URL.revokeObjectURL(obj), 4000);
+  }catch(e){ window.open(data.signedUrl, "_blank"); }
+  if(canSeePayroll() && !a.hr_downloaded_at){
+    const nowISO = new Date().toISOString();
+    const { error: uerr } = await sb.from("leave_attachments").update({ hr_downloaded_at: nowISO, hr_downloaded_by: loggedInEmployeeId }).eq("id", a.id);
+    if(!uerr){ a.hr_downloaded_at = nowISO; a.hr_downloaded_by = loggedInEmployeeId; }
+  }
+}
+async function downloadAllLeaveCerts(leaveId){
+  const l = leaves.find(x=>String(x.id)===String(leaveId)); if(!l) return;
+  const certs = certsForLeave(l);
+  for(let i=0;i<certs.length;i++){ if(!certs[i].purged_at){ await downloadLeaveCert(certs[i].id, i); await new Promise(r=>setTimeout(r,400)); } }
+  toast("ดาวน์โหลดแล้ว — อย่าลืมบันทึกสำรองไว้ใน Google Drive");
+}
+
 /* ================== EMPLOYEES ================== */
 // โหลดจริงจาก Supabase (ตาราง employees) หลังล็อกอินสำเร็จ ผ่าน loadEmployees()
 // ดู mapEmployeeRow() ด้านล่างสำหรับการแปลง field จาก DB → รูปแบบที่ UI ใช้
@@ -765,13 +1056,15 @@ function mapLeaveRow(row){
     onTime: isRequestOnTime(row.request_timestamp, row.leave_date),
     supStatus: row.supervisor_status || "pending",
     hrStatus: row.hr_status || "pending",
-    note: row.reason || ""
+    note: row.reason || "",
+    reqTs: row.request_timestamp || null   // [รอบ 18.9] จับชุดใบลาที่ยื่นพร้อมกัน (ใบรับรองแพทย์)
   };
 }
 async function loadLeaves(){
   const { data, error } = await sb.from("leave_requests").select("*").order("leave_date", {ascending:false});
   if(error){ console.error("loadLeaves error", error); toastLoadError("ข้อมูลการลา"); return; }
   leaves = (data||[]).map(mapLeaveRow);
+  try{ await loadLeaveAttachments(); }catch(e){ console.warn("loadLeaveAttachments", e); }
 }
 
 function mapAttendanceRow(row){
@@ -891,6 +1184,7 @@ async function loadSettings(){
   // [รอบ 25] ลาพักร้อน (round25_company_rules.sql)
   settings.annualSchema = Object.prototype.hasOwnProperty.call(data, "annual_leave_days");
   settings.annualLeaveDays = Number(data.annual_leave_days)||6;
+  settings.leaveCertDays = Number(data.leave_cert_retention_days)||45;   // [รอบ 18.9] ลบใบรับรองแพทย์อัตโนมัติ
   settings.compDayEnabled = settings.v3Schema && data.comp_day_enabled!==false;
   settings.liffId = data.liff_id || "";
   settings.liffLeaveId = data.liff_leave_id || "";
@@ -2409,13 +2703,14 @@ function compBalanceFor(empId, dISO){
     .reduce((s,c)=>s+(Number(c.days)||0),0);
 }
 async function lvCompHintRefresh(){
+  lvCertBoxRefresh();   // [รอบ 18.9] ช่องแนบใบรับรองแพทย์โผล่เฉพาะลาป่วย
   const box = document.getElementById("lvCompHint"); if(!box) return;
   const t = document.getElementById("lvType")?.value;
   if(t==="annual" || t==="sick"){
     const selA = document.getElementById("lvEmp");
     const empA = selA ? Number(selA.value) : loggedInEmployeeId;
     box.style.display="block";
-    if(t==="sick"){ box.innerHTML = "🩺 ลาป่วยไม่เกิน 3 วันไม่ต้องใช้ใบรับรองแพทย์ · <b>เกิน 3 วันต้องมีใบรับรองแพทย์</b> — ส่งให้ HR"; return; }
+    if(t==="sick"){ box.innerHTML = "🩺 ลาป่วยไม่เกิน 3 วันไม่ต้องใช้ใบรับรองแพทย์ · <b>เกิน 3 วันต้องมีใบรับรองแพทย์</b> — " + (leaveAttSchema ? "แนบรูปในช่องด้านล่าง (หรือแนบภายหลังจากประวัติการลา) ส่งตรงถึง HR" : "ส่งรูปให้ HR ทางแชต"); return; }
     if(!empA){ box.innerHTML = "เลือกพนักงานเพื่อดูสิทธิลาพักร้อน"; return; }
     const yA = todayISODate().slice(0,4); const ia = annualInfo(empA, yA);
     box.innerHTML = !ia.eligibleFrom ? "🏖️ ยังไม่มีวันเริ่มงานในข้อมูลพนักงาน — แจ้ง HR ก่อนลาพักร้อน"
@@ -5553,7 +5848,7 @@ function leaveMyDash(){
       <tr><th>วันที่ลา</th><th>ประเภท</th><th>เหตุผล</th><th>สถานะ</th></tr>
       ${data.length===0?'<tr><td colspan="4" class="hint" style="text-align:center;padding:16px">ยังไม่มีประวัติการลา</td></tr>':data.map(l=>{const lt=LT(l.type);return `<tr id="lvmine-${l.id}">
         <td>${l.date}</td>
-        <td style="color:${lt.color}">${lt.name}</td>
+        <td style="color:${lt.color}">${lt.name}${leaveCertCell(l)}</td>
         <td class="hint" style="font-size:12.5px">${l.note||"—"}</td>
         <td>${leaveStatus(l)}</td>
       </tr>`;}).join("")}
@@ -5686,8 +5981,8 @@ function leaveSubmit(){
         <div class="field"><label>ถึงวันที่</label><input id="lvDateTo" type="date" value="${todayISODate()}"></div>
         <div id="lvCompHint" class="hint" style="grid-column:span 2;display:none;padding:10px 12px;background:#fff8ec;border:1px solid #f5d39b;border-radius:10px;line-height:1.8"></div>
         <div class="field" style="grid-column:span 2"><label>เหตุผล</label><textarea id="lvReason" rows="3" placeholder="ระบุเหตุผลการลา..."></textarea></div>
-        <div class="field" style="grid-column:span 2"><label>เอกสารแนบ (ถ้ามี)</label>
-          <div style="padding:12px;border:2px dashed var(--line);border-radius:10px;text-align:center;font-size:12.5px;color:var(--muted)">📎 กดเลือกไฟล์ (ใบรับรองแพทย์ ฯลฯ) — ยังไม่รองรับในเฟสนี้</div></div>
+        <div class="field" id="lvCertWrap" style="grid-column:span 2;display:none"><label>ใบรับรองแพทย์ (ลาป่วย)</label>
+          <div id="lvCertBox">${lvCertBoxHtml()}</div></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:16px">
         <button class="btn primary" id="lvSubmitBtn" onclick="doSubmitLeave()">📤 ยื่นใบลา</button>
@@ -5731,7 +6026,7 @@ async function doSubmitLeave(){
     const byYear = {}; dates.forEach(d=>{ const y=d.slice(0,4); byYear[y]=(byYear[y]||0)+1; });
     for(const y of Object.keys(byYear)){ const ii = annualInfo(empId, y); if(byYear[y] > ii.left){ toast(`สิทธิพักร้อนปี ${Number(y)+543} เหลือ ${ii.left} วัน แต่ยื่น ${byYear[y]} วัน`); return; } }
   }
-  if(typeCode==="sick" && dates.length>3 && !confirm(`ลาป่วย ${dates.length} วัน — ลาป่วยเกิน 3 วันต้องมีใบรับรองแพทย์ (ส่งให้ HR)\nยืนยันยื่นใบลา?`)) return;
+  if(typeCode==="sick" && dates.length>3 && !lvCertDraft.length && !confirm(`ลาป่วย ${dates.length} วัน — ลาป่วยเกิน 3 วันต้องมีใบรับรองแพทย์${leaveAttSchema?" (แนบรูปในช่องใบรับรองแพทย์ หรือแนบภายหลังจากประวัติการลา)":" (ส่งให้ HR)"}\nยืนยันยื่นใบลา?`)) return;
   if(typeCode==="comp_day"){
     await ensureCompCreditsLoaded(true);
     const bal = compBalanceFor(empId, dates[0]);
@@ -5745,16 +6040,27 @@ async function doSubmitLeave(){
 
   const btn = document.getElementById("lvSubmitBtn");
   if(btn){ btn.disabled = true; btn.textContent = "กำลังยื่น..."; }
-  const { error } = await sb.from("leave_requests").insert(rows);
+  const { data: insRows, error } = await sb.from("leave_requests").insert(rows).select("id, leave_date");
   if(btn){ btn.disabled = false; btn.textContent = "📤 ยื่นใบลา"; }
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
+  // [รอบ 18.9] อัปโหลดใบรับรองแพทย์ (ถ้าแนบ) แล้วแจ้ง HR ทาง LINE
+  let certNote = "";
+  if(typeCode==="sick" && leaveAttSchema && lvCertDraft.length){
+    if(btn){ btn.disabled = true; btn.textContent = "กำลังอัปโหลดใบรับรองแพทย์..."; }
+    const firstId = (insRows||[]).slice().sort((a,b)=>String(a.leave_date).localeCompare(String(b.leave_date)))[0]?.id || null;
+    const r = await uploadLeaveCerts(empId, { firstId, reqTs: nowISO, from, to }, lvCertDraft);
+    if(btn){ btn.disabled = false; btn.textContent = "📤 ยื่นใบลา"; }
+    certNote = r.done.length ? ` · แนบใบรับรองแพทย์ ${r.done.length} รูป` : "";
+    if(r.failed.length) toast("⚠️ แนบใบรับรองแพทย์ไม่สำเร็จบางรูป: " + r.failed.join(", "));
+  }
+  lvCertDraft = [];
 
   if(typeCode==="comp_day") await ensureCompCreditsLoaded(true);
   await loadLeaves();
   logAudit("leave","ยื่นใบลา", `${E(empId)?.name||""} · ${LT(typeCode)?.name||typeCode} ${dates.length} วัน (${isoToThaiDisplay(from)}${to!==from?" – "+isoToThaiDisplay(to):""})`);
   updateBadge();
   setSub("leave","approve");
-  toast(`ยื่นใบลาสำเร็จ ✓ (${dates.length} วัน) ส่งให้ HR อนุมัติแล้ว`);
+  toast(`ยื่นใบลาสำเร็จ ✓ (${dates.length} วัน) ส่งให้ HR อนุมัติแล้ว${certNote}`);
 }
 
 function leaveApprove(){
@@ -5766,7 +6072,7 @@ function leaveApprove(){
       <tr><th>พนักงาน</th><th>วันที่ลา</th><th>ประเภท</th><th>ยื่นเมื่อ</th><th>ตรงเวลา</th><th>สถานะ</th><th style="text-align:center">การดำเนินการ</th></tr>
       ${myVisibleLeaves().map(l=>{const e=E(l.emp);const lt=LT(l.type);return `<tr id="lv-${l.id}">
         <td>${e?empCell(e):'<span class="hint">พนักงานที่พ้นสภาพ/ไม่พบ</span>'}</td><td>${l.date}</td>
-        <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}${(l.type==="sick" && sickRunLength(l.emp, l.dateISO)>3)?`<div><span class="pill red" style="font-size:10px">🩺 ป่วยติดกัน ${sickRunLength(l.emp, l.dateISO)} วัน — ต้องมีใบรับรองแพทย์</span></div>`:''}<div style="color:var(--muted);font-size:11.5px">${l.note}</div></td>
+        <td style="font-size:12.5px"><b style="color:${lt.color}">${lt.name}</b>${l.paid?"":" (ไม่ได้ค่าจ้าง)"}${(l.type==="sick" && sickRunLength(l.emp, l.dateISO)>3)?`<div><span class="pill red" style="font-size:10px">🩺 ป่วยติดกัน ${sickRunLength(l.emp, l.dateISO)} วัน — ต้องมีใบรับรองแพทย์</span></div>`:''}<div style="color:var(--muted);font-size:11.5px">${l.note}</div>${leaveCertCell(l)}</td>
         <td class="num">${l.submitted}</td>
         <td>${l.onTime?'<span class="pill green">✓</span>':'<span class="pill red">ช้า</span>'}</td>
         <td>${leaveStatus(l)}</td>

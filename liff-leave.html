@@ -109,6 +109,23 @@
   .spinner{width:16px;height:16px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;
     display:inline-block;vertical-align:-3px;margin-right:6px;animation:spin .7s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
+  /* [รอบ 27] ใบรับรองแพทย์ */
+  .certbtn{all:unset;cursor:pointer;box-sizing:border-box;display:block;width:100%;text-align:center;padding:12px;border-radius:13px;
+    border:1.5px dashed var(--line-2);color:var(--txt);font-size:13px;font-weight:600;background:var(--ink)}
+  .certbtn:active{transform:scale(.99)}
+  .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+  .thumb{position:relative;width:72px;height:72px;border-radius:10px;overflow:hidden;border:1px solid var(--line-2)}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb button{all:unset;cursor:pointer;position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:11px;text-align:center;line-height:20px}
+  .certnote{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.55}
+  .certnote.err{color:var(--err)}
+  .latebox{display:none;margin-top:16px;padding:14px;border-radius:16px;border:1px solid var(--line-2);background:var(--panel-2)}
+  .laterow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+  .laterow:first-of-type{border-top:none}
+  .laterow .ld{flex:1;font-size:12.5px;line-height:1.45}
+  .laterow .ld small{display:block;color:var(--muted);font-size:10.5px}
+  .laterow button{all:unset;cursor:pointer;padding:8px 12px;border-radius:11px;background:var(--amber);color:#1a1206;font-size:12px;font-weight:600;white-space:nowrap}
+  .laterow button:disabled{opacity:.4;cursor:not-allowed}
   @media (prefers-reduced-motion: reduce){ .spinner{animation:none} button.submit{transition:none} }
 </style>
 </head>
@@ -170,6 +187,14 @@
       <textarea id="reason" placeholder=""></textarea>
     </div>
 
+    <div class="section" id="certSection" style="display:none">
+      <span class="field-label" id="txtCertLabel">ใบรับรองแพทย์ (ถ้ามี)</span>
+      <button class="certbtn" id="btnCert" onclick="pickCert()">📷 <span id="txtCertBtn">แนบรูปใบรับรองแพทย์</span></button>
+      <input type="file" id="certInput" accept="image/*" multiple style="display:none">
+      <div class="thumbs" id="certThumbs"></div>
+      <div class="certnote" id="certNote"></div>
+    </div>
+
     <div class="rulebox" id="rulebox"></div>
 
     <div id="statusBox" class="status"></div>
@@ -177,6 +202,13 @@
     <button class="submit" id="btnSubmit" onclick="doSubmit()">📤 <span id="txtSubmit">ยื่นใบลา</span></button>
 
     <div class="footer" id="txtFooter">ใบลาจะส่งตรงถึง HR อนุมัติ</div>
+
+    <div class="latebox" id="lateBox">
+      <div class="label" id="txtLateLabel">ส่งใบรับรองแพทย์ย้อนหลัง</div>
+      <div class="certnote" id="txtLateSub" style="margin:-4px 0 6px">เลือกใบลาป่วยที่ยื่นไปแล้ว แล้วแนบรูป — ส่งตรงถึง HR</div>
+      <div id="lateList"></div>
+      <input type="file" id="lateInput" accept="image/*" multiple style="display:none">
+    </div>
   </div>
 
 <script>
@@ -211,6 +243,15 @@ const L = {
     annualHint: (l, q)=>`🏖️ สิทธิพักร้อนปีนี้คงเหลือ ${l} / ${q} วัน · ไม่หักเงิน · ใช้ไม่ครบไม่สะสมข้ามปี`,
     annualShort: (l)=>`สิทธิพักร้อนคงเหลือ ${l} วัน — เลือกวันลาไม่เกินนี้`,
     sickHint: "🩺 ลาป่วยไม่เกิน 3 วันไม่ต้องใช้ใบรับรองแพทย์ · เกิน 3 วันต้องมีใบรับรองแพทย์ — ส่งรูปให้ HR ทางแชต",
+    sickHintAttach: "🩺 ลาป่วยไม่เกิน 3 วันไม่ต้องใช้ใบรับรองแพทย์ · เกิน 3 วันต้องมีใบรับรองแพทย์ — แนบรูปด้านล่าง (ส่งตรงถึง HR) หรือส่งย้อนหลังได้",
+    certLabel: "ใบรับรองแพทย์ (ถ้ามี · สูงสุด 3 รูป)", certBtn: "แนบรูปใบรับรองแพทย์", certMore: "เพิ่มรูป",
+    certNote: "ถ่ายให้เห็นชื่อ วันที่ และลายเซ็นแพทย์ชัดเจน · รูปส่งตรงถึง HR",
+    certPreparing: "กำลังเตรียมรูป...", certMax: (n)=>`แนบได้สูงสุด ${n} รูป`,
+    certBad: (n)=>`ใช้ไม่ได้ ${n} รูป (เปิดรูปไม่ได้ — ลองถ่ายใหม่ หรือเลือกรูปที่บันทึกในเครื่อง)`,
+    certFailed: (n)=>`⚠️ บันทึกใบรับรองแพทย์ไม่สำเร็จ ${n} รูป — ส่งรูปให้ HR ทางแชต`,
+    lateLabel: "ส่งใบรับรองแพทย์ย้อนหลัง", lateSub: "เลือกใบลาป่วยที่ยื่นไปแล้ว แล้วแนบรูป — ส่งตรงถึง HR",
+    lateBtn: "📎 แนบรูป", lateHas: (n)=>`แนบแล้ว ${n} รูป`, lateNone: "ยังไม่มีใบรับรอง", daysUnit: "วัน",
+    lateSending: "กำลังส่งใบรับรองแพทย์...",
     sickLong: "ลาป่วยเกิน 3 วัน — อย่าลืมส่งรูปใบรับรองแพทย์ให้ HR"
   },
   mm: {
@@ -230,7 +271,16 @@ const L = {
     annualHint: (l, q)=>`🏖️ ယခုနှစ် နှစ်ပတ်လည်ခွင့် ကျန် ${l} / ${q} ရက် · လစာမဖြတ် · နောက်နှစ်သို့ မသယ်ပါ`,
     annualShort: (l)=>`နှစ်ပတ်လည်ခွင့် ကျန် ${l} ရက် — ဤထက်မပိုရွေးပါ`,
     sickHint: "🩺 နာမကျန်းခွင့် ၃ ရက်အထိ ဆရာဝန်လက်မှတ် မလို · ၃ ရက်ကျော်လျှင် ဆရာဝန်လက်မှတ် လိုအပ်သည် — HR ထံ ဓာတ်ပုံပို့ပါ",
-    sickLong: "နာမကျန်းခွင့် ၃ ရက်ကျော် — ဆရာဝန်လက်မှတ် ဓာတ်ပုံကို HR ထံ ပို့ရန် မမေ့ပါနှင့်"
+    sickLong: "နာမကျန်းခွင့် ၃ ရက်ကျော် — ဆရာဝန်လက်မှတ် ဓာတ်ပုံကို HR ထံ ပို့ရန် မမေ့ပါနှင့်",
+    sickHintAttach: "🩺 နာမကျန်းခွင့် ၃ ရက်အထိ ဆရာဝန်လက်မှတ် မလို · ၃ ရက်ကျော်လျှင် ဆရာဝန်လက်မှတ် လိုအပ်သည် — အောက်တွင် ဓာတ်ပုံတွဲပါ (HR ထံ တိုက်ရိုက်) သို့မဟုတ် နောက်မှ ပို့နိုင်သည်",
+    certLabel: "ဆရာဝန်လက်မှတ် (ရှိလျှင် · အများဆုံး ၃ ပုံ)", certBtn: "ဆရာဝန်လက်မှတ် ဓာတ်ပုံတွဲရန်", certMore: "ပုံထပ်ထည့်ရန်",
+    certNote: "အမည်၊ ရက်စွဲ၊ ဆရာဝန်လက်မှတ် ရှင်းလင်းစွာ မြင်ရအောင် ရိုက်ပါ · HR ထံ တိုက်ရိုက်ပို့သည်",
+    certPreparing: "ဓာတ်ပုံ ပြင်ဆင်နေသည်...", certMax: (n)=>`အများဆုံး ${n} ပုံ`,
+    certBad: (n)=>`အသုံးမပြုနိုင်သော ပုံ ${n} ပုံ (ပြန်ရိုက်ပါ သို့မဟုတ် ဖုန်းထဲရှိပုံကို ရွေးပါ)`,
+    certFailed: (n)=>`⚠️ ဆရာဝန်လက်မှတ် ${n} ပုံ သိမ်း၍မရပါ — HR ထံ chat ဖြင့် ပို့ပါ`,
+    lateLabel: "ဆရာဝန်လက်မှတ် နောက်မှပို့ရန်", lateSub: "တင်ပြီးသော နာမကျန်းခွင့်ကို ရွေးပြီး ဓာတ်ပုံတွဲပါ — HR ထံ တိုက်ရိုက်",
+    lateBtn: "📎 ပုံတွဲရန်", lateHas: (n)=>`${n} ပုံ တွဲပြီး`, lateNone: "လက်မှတ် မရှိသေး", daysUnit: "ရက်",
+    lateSending: "ဆရာဝန်လက်မှတ် ပို့နေသည်..."
   }
 };
 let lang = localStorage.getItem("hrmsLiffLang") || "th";
@@ -256,7 +306,8 @@ function setLang(x){
     document.getElementById(idTh).textContent = x==="mm" ? mm : th;
     document.getElementById(idMm).textContent = x==="mm" ? th : mm;
   });
-  renderCompHint();
+  setText("txtCertLabel","certLabel"); setText("txtLateLabel","lateLabel"); setText("txtLateSub","lateSub");
+  renderCompHint(); renderCerts(); renderLate();
   syncLangToServer(x);
 }
 /* [รอบ 23] หยุดชดเชย: แสดงชิปเมื่อมีสิทธิ์คงเหลือ (ถาม liff-leave-submit action "balance") */
@@ -266,7 +317,7 @@ let ANNUAL = null;   // [รอบ 25] {enabled, eligibleFrom, quota, left}
 function nDaysSel(){ const f=document.getElementById("dateFrom").value, to=document.getElementById("dateTo").value||f; return Math.round((new Date(to+"T00:00:00Z") - new Date(f+"T00:00:00Z"))/86400000) + 1; }
 function renderCompHint(){
   const box = document.getElementById("compHint"); if(!box) return;
-  if(selectedType==="sick"){ box.textContent = t("sickHint"); box.style.display = "block"; return; }
+  if(selectedType==="sick"){ box.textContent = t(CERT && CERT.enabled ? "sickHintAttach" : "sickHint"); box.style.display = "block"; return; }
   if(selectedType==="annual" && ANNUAL){ box.textContent = t("annualHint")(ANNUAL.left, ANNUAL.quota); box.style.display = "block"; return; }
   if(!COMP || !(COMP.available>0) || selectedType!=="comp_day"){ box.style.display="none"; return; }
   const src = (COMP.credits||[]).slice(0,4).map(c=>fmtD(c.source_date)).join(", ");
@@ -285,6 +336,7 @@ async function loadCompBalance(){
       ANNUAL = j.annual; document.getElementById("chipAnnual").style.display = "";
     }
     if(j.compEnabled && j.available>0){ COMP = j; document.getElementById("chipComp").style.display = ""; }
+    if(j.certs && j.certs.enabled){ CERT = j.certs; renderCerts(); renderLate(); renderCompHint(); }
     const shown = [...document.querySelectorAll("#typeChips .chip")].filter(c=>c.style.display!=="none").length;
     document.getElementById("typeChips").classList.toggle("four", shown===4);
   }catch(e){ /* ไม่มีสิทธิ์/ตรวจไม่ได้ → ไม่แสดงชิป */ }
@@ -292,8 +344,102 @@ async function loadCompBalance(){
 function selectType(code){
   selectedType = code;
   document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("on", c.dataset.type===code));
-  renderCompHint();
+  renderCompHint(); renderCerts();
 }
+
+/* ===== [รอบ 27] ใบรับรองแพทย์ (ลาป่วย) — ย่อรูป/แปลง HEIC แล้วส่งไปกับใบลา · ส่งย้อนหลังได้ ===== */
+let CERT = null;        // {enabled, retentionDays, perSubmit, sick:[{leaveId, from, to, days, count}]}
+let certDraft = [];     // [{dataUrl}]
+function loadScriptOnce(src){ return new Promise((res,rej)=>{ if(document.querySelector('script[src="'+src+'"]')){ res(); return; } const s=document.createElement("script"); s.src=src; s.onload=()=>res(); s.onerror=()=>rej(new Error("load")); document.head.appendChild(s); }); }
+function isHeic(f){ return /hei[cf]/i.test(f.type||"") || /\.hei[cf]$/i.test(f.name||""); }
+function drawCert(img, w0, h0){
+  let max = 1600, q = 0.82, d = "";
+  for(let i=0;i<4;i++){
+    let w=w0, h=h0;
+    if(w>h && w>max){ h=Math.round(h*max/w); w=max; } else if(h>=w && h>max){ w=Math.round(w*max/h); h=max; }
+    const cv=document.createElement("canvas"); cv.width=w; cv.height=h; const cx=cv.getContext("2d"); cx.fillStyle="#fff"; cx.fillRect(0,0,w,h); cx.drawImage(img,0,0,w,h);
+    d = cv.toDataURL("image/jpeg", q);
+    if(!d || d.indexOf("data:image/jpeg")!==0 || d.length<1000) throw new Error("canvas");
+    if(d.length*0.75 <= 950*1024) return d;
+    max=Math.round(max*0.8); q=Math.max(0.6,q-0.08);
+  }
+  return d;
+}
+async function prepareCert(file){
+  if(!file || !file.size) throw new Error("empty");
+  let src = file;
+  if(isHeic(file)){
+    try{ if(!window.heic2any) await loadScriptOnce("https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js");
+      const out = await window.heic2any({ blob:file, toType:"image/jpeg", quality:0.85 }); src = Array.isArray(out)?out[0]:out; }catch(e){ console.warn("heic2any", e); }
+  }
+  try{
+    return await new Promise((resolve,reject)=>{ const img=new Image(); const url=URL.createObjectURL(src);
+      img.onload=()=>{ URL.revokeObjectURL(url); try{ resolve(drawCert(img, img.naturalWidth||img.width, img.naturalHeight||img.height)); }catch(e){ reject(e); } };
+      img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error("img")); }; img.src=url; });
+  }catch(e1){
+    if(typeof createImageBitmap!=="function") throw e1;
+    const bmp = await createImageBitmap(src); return drawCert(bmp, bmp.width, bmp.height);
+  }
+}
+async function prepareMany(files, limit){
+  const ok=[]; let bad=0;
+  for(const f of [...files].slice(0, limit)){ try{ ok.push({ dataUrl: await prepareCert(f) }); }catch(e){ bad++; } }
+  return { ok, bad, over: Math.max(0, files.length-limit) };
+}
+function perSubmit(){ return (CERT && CERT.perSubmit) || 3; }
+function renderCerts(){
+  const sec = document.getElementById("certSection"); if(!sec) return;
+  const on = !!(CERT && CERT.enabled && selectedType==="sick");
+  sec.style.display = on ? "" : "none";
+  if(!on) return;
+  document.getElementById("txtCertBtn").textContent = certDraft.length ? t("certMore") : t("certBtn");
+  document.getElementById("btnCert").style.display = certDraft.length >= perSubmit() ? "none" : "";
+  const g = document.getElementById("certThumbs"); g.innerHTML = "";
+  certDraft.forEach((c,i)=>{ const d=document.createElement("div"); d.className="thumb"; d.innerHTML='<img src="'+c.dataUrl+'" alt=""><button onclick="rmCert('+i+')">✕</button>'; g.appendChild(d); });
+  const n = document.getElementById("certNote"); if(!n.classList.contains("err")) n.textContent = t("certNote");
+}
+function rmCert(i){ certDraft.splice(i,1); renderCerts(); }
+function pickCert(){ document.getElementById("certInput").click(); }
+document.getElementById("certInput").addEventListener("change", async (ev)=>{
+  const files = [...(ev.target.files||[])]; ev.target.value = "";
+  if(!files.length) return;
+  const note = document.getElementById("certNote"); note.classList.remove("err"); note.textContent = "⏳ " + t("certPreparing");
+  const room = perSubmit() - certDraft.length;
+  const r = await prepareMany(files, room);
+  certDraft = certDraft.concat(r.ok);
+  if(r.bad || r.over){ note.classList.add("err"); note.textContent = "⚠️ " + [r.bad ? t("certBad")(r.bad) : "", r.over ? t("certMax")(perSubmit()) : ""].filter(Boolean).join(" · "); }
+  else note.textContent = t("certNote");
+  renderCerts();
+});
+// ส่งย้อนหลัง
+let lateTarget = null;
+function renderLate(){
+  const box = document.getElementById("lateBox"); if(!box) return;
+  const list = (CERT && CERT.enabled && CERT.sick) || [];
+  box.style.display = list.length ? "block" : "none";
+  document.getElementById("lateList").innerHTML = list.map(g=>`<div class="laterow">
+      <div class="ld">🤒 ${fmtD(g.from)}${g.to!==g.from?" – "+fmtD(g.to):""} (${g.days} ${t("daysUnit")})<small>${g.count ? t("lateHas")(g.count) : t("lateNone")}</small></div>
+      <button onclick="pickLate(${g.leaveId})" ${g.count>=5?"disabled":""}>${t("lateBtn")}</button></div>`).join("");
+}
+function pickLate(id){ lateTarget = id; document.getElementById("lateInput").click(); }
+document.getElementById("lateInput").addEventListener("change", async (ev)=>{
+  const files = [...(ev.target.files||[])]; ev.target.value = "";
+  if(!files.length || !lateTarget) return;
+  showStatus("⏳ " + t("certPreparing"), "info");
+  const r = await prepareMany(files, perSubmit());
+  if(!r.ok.length){ showStatus("⚠️ " + t("certBad")(r.bad||files.length), "err"); return; }
+  showStatus("⏳ " + t("lateSending"), "info");
+  try{
+    const idToken = liff.getIDToken(); if(!idToken) throw new Error(t("idErr"));
+    const res = await fetch(SUBMIT_URL, { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ idToken, action:"attach", leaveId: lateTarget, certs: r.ok.map(c=>c.dataUrl), lang }) });
+    const j = await res.json().catch(()=>({error:t("srvErr")}));
+    if(!res.ok || j.error) throw new Error(j.error || t("genErr"));
+    showStatus("✅ " + j.message + (r.bad ? " · " + t("certBad")(r.bad) : ""), "ok");
+    const g = (CERT.sick||[]).find(x=>x.leaveId===lateTarget); if(g) g.count += (j.certsSaved||r.ok.length);
+    renderLate();
+  }catch(err){ showStatus("⚠️ " + err.message, "err"); }
+});
 
 const statusBox = document.getElementById("statusBox");
 const btnSubmit = document.getElementById("btnSubmit");
@@ -321,14 +467,17 @@ async function doSubmit(){
     const res = await fetch(SUBMIT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idToken, leaveType: selectedType, dateFrom: from, dateTo: to, reason, lang })
+      body: JSON.stringify(Object.assign({ idToken, leaveType: selectedType, dateFrom: from, dateTo: to, reason, lang },
+        (selectedType==="sick" && CERT && CERT.enabled && certDraft.length) ? { certs: certDraft.map(c=>c.dataUrl) } : {}))
     });
     const json = await res.json().catch(()=>({error:t("srvErr")}));
     if(!res.ok || json.error) throw new Error(json.error || t("genErr"));
 
     showStatus("✅ " + (json.message || t("okMsg")(json.days||1)), "ok");
     btnSubmit.disabled = true;
-    if(selectedType==="sick" && (json.days||1)>3) showStatus("✅ " + (json.message || t("okMsg")(json.days||1)) + " — " + t("sickLong"), "ok");
+    if(selectedType==="sick" && (json.days||1)>3 && !json.certsSaved) showStatus("✅ " + (json.message || t("okMsg")(json.days||1)) + " — " + t("sickLong"), "ok");
+    if(json.certsFailed) showStatus("✅ " + (json.message || t("okMsg")(json.days||1)) + "\n" + t("certFailed")(json.certsFailed), "ok");
+    if(selectedType==="sick"){ certDraft = []; renderCerts(); loadCompBalance(); }
     if(selectedType==="annual" && ANNUAL){ ANNUAL.left = Math.max(0, ANNUAL.left - (json.days||1)); renderCompHint(); }
     if(selectedType==="comp_day" && COMP){ COMP.available = Math.max(0, COMP.available - (json.days||1)); COMP.credits = (COMP.credits||[]).slice(json.days||1); renderCompHint(); }
   }catch(err){
