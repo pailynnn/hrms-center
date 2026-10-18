@@ -9795,6 +9795,14 @@ function loadBackupStatus(force){
     if(error){ const missing = ["42883","PGRST202","42P01","PGRST205"].includes(String(error.code)) || /backup_status/.test(error.message||"");
       backupStatus = missing ? { schema:false } : { schema:true, error: error.message }; }
     else backupStatus = Object.assign({ schema:true }, data||{});
+  }).then(async ()=>{   // [18.13] PDF รายงานประจำวันที่สร้างไว้ใน Drive
+    if(!backupStatus || !backupStatus.schema || backupStatus.error) return;
+    try{
+      const [a, b] = await Promise.all([
+        sb.from("backup_files").select("path", { count:"exact", head:true }).eq("bucket","report-pdf"),
+        sb.from("daily_reports").select("id", { count:"exact", head:true }) ]);
+      backupStatus.pdf_done = a.count ?? null; backupStatus.reports_total = b.count ?? null;
+    }catch(e){}
   }).catch(e=>{ backupStatus = { schema:true, error: e.message }; })
     .finally(()=>{ backupLoading = false; if(currentPage==="settings" && subTab.settings==="backup") render("settings"); });
 }
@@ -9807,10 +9815,10 @@ function stBackup(){
   if(!s){ loadBackupStatus(); return `<div class="card"><h3>💾 สำรองข้อมูลลง Google Drive</h3><div class="hint">⏳ กำลังอ่านสถานะ...</div></div>`; }
   const what = `
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:14px">
-      <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>📊 Excel รายเดือน</b>
-        <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">1 ไฟล์ต่อ 1 เดือน เช่น <code>HRMS_2569-10_ตุลาคม.xlsx</code><br>ลงเวลา · ใบลา · OT · เงินเดือน · เบิกเงิน · รายงานหน้างาน ฯลฯ + ข้อมูลพนักงาน/ทรัพย์สิน ณ วันที่สำรอง<br>เดือนปัจจุบันอัปเดตทุกคืน · <b>หลังสิ้นเดือน 7 วันไฟล์เดือนนั้นจะไม่ถูกแก้อีก</b> (ไม่ทับกัน)</div></div>
-      <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>🖼️ รูปและเอกสารทุกไฟล์</b>
-        <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">ใบรับรองแพทย์ · รูปหน้างาน · PDF รายงาน · เอกสารพนักงาน<br>แยกโฟลเดอร์ตามเดือน ตั้งชื่อไฟล์อ่านง่าย · ส่งครั้งเดียวต่อไฟล์ ไม่ซ้ำ ไม่ลบ<br><b>ระบบจะไม่ลบรูปเก่าในเว็บจนกว่าจะสำรองลง Drive แล้ว</b></div></div>
+      <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>📊 Google Sheet รายปี</b>
+        <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">1 ไฟล์ต่อ 1 ปี เช่น <b>HRMS Backup2026</b> · <b>1 แท็บ = 1 เดือน</b> + แท็บสรุป<br>ลงเวลา · ใบลา · OT · เงินเดือน · เบิกเงิน · รายงานหน้างาน ฯลฯ + ข้อมูลพนักงาน/ทรัพย์สิน ณ วันที่สำรอง<br>เดือนปัจจุบันอัปเดตทุกคืน · <b>หลังสิ้นเดือน 7 วันแท็บนั้นจะไม่ถูกแก้อีก</b> · ขึ้นปีใหม่สร้างไฟล์ปีใหม่ให้เอง</div></div>
+      <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>🗂️ โฟลเดอร์ HRMS Backup (โฟลเดอร์เดียว)</b>
+        <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">📊 ทางลัดไป Google Sheet แต่ละปี<br>ใบรับรองแพทย์ / รูปหน้างาน / <b>รายงานประจำวัน PDF</b> → ปี → เดือน<br>เอกสารพนักงาน → รหัส ชื่อ · ส่งครั้งเดียวต่อไฟล์ ไม่ซ้ำ ไม่ลบ<br><b>ระบบจะไม่ลบรูปเก่าในเว็บจนกว่าจะสำรองลง Drive แล้ว</b></div></div>
       <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>⏰ ทำเองทุกคืน ~01:00 น.</b>
         <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">ทำงานในบัญชี Google ของบริษัท (Google Apps Script) ฟรี<br>ไฟล์อยู่ในโฟลเดอร์ <b>HRMS Backup</b> ใน Google Drive<br>ครั้งแรกถ้ารูปเยอะ ระบบจะทยอยส่งต่อเองทุก 1 นาทีจนครบ</div></div>
     </div>`;
@@ -9824,7 +9832,10 @@ function stBackup(){
   const pillCls = {green:"green",amber:"amber",red:"red",gray:"gray"}[health[0]];
   const done = Number(s.files_done)||0, total = Number(s.files_total)||0, pend = Number(s.files_pending)||0;
   const pct = total ? Math.round(done/total*100) : 100;
-  const months = Object.keys(s.months_done||{}).sort();
+  const md = s.months_done||{};
+  const v2 = !!(md.sheet && typeof md.sheet==="object");                // สคริปต์รุ่น 2 (Google Sheet) ทำงานแล้ว
+  const months = Object.keys(v2 ? md.sheet : md).filter(k=>/^\d{4}-\d\d$/.test(k)).sort();
+  const sheetLinks = Object.entries(md.sheets||{}).sort();
   const sum = s.last_summary || null;
   const stat = (label, val, sub) => `<div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><div class="hint" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;margin-top:2px">${val}</div>${sub?`<div class="hint" style="font-size:11.5px;margin-top:2px">${sub}</div>`:""}</div>`;
   return `
@@ -9840,9 +9851,12 @@ function stBackup(){
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:14px">
       ${stat("สำรองสำเร็จล่าสุด", s.last_ok_at?thDateTime(s.last_ok_at):"ยังไม่เคย", s.last_seen_at?`ติดต่อล่าสุด ${thDateTime(s.last_seen_at)}`:"สคริปต์ยังไม่เคยติดต่อมา")}
       ${stat("รูป/เอกสารที่สำรองแล้ว", `${fmt(done)} / ${fmt(total)}`, `${pct}%${pend?` · ค้าง ${fmt(pend)} ไฟล์ (${bytesTxt(s.pending_bytes)})`:" · ครบ"}`)}
-      ${stat("Excel รายเดือน", months.length?`${months.length} เดือน`:"—", months.length?months.slice(-4).map(backupMonthLabel).join(" · "):"")}
-      ${stat("รอบล่าสุด", sum?`${fmt(sum.files_uploaded||0)} ไฟล์`:"—", sum?`Excel ${(sum.excel||[]).map(backupMonthLabel).join(", ")||"—"}${sum.remaining?" · ยังทำต่อ":""}`:"")}
+      ${stat(v2?"Google Sheet (แท็บรายเดือน)":"Excel รายเดือน (รุ่นแรก)", months.length?`${months.length} เดือน`:"—", months.length?months.slice(-4).map(backupMonthLabel).join(" · "):"")}
+      ${stat("PDF รายงานประจำวัน", s.pdf_done!=null?`${fmt(s.pdf_done)} / ${fmt(s.reports_total||0)}`:"—", !v2?"เริ่มเมื่อใช้สคริปต์รุ่นใหม่":s.pdf_done==null?"":(s.pdf_done>=(s.reports_total||0)?"ครบทุกฉบับ":"ทยอยสร้างอยู่"))}
+      ${stat("รอบล่าสุด", sum?`${fmt(sum.files_uploaded||0)} ไฟล์${sum.pdfs?` · PDF ${fmt(sum.pdfs)}`:""}`:"—", sum?`${v2?"Sheet":"Excel"} ${(sum.excel||[]).map(backupMonthLabel).join(", ")||"—"}${sum.moved?` · จัดโฟลเดอร์ ${fmt(sum.moved)} ไฟล์`:""}${sum.remaining?" · ยังทำต่อ":""}`:"")}
     </div>
+    ${sheetLinks.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${sheetLinks.map(([y,u])=>`<a class="btn ghost sm" href="${esc(u)}" target="_blank" rel="noopener">📊 Google Sheet ${esc(y)} (${Number(y)+543})</a>`).join("")}</div>`:""}
+    ${!v2?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#eef4ff;border:1px solid #c9d8f5;font-size:12.5px;line-height:1.7">🆕 <b>มีสคริปต์รุ่นใหม่</b> — เก็บลง Google Sheet รายปี (แท็บรายเดือน) · จัดโฟลเดอร์ใหม่ · สร้าง PDF รายงานประจำวันทุกฉบับ<br>กด <b>🔑 สร้างรหัสใหม่ + สคริปต์ใหม่</b> → วางแทนโค้ดเดิมในโครงการ HRMS Backup → เลือก <b>setup</b> → เรียกใช้ → อนุญาตสิทธิ์ (ขอสิทธิ์ Sheet/Docs เพิ่ม)</div>`:""}
     ${s.last_error?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff1f0;border:1px solid #f5c2bd;font-size:12.5px;line-height:1.6">⚠️ ${esc(s.last_error)}<div class="hint" style="font-size:11.5px">${thDateTime(s.last_error_at)} · ไฟล์ที่พลาดจะลองใหม่คืนถัดไปเอง</div></div>`:""}
     ${ageH!=null && ageH>36?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f5d39b;font-size:12.5px;line-height:1.7">ไม่ได้สำรองเกิน 1 วัน — ตรวจที่ script.google.com → โครงการ → "การดำเนินการ" (Executions) ว่ามีข้อผิดพลาดไหม หรือกด "สร้างรหัสใหม่" แล้ววางสคริปต์ใหม่</div>`:""}
     <div class="hint" style="margin-top:12px;font-size:12px">รหัสเชื่อมต่อ ••••${esc(s.key_hint||"")} · สร้างเมื่อ ${thDateTime(s.key_created_at)}</div>
@@ -9880,7 +9894,7 @@ async function createBackupKey(rotate){
       <button class="mclose" onclick="closeModal()">×</button></div>
     <ol style="font-size:13px;line-height:1.9;margin:12px 0 10px 18px;padding:0">
       <li>กด <b>📋 คัดลอกสคริปต์</b></li>
-      <li>เปิด <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener"><b>script.google.com → โครงการใหม่</b></a> ด้วยบัญชี Google ของบริษัท${rotate?" (หรือเปิดโครงการเดิม)":""}</li>
+      <li>${rotate?`เปิด <a href="https://script.google.com/home" target="_blank" rel="noopener"><b>script.google.com</b></a> → <b>โครงการเดิม (HRMS Backup)</b>`:`เปิด <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener"><b>script.google.com → โครงการใหม่</b></a>`} ด้วยบัญชี Google ที่เป็นเจ้าของ Google Sheet <b>HRMS Backup2026</b></li>
       <li>ลบโค้ดเดิมทั้งหมด → วาง → กดบันทึก 💾 (ตั้งชื่อโครงการเช่น <i>HRMS Backup</i>)</li>
       <li>แถบด้านบนเลือกฟังก์ชัน <b>setup</b> → กด <b>▷ เรียกใช้</b> → <b>ตรวจสอบสิทธิ์</b> → เลือกบัญชี<br>
         <span class="hint" style="font-size:12px">ถ้าขึ้น "Google ไม่ได้ยืนยันแอปนี้" → กด <b>ขั้นสูง</b> → <b>ไปที่ HRMS Backup (ไม่ปลอดภัย)</b> → <b>อนุญาต</b> (เป็นสคริปต์ของบริษัทเอง)</span></li>
