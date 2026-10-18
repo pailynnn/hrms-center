@@ -807,6 +807,9 @@ async function openLeaveCertModal(leaveId){
   }));
   const live = certs.filter(a=>!a.purged_at);
   const purgeOn = live.length ? live.map(certPurgeDate).sort()[0] : null;
+  certViewer = { list: live.map(a=>({ id:a.id, idx:certs.indexOf(a), url:urls[a.id],
+    label:`${a.source==="line"?"ส่งทาง LINE":"แนบในเว็บ"} · ${new Date(a.created_at).toLocaleString("th-TH",{dateStyle:"medium",timeStyle:"short"})}` })), i:0, rot:0, zoom:false,
+    title:`${e?e.name:"พนักงาน"} · ${LT(l.type).name} ${range}` };
   document.getElementById("modalBox").className = "modal modal-lg";
   document.getElementById("modalBox").innerHTML = `
     <div class="modal-head" id="certModalMark"><div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:grid;place-items:center;color:#fff">📎</div>
@@ -816,18 +819,24 @@ async function openLeaveCertModal(leaveId){
     ${purgeOn?`<div style="margin:12px 0;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f5d39b;font-size:12.5px;line-height:1.7">
       🗂️ ระบบเก็บรูปไว้ ${leaveCertDays()} วัน แล้วลบอัตโนมัติ — ${canSeePayroll()?`<b>ดาวน์โหลดแล้วบันทึกสำรองไว้ใน Google Drive ของบริษัท</b> ก่อน <b>${isoToThaiDisplay(purgeOn)}</b>`:`ลบประมาณ <b>${isoToThaiDisplay(purgeOn)}</b>`}
     </div>`:""}
-    <div style="display:flex;flex-direction:column;gap:14px;max-height:68vh;overflow:auto">
+    <div class="hint" style="margin-bottom:8px">แตะรูปเพื่อดูภาพใหญ่ (ซูม · หมุน · เลื่อนดูรูปถัดไป)</div>
+    <div id="certGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;max-height:62vh;overflow:auto;padding:2px">
       ${certs.map((a,i)=>a.purged_at
-        ? `<div class="hint" style="padding:14px;border:1px dashed var(--line);border-radius:10px">🗑️ รูปที่ ${i+1} ถูกลบตามกำหนด ${leaveCertDays()} วันแล้ว (${isoToThaiDisplay(String(a.purged_at).slice(0,10))})</div>`
-        : `<div style="border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#f8f9fc">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;position:sticky;top:0;background:#f8f9fc;border-bottom:1px solid var(--line);z-index:1">
-              <span class="hint">รูปที่ ${i+1} · ${a.source==="line"?"ส่งทาง LINE":"แนบในเว็บ"} · ${new Date(a.created_at).toLocaleString("th-TH",{dateStyle:"medium",timeStyle:"short"})}${a.hr_downloaded_at&&canSeePayroll()?` · ✅ ดาวน์โหลดแล้ว`:""}</span>
-              <span style="flex:1"></span>
-              <button class="btn ghost xs" onclick="window.open('${urls[a.id]}','_blank')">🔍 เปิดภาพเต็ม</button>
-              <button class="btn primary xs" onclick="downloadLeaveCert(${a.id}, ${i})">⬇️ ดาวน์โหลด</button>
+        ? `<div class="hint" style="padding:14px;border:1px dashed var(--line);border-radius:12px;display:grid;place-items:center;text-align:center;min-height:150px;font-size:12px">🗑️ รูปที่ ${i+1}<br>ถูกลบตามกำหนด ${leaveCertDays()} วันแล้ว<br>(${isoToThaiDisplay(String(a.purged_at).slice(0,10))})</div>`
+        : `<div class="cert-tile" style="border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#f8f9fc;display:flex;flex-direction:column">
+            <button type="button" onclick="openCertViewer(${live.indexOf(a)})" title="ดูภาพใหญ่" style="all:unset;cursor:zoom-in;display:block;position:relative;aspect-ratio:3/4;background:#fff">
+              <img src="${urls[a.id]}" alt="ใบรับรองแพทย์ รูปที่ ${i+1}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block">
+              <span style="position:absolute;left:6px;top:6px;background:rgba(15,23,42,.72);color:#fff;font-size:11px;padding:2px 7px;border-radius:99px">${i+1}/${certs.length}</span>
+              ${a.hr_downloaded_at&&canSeePayroll()?`<span style="position:absolute;right:6px;top:6px;background:rgba(22,163,74,.9);color:#fff;font-size:11px;padding:2px 7px;border-radius:99px">✓ โหลดแล้ว</span>`:""}
+            </button>
+            <div style="padding:7px 8px;display:flex;flex-direction:column;gap:6px">
+              <span class="hint" style="font-size:11px;line-height:1.4">${a.source==="line"?"LINE":"เว็บ"} · ${new Date(a.created_at).toLocaleString("th-TH",{dateStyle:"short",timeStyle:"short"})}</span>
+              <div style="display:flex;gap:6px">
+                <button class="btn ghost xs" style="flex:1;white-space:nowrap;padding-left:4px;padding-right:4px" onclick="openCertViewer(${live.indexOf(a)})">🔍 ดูใหญ่</button>
+                <button class="btn primary xs" style="flex:1;white-space:nowrap;padding-left:4px;padding-right:4px" onclick="downloadLeaveCert(${a.id}, ${i})">⬇️ โหลด</button>
+              </div>
             </div>
-            <img src="${urls[a.id]}" alt="ใบรับรองแพทย์ รูปที่ ${i+1}" style="display:block;width:100%;max-height:none;object-fit:contain;cursor:zoom-in;background:#fff" onclick="window.open(this.src,'_blank')">
-</div>`).join("")}
+          </div>`).join("")}
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       ${live.length>1?`<button class="btn primary sm" onclick="downloadAllLeaveCerts(${l.id})">⬇️ ดาวน์โหลดทั้งหมด (${live.length})</button>`:""}
@@ -835,6 +844,61 @@ async function openLeaveCertModal(leaveId){
       <span style="flex:1"></span><button class="btn ghost sm" onclick="closeModal()">ปิด</button>
     </div>`;
   document.getElementById("modalBg").classList.add("show");
+}
+/* ---- ดูภาพใบรับรองแพทย์ขนาดใหญ่ (ซ้อนบนหน้าต่างเดิม · ←/→ เลื่อน · หมุน · ซูม · Esc ปิด) ---- */
+let certViewer = null;
+function openCertViewer(i){
+  if(!certViewer || !certViewer.list.length) return;
+  certViewer.i = Math.max(0, Math.min(certViewer.list.length-1, i|0)); certViewer.rot = 0; certViewer.zoom = false;
+  let ov = document.getElementById("certViewer");
+  if(!ov){
+    ov = document.createElement("div"); ov.id = "certViewer";
+    ov.style.cssText = "position:fixed;inset:0;z-index:10050;background:rgba(10,14,25,.92);display:flex;flex-direction:column;color:#fff";
+    ov.addEventListener("click", ev=>{ if(ev.target.id==="certViewer" || ev.target.id==="cvStage") closeCertViewer(); });
+    let sx = null; // ปัดซ้าย/ขวาบนมือถือ = เลื่อนรูป
+    ov.addEventListener("touchstart", ev=>{ sx = (certViewer && !certViewer.zoom && ev.touches.length===1) ? ev.touches[0].clientX : null; }, { passive:true });
+    ov.addEventListener("touchend", ev=>{ if(sx==null) return; const dx = ev.changedTouches[0].clientX - sx; sx = null; if(Math.abs(dx)>50) stepCertViewer(dx<0?1:-1); }, { passive:true });
+    document.body.appendChild(ov);
+    document.addEventListener("keydown", certViewerKey);
+  }
+  renderCertViewer();
+}
+function renderCertViewer(){
+  const ov = document.getElementById("certViewer"); if(!ov || !certViewer) return;
+  const v = certViewer, it = v.list[v.i], n = v.list.length;
+  const navBtn = (dir, sym) => n>1 ? `<button type="button" onclick="stepCertViewer(${dir})" aria-label="${dir<0?"รูปก่อนหน้า":"รูปถัดไป"}" style="position:absolute;top:50%;${dir<0?"left":"right"}:10px;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:22px;cursor:pointer">${sym}</button>` : "";
+  ov.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;flex-wrap:wrap;background:rgba(0,0,0,.35)">
+      <div style="min-width:0;flex:1 1 240px"><b style="font-size:14px">รูปที่ ${it.idx+1} / ${n}</b> <span style="opacity:.75;font-size:12px">· ${it.label}</span>
+        <div style="opacity:.7;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${v.title}</div></div>
+      <button class="btn ghost xs" style="background:rgba(255,255,255,.12);color:#fff;border-color:transparent" onclick="rotateCertViewer()">↻ หมุน</button>
+      <button class="btn ghost xs" style="background:rgba(255,255,255,.12);color:#fff;border-color:transparent" onclick="certViewer.zoom=!certViewer.zoom;renderCertViewer()">${v.zoom?"🔍 พอดีจอ":"🔍 ขนาดจริง"}</button>
+      <button class="btn primary xs" onclick="downloadLeaveCert(${it.id}, ${it.idx})">⬇️ ดาวน์โหลด</button>
+      <button type="button" onclick="closeCertViewer()" aria-label="ปิด" style="width:34px;height:34px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:20px;cursor:pointer">×</button>
+    </div>
+    <div id="cvStage" style="flex:1;min-height:0;position:relative;overflow:${v.zoom?"auto":"hidden"};display:flex;align-items:${v.zoom?"flex-start":"center"};justify-content:${v.zoom?"flex-start":"center"};padding:12px">
+      <img id="cvImg" src="${it.url}" alt="ใบรับรองแพทย์ รูปที่ ${it.idx+1}" onclick="certViewer.zoom=!certViewer.zoom;renderCertViewer()"
+        style="${v.zoom?"max-width:none;max-height:none;margin:auto":"max-width:100%;max-height:100%"};transform:rotate(${v.rot}deg);transition:transform .2s;background:#fff;border-radius:4px;box-shadow:0 10px 40px rgba(0,0,0,.5);cursor:${v.zoom?"zoom-out":"zoom-in"}">
+      ${navBtn(-1,"‹")}${navBtn(1,"›")}
+    </div>
+    ${n>1?`<div style="display:flex;gap:8px;justify-content:center;padding:8px 10px 12px;overflow-x:auto">${v.list.map((x,j)=>`<img src="${x.url}" alt="" onclick="certViewer.i=${j};certViewer.rot=0;certViewer.zoom=false;renderCertViewer()" style="width:48px;height:60px;object-fit:cover;border-radius:6px;cursor:pointer;opacity:${j===v.i?1:.5};outline:${j===v.i?"2px solid #f59e0b":"none"};flex:none">`).join("")}</div>`:""}`;
+  fitCertViewer();
+}
+// พอดีกรอบ: วัดพื้นที่จริง (หมุน 90°/270° = สลับกว้าง/สูง) กันภาพล้นทับแถบปุ่ม
+function fitCertViewer(){
+  const st = document.getElementById("cvStage"), im = document.getElementById("cvImg"); if(!st || !im || !certViewer || certViewer.zoom) return;
+  const W = Math.max(80, st.clientWidth - 24), H = Math.max(80, st.clientHeight - 24), side = certViewer.rot%180!==0;
+  im.style.maxWidth = (side?H:W) + "px"; im.style.maxHeight = (side?W:H) + "px";
+}
+window.addEventListener("resize", ()=>{ if(document.getElementById("certViewer")) fitCertViewer(); });
+function stepCertViewer(d){ if(!certViewer) return; const n=certViewer.list.length; certViewer.i=(certViewer.i+d+n)%n; certViewer.rot=0; certViewer.zoom=false; renderCertViewer(); }
+function rotateCertViewer(){ if(!certViewer) return; certViewer.rot=(certViewer.rot+90)%360; renderCertViewer(); }
+function closeCertViewer(){ const ov=document.getElementById("certViewer"); if(ov) ov.remove(); document.removeEventListener("keydown", certViewerKey); }
+function certViewerKey(ev){
+  if(!document.getElementById("certViewer")) return;
+  if(ev.key==="Escape"){ ev.stopPropagation(); ev.preventDefault(); closeCertViewer(); }
+  else if(ev.key==="ArrowLeft") stepCertViewer(-1);
+  else if(ev.key==="ArrowRight") stepCertViewer(1);
 }
 async function downloadLeaveCert(attId, idx){
   const a = leaveAtt.find(x=>String(x.id)===String(attId)); if(!a || a.purged_at) return;
@@ -12146,7 +12210,7 @@ function pgAudit(){
 }
 
 /* ================== INIT ================== */
-function closeModal(){document.getElementById("modalBg").classList.remove("show");}
+function closeModal(){ if(typeof closeCertViewer==="function") closeCertViewer(); document.getElementById("modalBg").classList.remove("show");}
 // วันที่ไทยแบบเต็มของ "วันนี้" ตามเครื่องผู้ใช้ เช่น "วันศุกร์ที่ 21 สิงหาคม 2569"
 function todayThaiLabel(){
   const n = new Date();
