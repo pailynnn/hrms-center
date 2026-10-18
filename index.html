@@ -725,7 +725,7 @@ async function lvCertAdd(input){
 }
 function lvCertRemove(i){ lvCertDraft.splice(i,1); lvCertBoxRefresh(); }
 // ===== อัปโหลด + บันทึก + แจ้ง HR ทาง LINE =====
-async function uploadLeaveCerts(empId, group, items){
+async function uploadLeaveCerts(empId, group, items, opts){
   // group = { firstId, reqTs, from, to }
   const done = [], failed = [];
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g,"").slice(0,14);
@@ -744,7 +744,7 @@ async function uploadLeaveCerts(empId, group, items){
     if(ins.error){ failed.push(`${it.name}: ${ins.error.message}`); continue; }
     done.push(path);
   }
-  if(done.length && !canSeePayroll()) notifyHrLeaveCerts(done);   // HR แนบเอง = ไม่ต้องแจ้งตัวเอง
+  if(done.length && !canSeePayroll() && !(opts&&opts.skipNotify) && lineNotifyOn("leave_cert")) notifyHrLeaveCerts(done);   // HR แนบเอง = ไม่ต้องแจ้งตัวเอง
   return { done, failed };
 }
 // แจ้ง HR ทาง LINE (ส่งรูปตรงเข้าแชต + เตือนสำรองไฟล์) — edge leave-cert-notify · best-effort
@@ -1121,6 +1121,9 @@ async function loadSettings(){
   settings.lateGraceMinutes = data.late_grace_minutes!=null ? Number(data.late_grace_minutes) : 10;
   // ช่องทางแจ้งเตือน / ออโต้
   settings.channels = { line: data.channel_line!==false, email: data.channel_email!==false };
+  // [รอบ 18.10] สวิตช์แจ้งเตือน LINE รายฟังก์ชัน (ไม่มีคอลัมน์ = เปิดทุกอย่าง)
+  settings.lineNotifySchema = Object.prototype.hasOwnProperty.call(data, "line_notify");
+  settings.lineNotify = (data.line_notify && typeof data.line_notify==="object" && !Array.isArray(data.line_notify)) ? data.line_notify : {};
   settings.autoSyncLeaveAtt = data.auto_sync_leave_att!==false;
   settings.autoDeductUnpaid = data.auto_deduct_unpaid!==false;
   // โลเคชั่น (jsonb หลายสาขา — fallback จากคอลัมน์ office_* เดิม)
@@ -2189,7 +2192,7 @@ async function confirmPayroll(cy){
   await Promise.all([loadDeductions(), loadBonuses()]);
   await autoDisposeFullyPaidAssets(); // ผ่อนครบ → โอนกรรมสิทธิ์ทรัพย์สินเป็นของพนักงานอัตโนมัติ
   await loadAssets();
-  list.forEach(e=>notifyLineBestEffort(e.id, `💰 เงินเดือนงวด ${periodLabel(p)} ของคุณจ่ายเรียบร้อยแล้ว ดูสลิปได้ที่แอป HRMS CENTER`));
+  list.forEach(e=>notifyLineBestEffort(e.id, `💰 เงินเดือนงวด ${periodLabel(p)} ของคุณจ่ายเรียบร้อยแล้ว ดูสลิปได้ที่แอป HRMS CENTER`, "payslip_paid"));
   payrollState.status[cy] = "paid";
   await syncPayrollPeriod(cy, p, "paid");
   goRunStep(6); // → ขั้นแจกสลิปพนักงาน
@@ -6048,12 +6051,14 @@ async function doSubmitLeave(){
   if(typeCode==="sick" && leaveAttSchema && lvCertDraft.length){
     if(btn){ btn.disabled = true; btn.textContent = "กำลังอัปโหลดใบรับรองแพทย์..."; }
     const firstId = (insRows||[]).slice().sort((a,b)=>String(a.leave_date).localeCompare(String(b.leave_date)))[0]?.id || null;
-    const r = await uploadLeaveCerts(empId, { firstId, reqTs: nowISO, from, to }, lvCertDraft);
+    const r = await uploadLeaveCerts(empId, { firstId, reqTs: nowISO, from, to }, lvCertDraft, { skipNotify:true });
     if(btn){ btn.disabled = false; btn.textContent = "📤 ยื่นใบลา"; }
     certNote = r.done.length ? ` · แนบใบรับรองแพทย์ ${r.done.length} รูป` : "";
     if(r.failed.length) toast("⚠️ แนบใบรับรองแพทย์ไม่สำเร็จบางรูป: " + r.failed.join(", "));
   }
   lvCertDraft = [];
+  // [รอบ 18.10] การ์ดอนุมัติ + รูปใบรับรองแพทย์ส่งถึง HR ใน push เดียว (เหมือนยื่นผ่าน LINE)
+  if(insRows && insRows.length) notifyHrEvent({ event:"leave", ids: insRows.map(r=>r.id) });
 
   if(typeCode==="comp_day") await ensureCompCreditsLoaded(true);
   await loadLeaves();
@@ -6123,14 +6128,14 @@ async function actLeave(id,level,status){
   );
   if(bothApprovedNow){
     await syncLeaveToAttendance(l.emp, l.dateISO);
-    notifyLineBestEffort(l.emp, `✅ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ได้รับการอนุมัติแล้วครบทุกขั้นตอน — HRMS CENTER`);
+    notifyLineBestEffort(l.emp, `✅ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ได้รับการอนุมัติแล้วครบทุกขั้นตอน — HRMS CENTER`, "leave_result");
   } else if(status==="rejected"){
     // แจ้งกลับ LINE ทันทีเมื่อไม่อนุมัติ (ไม่ว่าระดับหัวหน้าหรือ HR)
     const who = "ฝ่ายบุคคล (HR)";
-    notifyLineBestEffort(l.emp, `❌ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ไม่ได้รับการอนุมัติจาก${who} — หากมีข้อสงสัยกรุณาติดต่อ${who}โดยตรง · HRMS CENTER`);
+    notifyLineBestEffort(l.emp, `❌ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ไม่ได้รับการอนุมัติจาก${who} — หากมีข้อสงสัยกรุณาติดต่อ${who}โดยตรง · HRMS CENTER`, "leave_result");
   } else if(status==="approved" && level==="sup"){
     // หัวหน้าอนุมัติแล้ว รอ HR — แจ้งความคืบหน้า
-    notifyLineBestEffort(l.emp, `⏳ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ผ่านการอนุมัติจากหัวหน้างานแล้ว รอ HR อนุมัติขั้นสุดท้าย — HRMS CENTER`);
+    notifyLineBestEffort(l.emp, `⏳ ใบลาของคุณวันที่ ${isoToThaiDisplay(l.dateISO)} ผ่านการอนุมัติจากหัวหน้างานแล้ว รอ HR อนุมัติขั้นสุดท้าย — HRMS CENTER`, "leave_result");
   }
   await loadLeaves();
   logAudit("leave", `${status==='approved'?'อนุมัติ':'ปฏิเสธ'}ใบลา`, `${e?e.name:'พนักงาน'} · ${l.date||l.dateISO||""}`);
@@ -7978,8 +7983,9 @@ async function submitAdvance(){
   const me = myEmp();
   const cy = employeeCycleOn(me, todayISODate()) || "monthly";
   const p = currentPeriod(cy); // ผูกกับ "งวดปัจจุบันจริง" ตอนยื่นขอ (ไม่ใช่งวดที่ HR อาจกำลังดูย้อนหลังอยู่)
-  const { error } = await sb.from("salary_advances").insert({ employee_id: loggedInEmployeeId, amount, reason, status:"pending", target_cycle_start:p.start, target_cycle_end:p.end });
+  const { data: advIns, error } = await sb.from("salary_advances").insert({ employee_id: loggedInEmployeeId, amount, reason, status:"pending", target_cycle_start:p.start, target_cycle_end:p.end }).select("id");
   if(error){ toast("เกิดข้อผิดพลาด: "+error.message); return; }
+  if(advIns && advIns[0]) notifyHrEvent({ event:"advance", id: advIns[0].id }, "advance_request");   // [รอบ 18.10] แจ้ง HR ทาง LINE
   logAudit("payroll","ยื่นขอเบิกเงินล่วงหน้า", `฿${fmt(amount)} · ${reason} · ผูกงวด ${periodLabel(p)}`);
   advanceRows = null;
   render("payroll");
@@ -8007,6 +8013,9 @@ async function reviewAdvance(id, decision){
   const targetLabel = (targetStart&&targetEnd) ? periodLabel({start:targetStart,end:targetEnd}) : "";
   logAudit("payroll", decision==="approved"?"อนุมัติเบิกเงินล่วงหน้า":"ไม่อนุมัติเบิกเงินล่วงหน้า", `${e?e.name:a.employee_id} · ฿${fmt(a.amount)}${targetLabel?` · งวด ${targetLabel}`:""}${rolled?" (เลื่อนงวด — งวดเดิมจ่ายไปแล้ว)":""}`);
   advanceRows = null;
+  if(e) notifyLineBestEffort(e.id, decision==="approved"
+    ? `✅ คำขอเบิกเงินล่วงหน้า ฿${fmt(a.amount)} ได้รับการอนุมัติแล้ว — จะหักจากเงินเดือนงวด ${targetLabel||"ถัดไป"} · HRMS CENTER`
+    : `❌ คำขอเบิกเงินล่วงหน้า ฿${fmt(a.amount)} ไม่ได้รับการอนุมัติ — หากมีข้อสงสัยกรุณาติดต่อฝ่ายบุคคล (HR) · HRMS CENTER`, "advance_result");
   if(decision==="approved" && e) await loadCycleStats(payrollState.cycle); // ยอดหักเข้าร่างงวดทันที (ถ้าตรงกับงวดที่กำลังดูอยู่)
   render("payroll");
   toast(decision==="approved"?`อนุมัติแล้ว ✓ ฿${fmt(a.amount)} จะถูกหักจากเงินเดือนของ ${e?.name} ในงวด ${targetLabel} ครั้งเดียว${rolled?" (เลื่อนงวดเพราะงวดเดิมจ่ายไปแล้ว)":""}`:"บันทึกไม่อนุมัติแล้ว");
@@ -9621,19 +9630,100 @@ async function setLateRate(v){
   await saveSettingsFields({late_per_min:rate}, "อัปเดตอัตราหักมาสายแล้ว ✓", "แก้ไขอัตราหักมาสาย", `${rate} บาท/นาที`);
 }
 
+/* ===== [รอบ 18.10] เปิด/ปิดการแจ้งเตือน LINE รายฟังก์ชัน (settings.line_notify · ไม่มีค่า = เปิด) =====
+   ฝั่งเซิร์ฟเวอร์ (edge) อ่านค่าเดียวกันเอง · ฝั่งหน้าเว็บกันที่ notifyLineBestEffort(empId, text, key) */
+const LINE_NOTIFY_ITEMS = [
+  { group:"hr", key:"leave_card", icon:"📝", name:"การ์ดอนุมัติใบลา", when:"ทันทีที่มีคนยื่นลา (LINE หรือเว็บ)", desc:"กด ✓ อนุมัติ / ✕ ไม่อนุมัติ ในแชตได้เลย · HR/Super Admin ยื่นเองไม่ส่ง" },
+  { group:"hr", key:"leave_cert", icon:"📎", name:"รูปใบรับรองแพทย์", when:"ทันทีที่แนบรูป (ตอนยื่นหรือส่งย้อนหลัง)", desc:"ส่งรูป + เตือนให้สำรองใน Google Drive ก่อนระบบลบ" },
+  { group:"hr", key:"advance_request", icon:"💳", name:"คำขอเบิกเงินล่วงหน้า", when:"ทันทีที่มีคนขอเบิก", desc:"บอกชื่อ จำนวนเงิน เหตุผล งวดที่หัก · อนุมัติในเว็บ" },
+  { group:"hr", key:"hr_digest", icon:"🔔", name:"สรุปรายการรออนุมัติ", when:"ทุกวัน 16:00 น. (ไม่มีรายการค้าง = ไม่ส่ง)", desc:"ใบลา · OT · แก้เวลา · เบิกเงิน · ทำงานวันหยุด · เปลี่ยนรอบจ่าย", test:"sendHrDigestNow()" },
+  { group:"hr", key:"daily_report_alert", icon:"📊", name:"รายงานประจำวันหน้างาน", when:"ทุกวัน 19:00 น. (ครบ/ไม่มีปัญหา = ไม่ส่ง)", desc:"ทีมที่ยังไม่ส่งรายงาน · แจ้งปัญหา · ความคืบหน้าต่ำ" },
+  { group:"sa", key:"storage_alert", icon:"💾", name:"พื้นที่เก็บไฟล์ / รูปใกล้ถูกลบ", when:"ตรวจทุกคืน 02:00 น. (เตือนไม่เกินสัปดาห์ละครั้ง)", desc:"พื้นที่ใช้เกิน 90% · รูปหน้างานจะถูกลบใน 7 วัน (การลบไฟล์ยังทำงานแม้ปิด)" },
+  { group:"emp", key:"leave_result", icon:"✅", name:"ผลอนุมัติใบลา", when:"เมื่อ HR อนุมัติ/ไม่อนุมัติ (เว็บหรือ LINE)", desc:"แจ้งพนักงานเจ้าของใบลา" },
+  { group:"emp", key:"advance_result", icon:"💰", name:"ผลคำขอเบิกเงินล่วงหน้า", when:"เมื่อ HR อนุมัติ/ไม่อนุมัติ", desc:"แจ้งพนักงานพร้อมงวดที่จะหัก" },
+  { group:"emp", key:"payslip_paid", icon:"🧾", name:"เงินเดือนจ่ายแล้ว", when:"เมื่อ HR กดยืนยันจ่ายงวด", desc:"แจ้งทุกคนในงวดว่าเปิดดูสลิปได้" },
+  { group:"emp", key:"dispatch", icon:"📋", name:"มอบหมายงานรายวัน", when:"เมื่อบันทึก/กดส่งงานมอบหมายในโมดูลโครงการ", desc:"ส่งถึงสมาชิกทีมที่ได้รับมอบหมาย" },
+];
+const LINE_NOTIFY_GROUPS = { hr:"ถึง HR (ถ้า HR ยังไม่ผูก LINE → Super Admin)", sa:"ถึง Super Admin (ไม่มี → HR)", emp:"ถึงพนักงาน" };
+function lineNotifyOn(key){
+  if(!settings.channels?.line) return false;
+  return !key || (settings.lineNotify||{})[key] !== false;
+}
+async function toggleLineNotify(key, on){
+  if(!settings.lineNotifySchema){ toast("ต้องรัน round28_line_notify.sql ก่อนจึงเปิด/ปิดรายฟังก์ชันได้"); render("settings"); return; }
+  const it = LINE_NOTIFY_ITEMS.find(x=>x.key===key);
+  const next = Object.assign({}, settings.lineNotify||{}, { [key]: !!on });
+  await saveSettingsFields({ line_notify: next }, `${on?"เปิด":"ปิด"}แจ้งเตือน "${it?it.name:key}" แล้ว ✓`, "ตั้งค่าแจ้งเตือน LINE", `${it?it.name:key}: ${on?"เปิด":"ปิด"}`);
+}
+let lineQuota = null, lineQuotaLoading = false;
+function loadLineQuota(force){
+  if(lineQuotaLoading || (lineQuota && !force)) return;
+  lineQuotaLoading = true;
+  callHrEventNotify({ action:"quota" }).then(j=>{ lineQuota = (j && !j.error) ? j : { error: (j&&j.error)||"อ่านไม่ได้" }; })
+    .catch(e=>{ lineQuota = { error: e.message }; })
+    .finally(()=>{ lineQuotaLoading = false; if(currentPage==="settings" && subTab.settings==="channels") render("settings"); });
+}
+function lineQuotaHtml(){
+  if(!lineQuota){ loadLineQuota(); return `<span class="hint">⏳ กำลังอ่านจำนวนข้อความ LINE เดือนนี้...</span>`; }
+  if(lineQuota.error || lineQuota.used==null) return `<span class="hint">อ่านจำนวนข้อความเดือนนี้ไม่ได้${lineQuota.error?` (${lineQuota.error})`:""}</span>`;
+  if(lineQuota.limit==null) return `<b>เดือนนี้ส่งไปแล้ว ${fmt(lineQuota.used)} ข้อความ</b> <span class="hint">(แพ็กเกจไม่จำกัดจำนวน)</span>`;
+  const pct = Math.min(100, Math.round(lineQuota.used/Math.max(1,lineQuota.limit)*100));
+  const col = pct>=90?"var(--red)":pct>=70?"#f59e0b":"var(--green)";
+  return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b>เดือนนี้ส่งไปแล้ว ${fmt(lineQuota.used)} / ${fmt(lineQuota.limit)} ข้อความ</b>
+    <div style="flex:1;min-width:120px;height:8px;background:#e9edf5;border-radius:99px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${col}"></div></div>
+    <span class="hint">${pct}% · เหลือ ${fmt(Math.max(0,lineQuota.limit-lineQuota.used))}</span>
+    <button class="btn ghost xs" onclick="loadLineQuota(true)">↻</button></div>`;
+}
+function lineNotifyCard(){
+  const master = !!settings.channels?.line;
+  const can = !!settings.lineNotifySchema;
+  const onCount = LINE_NOTIFY_ITEMS.filter(i=>lineNotifyOn(i.key)).length;
+  const row = it => {
+    const on = lineNotifyOn(it.key);
+    return `<div style="display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--line)">
+      <div style="font-size:20px;width:28px;text-align:center">${it.icon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:13.5px">${it.name}</b>
+          <span class="pill ${on?'green':'gray'}" style="font-size:10.5px">${on?'เปิด':'ปิด'}</span>
+          ${it.test?`<button class="btn ghost xs" onclick="${it.test}">📤 ส่งทดสอบ</button>`:""}</div>
+        <div class="hint" style="font-size:12px;margin-top:2px">⏰ ${it.when}<br>${it.desc}</div>
+      </div>
+      <label class="switch" style="display:flex;align-items:center;gap:6px;cursor:${can&&master?'pointer':'not-allowed'};font-size:12px;white-space:nowrap">
+        <input type="checkbox" id="ln_${it.key}" ${on?'checked':''} ${can&&master?'':'disabled'} onchange="toggleLineNotify('${it.key}', this.checked)" style="width:18px;height:18px">
+      </label>
+    </div>`;
+  };
+  return `
+  <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#f4fbf6,#fff);border:1px solid #b9e8cc">
+    <h3>🔔 เลือกการแจ้งเตือน LINE <span class="pill ${master?'green':'gray'}" style="font-size:11px;vertical-align:middle">${master?`เปิดอยู่ ${onCount} / ${LINE_NOTIFY_ITEMS.length}`:'ปิดทั้งหมด (ปิดช่องทาง LINE)'}</span></h3>
+    <div class="hint" style="line-height:1.8;margin-top:4px">ติ๊กเปิด/ปิดได้ทีละเรื่อง มีผลทันที · ข้อความที่ระบบตอบกลับตอนกดปุ่มในแชตไม่นับโควตา · ประกาศข่าว / ทดสอบส่ง ส่งเฉพาะตอนกดเอง</div>
+    <div style="margin-top:10px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:10px">${master?lineQuotaHtml():'<span class="hint">ช่องทาง LINE ถูกปิดอยู่ (ด้านล่าง) — ไม่มีการส่งข้อความใด ๆ</span>'}</div>
+    ${can?"":`<div class="hint" style="margin-top:10px;padding:10px 12px;background:#fff8ec;border:1px solid #f5d39b;border-radius:10px">⚙️ ตอนนี้ทุกเรื่องเปิดอยู่ — รัน <b>round28_line_notify.sql</b> ก่อนจึงปิดรายเรื่องได้</div>`}
+    ${Object.entries(LINE_NOTIFY_GROUPS).map(([g,label])=>`
+      <details open style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--muted)">${label} · เปิด ${LINE_NOTIFY_ITEMS.filter(i=>i.group===g && lineNotifyOn(i.key)).length}/${LINE_NOTIFY_ITEMS.filter(i=>i.group===g).length}</summary>
+        ${LINE_NOTIFY_ITEMS.filter(i=>i.group===g).map(row).join("")}
+      </details>`).join("")}
+  </div>`;
+}
+async function callHrEventNotify(payload){
+  const { data: sess } = await sb.auth.getSession();
+  const token = sess?.session?.access_token; if(!token) return null;
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/hr-event-notify`, {
+    method:"POST", headers:{ "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+token },
+    body: JSON.stringify(payload)
+  });
+  return await res.json().catch(()=>null);
+}
+// แจ้ง HR ทันที (best-effort · HR/SA ทำเอง = ไม่ส่ง · edge ตรวจสวิตช์ซ้ำ)
+function notifyHrEvent(payload, key){
+  if(canSeePayroll() || !lineNotifyOn(key)) return;
+  callHrEventNotify(payload).catch(e=>console.warn("hr-event-notify", e));
+}
 function stChan(){
   const webhookUrl = `${SUPABASE_URL}/functions/v1/line-webhook`;
   return `
-  <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,#f4f7ff,#fff);border:1px solid #b9ccf5">
-    <h3>🔔 สรุปรายการรออนุมัติส่งเข้า LINE ของ HR — ทุกวัน 16:00 น.</h3>
-    <div class="hint" style="line-height:1.85;margin-top:4px">
-      ระบบจะรวบรวม<b>ทุกอย่างที่ยังไม่ได้อนุมัติ</b> (ใบลา · คำขอ OT · คำขอแก้เวลา · ขอเบิกเงินล่วงหน้า) แล้วส่งเป็นการ์ดเข้า LINE ของผู้ที่ถือสิทธิ์ <b>HR</b> เท่านั้น วันละ 1 ครั้งเวลา 16:00 น.<br>
-      • ถ้าวันนั้น<b>ไม่มีรายการค้าง จะไม่ส่งอะไรเลย</b><br>
-      • ในการ์ดมีปุ่ม “เปิดดู / กดอนุมัติ” กดแล้วเข้าแอปตรงหน้าที่ต้องอนุมัติทันที<br>
-      • ถ้า HR ยังไม่ได้ผูกบัญชี LINE ระบบจะส่งให้ Super Admin แทน
-    </div>
-    <button class="btn primary sm" style="margin-top:12px" onclick="sendHrDigestNow()">📤 ส่งสรุปทดสอบตอนนี้</button>
-  </div>
+  ${lineNotifyCard()}
   <div class="card">
     <h3>📡 ช่องทางแจ้งเตือน & สื่อสาร</h3>
     <div class="hint">ใช้ในโมดูลข่าวประกาศ, แจ้งเตือนใบลา, ส่งสลิปเงินเดือน ฯลฯ</div>
@@ -9774,8 +9864,8 @@ async function sendHrDigestNow(){
   }catch(err){ toast("ส่งไม่สำเร็จ: "+err.message); }
 }
 // ส่งแจ้งเตือน LINE แบบ fire-and-forget (ไม่บล็อก UI, เงียบถ้าพนักงานยังไม่ผูก LINE หรือปิดช่องทางไว้)
-function notifyLineBestEffort(empId, text){
-  if(!settings.channels?.line) return;
+function notifyLineBestEffort(empId, text, key){
+  if(!lineNotifyOn(key)) return;   // [รอบ 18.10] ปิดช่องทาง LINE หรือปิดเรื่องนี้ไว้ = ไม่ส่ง
   const e = E(empId);
   if(!e?.lineUserId) return;
   callLineFn(empId, text).catch(err=>console.warn("LINE notify failed:", err.message));
@@ -11441,15 +11531,17 @@ function dispatchLineText(d){
   return `📋 มอบหมายงานวันที่ ${isoToThaiDisplay(d.work_date)}\nทีม: ${g?g.name:'-'}\nโครงการ: ${p?p.name:'-'}${p?.site?' ('+p.site+')':''}${d.zone?`\nโซน/พื้นที่: ${d.zone}`:''}${d.time_from||d.time_to?`\nเวลา: ${d.time_from||'—'} – ${d.time_to||'—'}`:''}${d.task_note?`\nงาน: ${d.task_note}`:''}\n— HRMS CENTER`;
 }
 function sendDispatchLine(assignmentId){
+  if(!lineNotifyOn("dispatch")){ toast("ปิดการแจ้งเตือน LINE เรื่อง \"มอบหมายงานรายวัน\" ไว้ — เปิดได้ที่ ตั้งค่าระบบ → ช่องทางแจ้งเตือน"); return; }
   const d = dailyAssignments.find(x=>String(x.id)===String(assignmentId)); if(!d) return;
   const g = PG(d.group_id); if(!g){ toast("ไม่พบทีมของงานนี้"); return; }
   const mem = membersOf(g.id);
   if(mem.length===0){ toast("ทีมนี้ยังไม่มีสมาชิกให้แจ้ง"); return; }
   const text = dispatchLineText(d);
-  mem.forEach(m=>notifyLineBestEffort(m.employee_id, text));
+  mem.forEach(m=>notifyLineBestEffort(m.employee_id, text, "dispatch"));
   toast(`ส่ง LINE แจ้งทีม "${g.name}" แล้ว (${mem.length} คน) — จะถึงเฉพาะคนที่ผูก LINE ไว้แล้ว`);
 }
 function sendAllDispatchLine(){
+  if(!lineNotifyOn("dispatch")){ toast("ปิดการแจ้งเตือน LINE เรื่อง \"มอบหมายงานรายวัน\" ไว้ — เปิดได้ที่ ตั้งค่าระบบ → ช่องทางแจ้งเตือน"); return; }
   const todays = dailyAssignments.filter(d=>d.work_date===dispatchDate);
   if(todays.length===0){ toast("ยังไม่มีการมอบหมายงานวันนี้"); return; }
   let n = 0;
@@ -11457,7 +11549,7 @@ function sendAllDispatchLine(){
     const g = PG(d.group_id); if(!g) return;
     const mem = membersOf(g.id);
     const text = dispatchLineText(d);
-    mem.forEach(m=>{ notifyLineBestEffort(m.employee_id, text); n++; });
+    mem.forEach(m=>{ notifyLineBestEffort(m.employee_id, text, "dispatch"); n++; });
   });
   logAudit("project", "ส่ง LINE แจ้งมอบหมายงานรายวันทั้งหมด", isoToThaiDisplay(dispatchDate));
   toast(`ส่ง LINE แจ้ง ${todays.length} ทีม (${n} คน) แล้ว ✓`);
@@ -11522,7 +11614,7 @@ async function saveDispatch(id){
     const saved = (data && data[0]) || payload;
     const mem = membersOf(groupId);
     const text = (cur?"✏️ แก้ไขงานที่มอบหมาย\n":"") + dispatchLineText(saved);
-    mem.forEach(m=>notifyLineBestEffort(m.employee_id, text));
+    mem.forEach(m=>notifyLineBestEffort(m.employee_id, text, "dispatch"));
   }
 }
 async function deleteDispatch(id){
