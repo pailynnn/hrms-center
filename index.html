@@ -7429,7 +7429,7 @@ const DEEPLINK_PAGES = {
   leave:      {key:"leave",      subs:["dashboard","types","submit","approve","calendar","report","quota"]},
   attendance: {key:"attendance", subs:["today","ot","holiday","paysched","review","adjust","summary","late"]},
   payroll:    {key:"payroll",    subs:["dashboard","run","structure","slip","advance","deductions","bonus","report","ess"]},
-  settings:   {key:"settings",   subs:["company","work","holiday","late","payroll","org","approval","channels","users","phase2"]}
+  settings:   {key:"settings",   subs:["company","work","holiday","late","payroll","org","approval","channels","backup","users","phase2"]}
 };
 function applyDeepLink(){
   const raw = (location.hash||"").replace(/^#\/?/, "").trim();
@@ -8614,10 +8614,11 @@ function pgSettings(){
     ${tab("org","โครงสร้างองค์กร","🏗️")}
     ${tab("approval","สายการอนุมัติ","🔀")}
     ${tab("channels","ช่องทางแจ้งเตือน","📡")}
+    ${tab("backup","สำรองข้อมูล","💾")}
     ${tab("users","สิทธิ์ผู้ใช้","🔐")}
     ${tab("phase2","เฟส 2/3","🗺️")}
   </div><button class="subtab-arrow right" onclick="scrollSubtabs(this,160)">›</button></div>
-  ${t==="company"?stCompany():t==="work"?stWork():t==="holiday"?stHolidays():t==="late"?stLate():t==="payroll"?stPayroll():t==="org"?stOrg():t==="approval"?stApproval():t==="channels"?stChan():t==="users"?stUsers():stPhase2()}`;
+  ${t==="company"?stCompany():t==="work"?stWork():t==="holiday"?stHolidays():t==="late"?stLate():t==="payroll"?stPayroll():t==="org"?stOrg():t==="approval"?stApproval():t==="channels"?stChan():t==="backup"?stBackup():t==="users"?stUsers():stPhase2()}`;
 }
 function stCompany(){
   return `
@@ -9702,7 +9703,7 @@ const LINE_NOTIFY_ITEMS = [
   { group:"hr", key:"advance_request", icon:"💳", name:"คำขอเบิกเงินล่วงหน้า", when:"ทันทีที่มีคนขอเบิก", desc:"บอกชื่อ จำนวนเงิน เหตุผล งวดที่หัก · อนุมัติในเว็บ" },
   { group:"hr", key:"hr_digest", icon:"🔔", name:"สรุปรายการรออนุมัติ", when:"ทุกวัน 16:00 น. (ไม่มีรายการค้าง = ไม่ส่ง)", desc:"ใบลา · OT · แก้เวลา · เบิกเงิน · ทำงานวันหยุด · เปลี่ยนรอบจ่าย", test:"sendHrDigestNow()" },
   { group:"hr", key:"daily_report_alert", icon:"📊", name:"รายงานประจำวันหน้างาน", when:"ทุกวัน 19:00 น. (ครบ/ไม่มีปัญหา = ไม่ส่ง)", desc:"ทีมที่ยังไม่ส่งรายงาน · แจ้งปัญหา · ความคืบหน้าต่ำ" },
-  { group:"sa", key:"storage_alert", icon:"💾", name:"พื้นที่เก็บไฟล์ / รูปใกล้ถูกลบ", when:"ตรวจทุกคืน 02:00 น. (เตือนไม่เกินสัปดาห์ละครั้ง)", desc:"พื้นที่ใช้เกิน 90% · รูปหน้างานจะถูกลบใน 7 วัน (การลบไฟล์ยังทำงานแม้ปิด)" },
+  { group:"sa", key:"storage_alert", icon:"💾", name:"พื้นที่เก็บไฟล์ / รูปใกล้ถูกลบ / สำรองข้อมูลหยุด", when:"ตรวจทุกคืน 02:00 น. (ไม่มีปัญหา = ไม่ส่ง)", desc:"พื้นที่ใช้เกิน 90% · รูปหน้างานจะถูกลบใน 7 วัน (ถ้ายังไม่ได้ตั้งสำรองลง Drive) · สำรองลง Drive หยุดเกิน 2 วัน · การลบไฟล์ยังทำงานแม้ปิด" },
   { group:"emp", key:"leave_result", icon:"✅", name:"ผลอนุมัติใบลา", when:"เมื่อ HR อนุมัติ/ไม่อนุมัติ (เว็บหรือ LINE)", desc:"แจ้งพนักงานเจ้าของใบลา" },
   { group:"emp", key:"advance_result", icon:"💰", name:"ผลคำขอเบิกเงินล่วงหน้า", when:"เมื่อ HR อนุมัติ/ไม่อนุมัติ", desc:"แจ้งพนักงานพร้อมงวดที่จะหัก" },
   { group:"emp", key:"payslip_paid", icon:"🧾", name:"เงินเดือนจ่ายแล้ว", when:"เมื่อ HR กดยืนยันจ่ายงวด", desc:"แจ้งทุกคนในงวดว่าเปิดดูสลิปได้" },
@@ -9783,6 +9784,128 @@ async function callHrEventNotify(payload){
 function notifyHrEvent(payload, key){
   if(canSeePayroll() || !lineNotifyOn(key)) return;
   callHrEventNotify(payload).catch(e=>console.warn("hr-event-notify", e));
+}
+/* ===== [รอบ 18.12] สำรองข้อมูลลง Google Drive อัตโนมัติทุกคืน (round29_drive_backup.sql + edge drive-backup + Apps Script) =====
+   รหัสเชื่อมต่อสร้างที่นี่ (เห็นครั้งเดียว · เก็บเป็นแฮช) → ฝังในสคริปต์ให้ HR คัดลอกไปวางใน script.google.com */
+let backupStatus = null, backupLoading = false;
+function loadBackupStatus(force){
+  if(backupLoading || (backupStatus && !force)) return;
+  backupLoading = true;
+  sb.rpc("backup_status").then(({ data, error })=>{
+    if(error){ const missing = ["42883","PGRST202","42P01","PGRST205"].includes(String(error.code)) || /backup_status/.test(error.message||"");
+      backupStatus = missing ? { schema:false } : { schema:true, error: error.message }; }
+    else backupStatus = Object.assign({ schema:true }, data||{});
+  }).catch(e=>{ backupStatus = { schema:true, error: e.message }; })
+    .finally(()=>{ backupLoading = false; if(currentPage==="settings" && subTab.settings==="backup") render("settings"); });
+}
+const thDateTime = iso => iso ? new Date(iso).toLocaleString("th-TH",{dateStyle:"medium",timeStyle:"short"}) : "—";
+const bytesTxt = b => { b = Number(b)||0; return b>=1e9 ? (b/1e9).toFixed(2)+" GB" : b>=1e6 ? (b/1e6).toFixed(1)+" MB" : Math.round(b/1e3)+" KB"; };
+function backupMonthLabel(ym){ const [y,m] = String(ym).split("-").map(Number); return `${THMONTHS_SHORT_BK[m-1]} ${y+543}`; }
+const THMONTHS_SHORT_BK = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+function stBackup(){
+  const s = backupStatus;
+  if(!s){ loadBackupStatus(); return `<div class="card"><h3>💾 สำรองข้อมูลลง Google Drive</h3><div class="hint">⏳ กำลังอ่านสถานะ...</div></div>`; }
+  const what = `
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:14px">
+      <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>📊 Excel รายเดือน</b>
+        <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">1 ไฟล์ต่อ 1 เดือน เช่น <code>HRMS_2569-10_ตุลาคม.xlsx</code><br>ลงเวลา · ใบลา · OT · เงินเดือน · เบิกเงิน · รายงานหน้างาน ฯลฯ + ข้อมูลพนักงาน/ทรัพย์สิน ณ วันที่สำรอง<br>เดือนปัจจุบันอัปเดตทุกคืน · <b>หลังสิ้นเดือน 7 วันไฟล์เดือนนั้นจะไม่ถูกแก้อีก</b> (ไม่ทับกัน)</div></div>
+      <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>🖼️ รูปและเอกสารทุกไฟล์</b>
+        <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">ใบรับรองแพทย์ · รูปหน้างาน · PDF รายงาน · เอกสารพนักงาน<br>แยกโฟลเดอร์ตามเดือน ตั้งชื่อไฟล์อ่านง่าย · ส่งครั้งเดียวต่อไฟล์ ไม่ซ้ำ ไม่ลบ<br><b>ระบบจะไม่ลบรูปเก่าในเว็บจนกว่าจะสำรองลง Drive แล้ว</b></div></div>
+      <div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><b>⏰ ทำเองทุกคืน ~01:00 น.</b>
+        <div class="hint" style="font-size:12px;line-height:1.7;margin-top:4px">ทำงานในบัญชี Google ของบริษัท (Google Apps Script) ฟรี<br>ไฟล์อยู่ในโฟลเดอร์ <b>HRMS Backup</b> ใน Google Drive<br>ครั้งแรกถ้ารูปเยอะ ระบบจะทยอยส่งต่อเองทุก 1 นาทีจนครบ</div></div>
+    </div>`;
+  if(!s.schema) return `<div class="card"><h3>💾 สำรองข้อมูลลง Google Drive อัตโนมัติ</h3>${what}
+    <div class="hint" style="margin-top:14px;padding:10px 12px;background:#fff8ec;border:1px solid #f5d39b;border-radius:10px">⚙️ ต้องรัน <b>round29_drive_backup.sql</b> ก่อนจึงเริ่มตั้งค่าได้</div></div>`;
+  if(s.error) return `<div class="card"><h3>💾 สำรองข้อมูลลง Google Drive อัตโนมัติ</h3><div class="hint" style="color:var(--red)">อ่านสถานะไม่ได้: ${esc(s.error)}</div><button class="btn ghost sm" style="margin-top:10px" onclick="loadBackupStatus(true)">↻ ลองใหม่</button></div>`;
+  const ageH = s.last_ok_at ? (Date.now()-new Date(s.last_ok_at).getTime())/3600000 : null;
+  const health = !s.configured ? ["gray","ยังไม่ได้ตั้งค่า"]
+    : ageH==null ? (s.last_seen_at ? ["amber","กำลังทำครั้งแรก"] : ["amber","รอติดตั้งสคริปต์"])
+    : ageH<=36 ? ["green","ทำงานปกติ"] : ageH<=72 ? ["amber","ไม่ได้สำรองเกิน 1 วัน"] : ["red",`ไม่ได้สำรอง ${Math.floor(ageH/24)} วัน`];
+  const pillCls = {green:"green",amber:"amber",red:"red",gray:"gray"}[health[0]];
+  const done = Number(s.files_done)||0, total = Number(s.files_total)||0, pend = Number(s.files_pending)||0;
+  const pct = total ? Math.round(done/total*100) : 100;
+  const months = Object.keys(s.months_done||{}).sort();
+  const sum = s.last_summary || null;
+  const stat = (label, val, sub) => `<div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><div class="hint" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;margin-top:2px">${val}</div>${sub?`<div class="hint" style="font-size:11.5px;margin-top:2px">${sub}</div>`:""}</div>`;
+  return `
+  <div class="card" style="background:linear-gradient(135deg,#f3f7ff,#fff);border:1px solid #c9d8f5">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <h3 style="margin:0">💾 สำรองข้อมูลลง Google Drive อัตโนมัติ</h3>
+      <span class="pill ${pillCls}" style="font-size:11px">${health[1]}</span>
+      <span style="flex:1"></span>
+      <button class="btn ghost sm" onclick="loadBackupStatus(true)">↻ อัปเดต</button>
+      ${s.drive_folder_url?`<a class="btn primary sm" href="${esc(s.drive_folder_url)}" target="_blank" rel="noopener">📂 เปิดโฟลเดอร์ใน Drive</a>`:""}
+    </div>
+    ${s.configured ? `
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:14px">
+      ${stat("สำรองสำเร็จล่าสุด", s.last_ok_at?thDateTime(s.last_ok_at):"ยังไม่เคย", s.last_seen_at?`ติดต่อล่าสุด ${thDateTime(s.last_seen_at)}`:"สคริปต์ยังไม่เคยติดต่อมา")}
+      ${stat("รูป/เอกสารที่สำรองแล้ว", `${fmt(done)} / ${fmt(total)}`, `${pct}%${pend?` · ค้าง ${fmt(pend)} ไฟล์ (${bytesTxt(s.pending_bytes)})`:" · ครบ"}`)}
+      ${stat("Excel รายเดือน", months.length?`${months.length} เดือน`:"—", months.length?months.slice(-4).map(backupMonthLabel).join(" · "):"")}
+      ${stat("รอบล่าสุด", sum?`${fmt(sum.files_uploaded||0)} ไฟล์`:"—", sum?`Excel ${(sum.excel||[]).map(backupMonthLabel).join(", ")||"—"}${sum.remaining?" · ยังทำต่อ":""}`:"")}
+    </div>
+    ${s.last_error?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff1f0;border:1px solid #f5c2bd;font-size:12.5px;line-height:1.6">⚠️ ${esc(s.last_error)}<div class="hint" style="font-size:11.5px">${thDateTime(s.last_error_at)} · ไฟล์ที่พลาดจะลองใหม่คืนถัดไปเอง</div></div>`:""}
+    ${ageH!=null && ageH>36?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f5d39b;font-size:12.5px;line-height:1.7">ไม่ได้สำรองเกิน 1 วัน — ตรวจที่ script.google.com → โครงการ → "การดำเนินการ" (Executions) ว่ามีข้อผิดพลาดไหม หรือกด "สร้างรหัสใหม่" แล้ววางสคริปต์ใหม่</div>`:""}
+    <div class="hint" style="margin-top:12px;font-size:12px">รหัสเชื่อมต่อ ••••${esc(s.key_hint||"")} · สร้างเมื่อ ${thDateTime(s.key_created_at)}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn ghost sm" onclick="createBackupKey(true)">🔑 สร้างรหัสใหม่ + สคริปต์ใหม่</button>
+    </div>` : `
+    <div style="margin-top:14px;padding:14px;border:1.5px dashed #9db5e8;border-radius:12px;background:#fff">
+      <b>เริ่มใช้งาน (ครั้งเดียว ~5 นาที)</b>
+      <ol class="hint" style="font-size:12.5px;line-height:1.9;margin:6px 0 10px 18px;padding:0">
+        <li>กดปุ่มด้านล่าง → ระบบสร้างรหัสเชื่อมต่อและสคริปต์ให้</li>
+        <li>คัดลอกสคริปต์ → วางใน <b>script.google.com</b> (บัญชี Google ของบริษัท)</li>
+        <li>เลือกฟังก์ชัน <b>setup</b> → กดเรียกใช้ → อนุญาตสิทธิ์ เสร็จ</li>
+      </ol>
+      <button class="btn primary" onclick="createBackupKey(false)">🔑 สร้างรหัสและสคริปต์</button>
+    </div>`}
+    ${what}
+  </div>`;
+}
+async function createBackupKey(rotate){
+  if(!canSeePayroll()){ toast("เฉพาะ HR / Super Admin"); return; }
+  if(rotate && !confirm("สร้างรหัสใหม่?\nสคริปต์เดิมใน Google จะใช้ไม่ได้ทันที ต้องวางสคริปต์ใหม่แทนโค้ดเดิม\n(ไฟล์ที่สำรองไว้แล้วใน Drive ไม่หาย)")) return;
+  let src = "";
+  try{ const r = await fetch("tools/drive-backup.gs?v="+Date.now(), { cache:"no-store" }); if(!r.ok) throw new Error("HTTP "+r.status); src = await r.text(); }
+  catch(e){ toast("โหลดสคริปต์ไม่ได้: "+e.message); return; }
+  const { data: key, error } = await sb.rpc("backup_new_key");
+  if(error || !key){ toast("สร้างรหัสไม่สำเร็จ: "+(error?error.message:"")); return; }
+  logAudit("system", rotate?"สร้างรหัสสำรองข้อมูลใหม่":"ตั้งค่าสำรองข้อมูลลง Google Drive", "รหัส ••••"+String(key).slice(-4));
+  const code = src.replace("__BACKUP_KEY__", key).replace("__ENDPOINT__", `${SUPABASE_URL}/functions/v1/drive-backup`);
+  window.__backupScript = code;
+  backupStatus = null; loadBackupStatus(true);
+  document.getElementById("modalBox").className = "modal modal-lg";
+  document.getElementById("modalBox").innerHTML = `
+    <div class="modal-head"><div style="width:40px;height:40px;background:#1a73e8;border-radius:10px;display:grid;place-items:center;color:#fff">💾</div>
+      <div><h3 style="font-size:16px">สคริปต์สำรองข้อมูล — วางใน Google Apps Script</h3><div class="hint">รหัสนี้แสดงครั้งเดียว · ปิดหน้าต่างแล้วต้องสร้างใหม่</div></div>
+      <button class="mclose" onclick="closeModal()">×</button></div>
+    <ol style="font-size:13px;line-height:1.9;margin:12px 0 10px 18px;padding:0">
+      <li>กด <b>📋 คัดลอกสคริปต์</b></li>
+      <li>เปิด <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener"><b>script.google.com → โครงการใหม่</b></a> ด้วยบัญชี Google ของบริษัท${rotate?" (หรือเปิดโครงการเดิม)":""}</li>
+      <li>ลบโค้ดเดิมทั้งหมด → วาง → กดบันทึก 💾 (ตั้งชื่อโครงการเช่น <i>HRMS Backup</i>)</li>
+      <li>แถบด้านบนเลือกฟังก์ชัน <b>setup</b> → กด <b>▷ เรียกใช้</b> → <b>ตรวจสอบสิทธิ์</b> → เลือกบัญชี<br>
+        <span class="hint" style="font-size:12px">ถ้าขึ้น "Google ไม่ได้ยืนยันแอปนี้" → กด <b>ขั้นสูง</b> → <b>ไปที่ HRMS Backup (ไม่ปลอดภัย)</b> → <b>อนุญาต</b> (เป็นสคริปต์ของบริษัทเอง)</span></li>
+      <li>รอจนบันทึกการดำเนินการขึ้น "เสร็จ" → กลับมากด ↻ อัปเดต ที่หน้านี้</li>
+    </ol>
+    <textarea id="bkScript" readonly style="width:100%;height:180px;font-family:monospace;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:8px;background:#f8f9fc" onclick="this.select()">${esc(code)}</textarea>
+    <div class="hint" style="font-size:12px;margin-top:6px">⚠️ สคริปต์นี้มีรหัสที่ดึงข้อมูล HR ได้ทั้งหมด — อย่าส่งต่อในแชต · ถ้าหลุดให้กด "สร้างรหัสใหม่"</div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn primary" onclick="copyBackupScript()">📋 คัดลอกสคริปต์</button>
+      <button class="btn ghost sm" onclick="downloadBackupScript()">⬇️ ดาวน์โหลดเป็นไฟล์</button>
+      <span style="flex:1"></span><button class="btn ghost sm" onclick="closeModal()">ปิด</button>
+    </div>`;
+  document.getElementById("modalBg").classList.add("show");
+}
+async function copyBackupScript(){
+  const code = window.__backupScript || ""; if(!code) return;
+  try{ await navigator.clipboard.writeText(code); }
+  catch(e){ const el = document.getElementById("bkScript"); el.select(); document.execCommand("copy"); }
+  toast("คัดลอกสคริปต์แล้ว ✓ ไปวางใน script.google.com");
+}
+function downloadBackupScript(){
+  const code = window.__backupScript || ""; if(!code) return;
+  const url = URL.createObjectURL(new Blob([code], { type:"text/plain" }));
+  const a = document.createElement("a"); a.href = url; a.download = "HRMS-Backup.gs"; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 3000);
 }
 function stChan(){
   const webhookUrl = `${SUPABASE_URL}/functions/v1/line-webhook`;
