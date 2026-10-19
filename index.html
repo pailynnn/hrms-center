@@ -1332,13 +1332,25 @@ function dayOffKindFor(e, dISO){
   const d = new Date(String(dISO).slice(0,10)+"T00:00:00").getDay();
   return weeklyOffDowsFor(e).includes(d) ? "weekly_off" : null;
 }
+// [รอบ 18.15] วันนี้ปิดเพราะ "บริษัทปิดกรณีพิเศษ" อย่างเดียว (ไม่มีวันหยุดประเพณีของคนนี้ซ้อน)
+function onlySpecialClosureOn(dISO, e){
+  return specialClosureOn(dISO, e) && !(Array.isArray(holidayRows)?holidayRows:[]).some(h=>h.holiday_date===dISO && h.holiday_type!=="special" && holidayAppliesTo(h, e) && !holidayMovedFor(h, e));
+}
+// [รอบ 18.15] ประเภทวันสำหรับ OT — วันปิดกรณีพิเศษไม่ใช่วันหยุด → ยื่น OT ได้ · คิด ×1.5 แบบวันทำงาน
+//   (ถ้าวันปิดพิเศษตรงวันหยุดประจำสัปดาห์ของคนนั้น ยังเป็นวันหยุดตามเดิม)
+function otDayOffKindFor(e, dISO){
+  const k = dayOffKindFor(e, dISO);
+  if(k!=="company_holiday" || !onlySpecialClosureOn(dISO, e)) return k;
+  const d = new Date(String(dISO).slice(0,10)+"T00:00:00").getDay();
+  return weeklyOffDowsFor(e).includes(d) ? "weekly_off" : null;
+}
 // ยอดเงินของคำขอ OT 1 ใบ (ใช้แสดงในตาราง) — วันหยุด ×3 · วันทำงาน ×1.5 · ก่อนวันเริ่มกติกาใหม่ = สูตรเดิม
 function otRequestPay(e, o){
   if(e && e.otExempt) return 0;   // [รอบ 23] พนักงานไม่รับค่า OT
   const dISO = o.dateISO || o.work_date;
   const h = Number(o.hours)||0;
   if(!payV2On(dISO)) return Math.round(h*calcOTHourlyFor(e));
-  const m = dayOffKindFor(e, dISO) ? settings.otMultHoliday : settings.otMultWorkday;
+  const m = otDayOffKindFor(e, dISO) ? settings.otMultHoliday : settings.otMultWorkday;
   return payCeil(h*hourlyRateV2(e)*m);
 }
 // ค่าทำงานวันหยุด 1 รายการ (ยังไม่ปัด) — รายวันในวันหยุดบริษัทได้ค่าจ้างวันหยุดในฐานเงินเดือนแล้ว จึงบวกเพิ่มอีก (ตัวคูณรายวัน − 1)
@@ -1416,9 +1428,19 @@ async function submitOt(){
   // [รอบ 18.1] วันหยุดของพนักงาน (ตั้งแต่วันเริ่มกติกาใหม่) ไม่ยื่น OT — ชั่วโมงทั้งหมดอยู่ใน "บันทึกทำงานวันหยุด" รายการเดียว กันคิดซ้ำ
   const _otEmp = E(empId) || myEmp();
   if(_otEmp && _otEmp.otExempt){ toast(canPickOthers ? `${_otEmp.name} ไม่รับค่า OT — ไม่ต้องยื่น OT` : "บัญชีของคุณไม่ได้รับค่า OT — ไม่ต้องยื่น OT (สอบถาม HR)"); return; }   // [รอบ 23]
-  if(_otEmp && payV2On(dateISO) && dayOffKindFor(_otEmp, dateISO)){
+  if(_otEmp && payV2On(dateISO) && otDayOffKindFor(_otEmp, dateISO)){
     toast("วันที่นี้เป็นวันหยุดของพนักงาน — ไม่ต้องยื่น OT · ให้ผู้ช่วย HR บันทึกที่แท็บ \"ทำงานวันหยุด\" แทน");
     return;
+  }
+  // [รอบ 18.15] วันบริษัทปิดกรณีพิเศษ = วันทำงาน → ยื่น OT ได้ (×1.5) · กันคิดซ้ำกับบันทึกทำงานวันหยุดของวันเดียวกัน
+  if(_otEmp && payV2On(dateISO) && onlySpecialClosureOn(dateISO, _otEmp)){
+    try{
+      const { data: hw } = await sb.from("holiday_work_records").select("id,status,ot_hours").eq("employee_id", empId).eq("work_date", dateISO);
+      if((hw||[]).some(r=>r.status!=="rejected" && (Number(r.ot_hours)||0)>0)){
+        toast("วันนี้มีบันทึกทำงานวันหยุดที่มีชั่วโมงเกินเวลาอยู่แล้ว — ใช้อย่างใดอย่างหนึ่ง (ลบชั่วโมงเกินในบันทึกนั้นก่อน หรือไม่ต้องยื่น OT)");
+        return;
+      }
+    }catch(_){}
   }
   const { error } = await sb.from("ot_requests").insert({ employee_id: empId, work_date: dateISO, hours, reason, start_time: startTime, end_time: endTime });
   if(error){ toast("เกิดข้อผิดพลาด: " + error.message); return; }
@@ -2065,7 +2087,7 @@ async function loadCycleStats(cy){
     countable.forEach(o=>{
       const h = Number(o.hours)||0;
       if(payV2On(o.work_date)){
-        const hol = !!dayOffKindFor(e, o.work_date);
+        const hol = !!otDayOffKindFor(e, o.work_date);   // [รอบ 18.15] วันปิดกรณีพิเศษ = OT วันทำงาน
         otNew += h*hourlyRateV2(e)*(hol ? settings.otMultHoliday : settings.otMultWorkday);
         if(hol) e.otHoursHoliday += h; else e.otHoursWork += h;
       } else { otOld += h*calcOTHourlyFor(e); e.otHoursOld += h; }
@@ -9269,7 +9291,7 @@ function stHolidays(){
     <div class="hint" style="line-height:1.85">
       • วันที่อยู่ในรายการนี้ <b>ไม่ถูกนับเป็นวันทำงาน</b> ของพนักงาน — ไม่ขึ้นเตือน "ลืมลงเวลา" และไม่ถูกหักเงินว่าขาดงาน<br>
       • <b>พนักงานรายเดือน</b> — เงินเดือนเท่าเดิม (วันหยุดไม่ถูกหัก)<br>
-      • <b>พนักงานรายวัน</b> — ${settings.v2Schema?`ได้ค่าจ้างวันหยุดตามประเพณี แม้ไม่ได้มาทำงาน (วันตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)}) · <b>บริษัทปิดกรณีพิเศษ</b> (ไฟดับ น้ำท่วม ไม่มีงาน ฯลฯ) = รายเดือนได้ปกติ ไม่หัก ไม่เพิ่ม · รายวันไม่ได้เงิน`:`ไม่ได้มาทำงาน = ไม่ได้ค่าแรง (แต่ไม่ถือว่าขาดงาน)`}<br>
+      • <b>พนักงานรายวัน</b> — ${settings.v2Schema?`ได้ค่าจ้างวันหยุดตามประเพณี แม้ไม่ได้มาทำงาน (วันตั้งแต่ ${isoToThaiDisplay(settings.payRulesV2From)}) · <b>บริษัทปิดกรณีพิเศษ</b> (ไฟดับ น้ำท่วม ไม่มีงาน ฯลฯ) = รายเดือนได้ปกติ ไม่หัก ไม่เพิ่ม · รายวันไม่ได้เงิน · ใครมาทำงานวันนั้นนับเป็นวันทำงาน ยื่น OT ได้ ×${settings.otMultWorkday}`:`ไม่ได้มาทำงาน = ไม่ได้ค่าแรง (แต่ไม่ถือว่าขาดงาน)`}<br>
       ${settings.v3Schema?`• วันที่บริษัทต้อง<b>เปิดทำงาน</b> — กด "🏗️ เปิดทำงาน" ที่แถววันหยุดนั้น เลือกกลุ่มคน และวิธีจัดการค่าจ้าง (เลื่อนวันหยุด → หยุดชดเชย หรือ จ่ายค่าทำงานวันหยุด)<br>`:''}
       • วันหยุดที่ตรง<b>วันหยุดประจำสัปดาห์ (${settings.weeklyHoliday||"อาทิตย์"})</b> ระบบขึ้นป้ายแดง + ปุ่มเพิ่ม <b>วันหยุดชดเชย</b> วันทำงานถัดไป (HR กดเอง · ไม่นับใน 13 วัน)<br>
       • มีผลกับ <b>ทุกคนทั้งบริษัท</b> เว้นแต่จะเลือกขอบเขตเป็นเฉพาะแผนก
