@@ -1,6 +1,7 @@
 /**
- * HRMS Center — สำรองข้อมูลลง Google Drive + Google Sheet อัตโนมัติทุกคืน (Google Apps Script) · รุ่น 2
+ * HRMS Center — สำรองข้อมูลลง Google Drive + Google Sheet อัตโนมัติทุกคืน (Google Apps Script) · รุ่น 3
  * ---------------------------------------------------------------------------
+ * รุ่น 3: แก้สร้าง PDF รายงานไม่ได้ · จำรหัสเชื่อมต่อไว้ในโครงการ (อัปเดตสคริปต์ครั้งต่อไปไม่ต้องสร้างรหัสใหม่)
  * วิธีติดตั้ง / อัปเดต (ใช้บัญชี Google ของบริษัทที่เป็นเจ้าของ Google Sheet และโฟลเดอร์ HRMS Backup):
  *   1) เปิด https://script.google.com → โครงการเดิม (HRMS Backup) หรือ "โครงการใหม่"
  *   2) ลบโค้ดเดิมทั้งหมด → วางโค้ดนี้ทั้งไฟล์ → กดบันทึก (รูปแผ่นดิสก์)
@@ -22,7 +23,8 @@
  *
  * ⚠️ รหัสด้านล่างใช้ดึงข้อมูล HR ทั้งหมด — อย่าแชร์สคริปต์นี้ · ถ้าหลุด ให้กด "สร้างรหัสใหม่" ในหน้าเว็บ แล้ววางสคริปต์ใหม่
  */
-var BACKUP_KEY = "__BACKUP_KEY__";
+var SCRIPT_VERSION = 3;                  // หน้าเว็บเทียบเลขนี้ เพื่อบอกว่ามีสคริปต์รุ่นใหม่
+var BACKUP_KEY = "__BACKUP_KEY__";       // ว่าง = ใช้รหัสที่จำไว้จากครั้งก่อน (อัปเดตสคริปต์ได้โดยไม่ต้องสร้างรหัสใหม่)
 var ENDPOINT   = "__ENDPOINT__";
 var ROOT_NAME  = "HRMS Backup";
 var SHEET_IDS  = { "2026": "1cp99UeSfO_YPJwUyC0nELvgRUCPUHnU5trkzax1mTso" };   // ปีที่ไม่มีในรายการ → สร้างไฟล์ใหม่ให้เอง
@@ -125,7 +127,7 @@ function run_(nightly) {
     try { linkSheets_(root, plan.sheets || {}); } catch (e) { errors.push("ทางลัด Google Sheet: " + msg_(e)); }
 
     if (left) scheduleContinue_();
-    call_({ action: "done", excel: sheetDone, files_uploaded: uploaded, pdfs: pdfs, moved: moved, remaining: left ? 1 : 0,
+    call_({ action: "done", v: SCRIPT_VERSION, excel: sheetDone, files_uploaded: uploaded, pdfs: pdfs, moved: moved, remaining: left ? 1 : 0,
             errors: errors.slice(0, 20), folder_url: root.getUrl(), ms: Date.now() - t0 });
     Logger.log("เสร็จ: Google Sheet %s เดือน · รูป/เอกสาร %s ไฟล์ · PDF รายงาน %s ฉบับ · ย้ายไฟล์เดิม %s · %s",
       sheetDone.length, uploaded, pdfs, moved, left ? "ยังมีงานค้าง — ทำต่ออัตโนมัติใน 1 นาที" : "ครบแล้ว");
@@ -317,7 +319,9 @@ function makeReportPdf_(r, folder) {
     // Paragraph ไม่มี setBold/setFontSize → จัดผ่าน editAsText()
     var st = function (p, o) { var tx = p.editAsText(); if (tx.getText().length) { tx.setBold(!!o.b); if (o.s) tx.setFontSize(o.s); tx.setForegroundColor(o.c || INK); } if (o.before) p.setSpacingBefore(o.before); return p; };
     var para = function (text, o) { return st(body.appendParagraph(String(text == null ? "" : text)), o); };
-    st(body.getParagraphs()[0].setText(r.company || "HRMS CENTER"), { b: true, s: 14, c: NAVY });
+    var p0 = body.getParagraphs()[0];       // Paragraph.setText() คืนค่า null ใน Apps Script → แยกบรรทัด
+    p0.setText(r.company || "HRMS CENTER");
+    st(p0, { b: true, s: 14, c: NAVY });
     if (r.company_th) para(r.company_th, { s: 10, c: GREY });
     para("รายงานประจำวันหน้างาน · DAILY SITE REPORT", { b: true, s: 15, c: ORANGE, before: 6 });
     para(r.report_no + " · " + r.date_th + " · สถานะ: " + r.status, { s: 10, c: GREY });
@@ -367,8 +371,15 @@ function makeReportPdf_(r, folder) {
 }
 
 // ---------- ตัวช่วย ----------
+function key_() {
+  var p = PropertiesService.getScriptProperties();
+  if (BACKUP_KEY && BACKUP_KEY.indexOf("__") !== 0) { if (p.getProperty("BACKUP_KEY") !== BACKUP_KEY) p.setProperty("BACKUP_KEY", BACKUP_KEY); return BACKUP_KEY; }
+  var k = p.getProperty("BACKUP_KEY");
+  if (!k) throw new Error("ไม่มีรหัสเชื่อมต่อ — กด \"สร้างรหัสใหม่ + สคริปต์ใหม่\" ในหน้าเว็บ แล้ววางสคริปต์ใหม่");
+  return k;
+}
 function call_(payload) {
-  payload.key = BACKUP_KEY;
+  payload.key = key_();
   var res = UrlFetchApp.fetch(ENDPOINT, { method: "post", contentType: "application/json", payload: JSON.stringify(payload), muteHttpExceptions: true });
   var code = res.getResponseCode(), body = {};
   try { body = JSON.parse(res.getContentText()); } catch (e) {}

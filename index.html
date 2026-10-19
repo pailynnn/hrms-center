@@ -9802,6 +9802,8 @@ function loadBackupStatus(force){
         sb.from("backup_files").select("path", { count:"exact", head:true }).eq("bucket","report-pdf"),
         sb.from("daily_reports").select("id", { count:"exact", head:true }) ]);
       backupStatus.pdf_done = a.count ?? null; backupStatus.reports_total = b.count ?? null;
+      const src = await fetch("tools/drive-backup.gs?v="+Date.now(), { cache:"no-store" }).then(r=>r.ok?r.text():"").catch(()=>"");
+      const mv = src.match(/var SCRIPT_VERSION = (\d+)/); backupStatus.latest_v = mv ? Number(mv[1]) : null;
     }catch(e){}
   }).catch(e=>{ backupStatus = { schema:true, error: e.message }; })
     .finally(()=>{ backupLoading = false; if(currentPage==="settings" && subTab.settings==="backup") render("settings"); });
@@ -9836,6 +9838,8 @@ function stBackup(){
   const v2 = !!(md.sheet && typeof md.sheet==="object");                // สคริปต์รุ่น 2 (Google Sheet) ทำงานแล้ว
   const months = Object.keys(v2 ? md.sheet : md).filter(k=>/^\d{4}-\d\d$/.test(k)).sort();
   const sheetLinks = Object.entries(md.sheets||{}).sort();
+  const curV = Number((s.last_summary||{}).v || (v2 ? 2 : 1));                  // รุ่นสคริปต์ที่ทำงานรอบล่าสุด (รุ่น 1–2 ไม่ส่งเลขรุ่น)
+  const needUpd = !!(s.configured && s.latest_v && curV < s.latest_v);
   const sum = s.last_summary || null;
   const stat = (label, val, sub) => `<div style="padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff"><div class="hint" style="font-size:12px">${label}</div><div style="font-size:18px;font-weight:700;margin-top:2px">${val}</div>${sub?`<div class="hint" style="font-size:11.5px;margin-top:2px">${sub}</div>`:""}</div>`;
   return `
@@ -9856,12 +9860,13 @@ function stBackup(){
       ${stat("รอบล่าสุด", sum?`${fmt(sum.files_uploaded||0)} ไฟล์${sum.pdfs?` · PDF ${fmt(sum.pdfs)}`:""}`:"—", sum?`${v2?"Sheet":"Excel"} ${(sum.excel||[]).map(backupMonthLabel).join(", ")||"—"}${sum.moved?` · จัดโฟลเดอร์ ${fmt(sum.moved)} ไฟล์`:""}${sum.remaining?" · ยังทำต่อ":""}`:"")}
     </div>
     ${sheetLinks.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${sheetLinks.map(([y,u])=>`<a class="btn ghost sm" href="${esc(u)}" target="_blank" rel="noopener">📊 Google Sheet ${esc(y)} (${Number(y)+543})</a>`).join("")}</div>`:""}
-    ${!v2?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#eef4ff;border:1px solid #c9d8f5;font-size:12.5px;line-height:1.7">🆕 <b>มีสคริปต์รุ่นใหม่</b> — เก็บลง Google Sheet รายปี (แท็บรายเดือน) · จัดโฟลเดอร์ใหม่ · สร้าง PDF รายงานประจำวันทุกฉบับ<br>กด <b>🔑 สร้างรหัสใหม่ + สคริปต์ใหม่</b> → วางแทนโค้ดเดิมในโครงการ HRMS Backup → เลือก <b>setup</b> → เรียกใช้ → อนุญาตสิทธิ์ (ขอสิทธิ์ Sheet/Docs เพิ่ม)</div>`:""}
+    ${needUpd?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#eef4ff;border:1px solid #c9d8f5;font-size:12.5px;line-height:1.7">🆕 <b>มีสคริปต์รุ่นใหม่</b> (รุ่น ${s.latest_v||"ใหม่"} · ที่ใช้อยู่ ${curV?("รุ่น "+curV):"รุ่นแรก"}) — ${!v2?"เก็บลง Google Sheet รายปี (แท็บรายเดือน) · จัดโฟลเดอร์ใหม่ · ":""}สร้าง PDF รายงานประจำวันทุกฉบับ<br>${curV>=3?`กด <b>📋 อัปเดตสคริปต์ (ใช้รหัสเดิม)</b>`:`กด <b>🔑 สร้างรหัสใหม่ + สคริปต์ใหม่</b>`} → วางแทนโค้ดเดิมในโครงการ HRMS Backup → บันทึก → เลือก <b>setup</b> → เรียกใช้ → อนุญาตสิทธิ์ (ถ้าถาม)</div>`:""}
     ${s.last_error?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff1f0;border:1px solid #f5c2bd;font-size:12.5px;line-height:1.6">⚠️ ${esc(s.last_error)}<div class="hint" style="font-size:11.5px">${thDateTime(s.last_error_at)} · ไฟล์ที่พลาดจะลองใหม่คืนถัดไปเอง</div></div>`:""}
     ${ageH!=null && ageH>36?`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f5d39b;font-size:12.5px;line-height:1.7">ไม่ได้สำรองเกิน 1 วัน — ตรวจที่ script.google.com → โครงการ → "การดำเนินการ" (Executions) ว่ามีข้อผิดพลาดไหม หรือกด "สร้างรหัสใหม่" แล้ววางสคริปต์ใหม่</div>`:""}
     <div class="hint" style="margin-top:12px;font-size:12px">รหัสเชื่อมต่อ ••••${esc(s.key_hint||"")} · สร้างเมื่อ ${thDateTime(s.key_created_at)}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-      <button class="btn ghost sm" onclick="createBackupKey(true)">🔑 สร้างรหัสใหม่ + สคริปต์ใหม่</button>
+      ${curV>=3?`<button class="btn ${needUpd?"primary":"ghost"} sm" onclick="createBackupKey('keep')">📋 อัปเดตสคริปต์ (ใช้รหัสเดิม)</button>`:""}
+      <button class="btn ${needUpd&&curV<3?"primary":"ghost"} sm" onclick="createBackupKey(true)">🔑 สร้างรหัสใหม่ + สคริปต์ใหม่</button>
     </div>` : `
     <div style="margin-top:14px;padding:14px;border:1.5px dashed #9db5e8;border-radius:12px;background:#fff">
       <b>เริ่มใช้งาน (ครั้งเดียว ~5 นาที)</b>
@@ -9877,20 +9882,26 @@ function stBackup(){
 }
 async function createBackupKey(rotate){
   if(!canSeePayroll()){ toast("เฉพาะ HR / Super Admin"); return; }
-  if(rotate && !confirm("สร้างรหัสใหม่?\nสคริปต์เดิมใน Google จะใช้ไม่ได้ทันที ต้องวางสคริปต์ใหม่แทนโค้ดเดิม\n(ไฟล์ที่สำรองไว้แล้วใน Drive ไม่หาย)")) return;
+  const keep = rotate === "keep";   // [18.14] อัปเดตสคริปต์โดยใช้รหัสเดิม (สคริปต์รุ่น 3 ขึ้นไปจำรหัสไว้ในโครงการ)
+  if(keep) rotate = true;
+  if(rotate && !keep && !confirm("สร้างรหัสใหม่?\nสคริปต์เดิมใน Google จะใช้ไม่ได้ทันที ต้องวางสคริปต์ใหม่แทนโค้ดเดิม\n(ไฟล์ที่สำรองไว้แล้วใน Drive ไม่หาย)")) return;
   let src = "";
   try{ const r = await fetch("tools/drive-backup.gs?v="+Date.now(), { cache:"no-store" }); if(!r.ok) throw new Error("HTTP "+r.status); src = await r.text(); }
   catch(e){ toast("โหลดสคริปต์ไม่ได้: "+e.message); return; }
-  const { data: key, error } = await sb.rpc("backup_new_key");
-  if(error || !key){ toast("สร้างรหัสไม่สำเร็จ: "+(error?error.message:"")); return; }
-  logAudit("system", rotate?"สร้างรหัสสำรองข้อมูลใหม่":"ตั้งค่าสำรองข้อมูลลง Google Drive", "รหัส ••••"+String(key).slice(-4));
+  let key = "";
+  if(!keep){
+    const { data, error } = await sb.rpc("backup_new_key");
+    if(error || !data){ toast("สร้างรหัสไม่สำเร็จ: "+(error?error.message:"")); return; }
+    key = data;
+    logAudit("system", rotate?"สร้างรหัสสำรองข้อมูลใหม่":"ตั้งค่าสำรองข้อมูลลง Google Drive", "รหัส ••••"+String(key).slice(-4));
+  }
   const code = src.replace("__BACKUP_KEY__", key).replace("__ENDPOINT__", `${SUPABASE_URL}/functions/v1/drive-backup`);
   window.__backupScript = code;
   backupStatus = null; loadBackupStatus(true);
   document.getElementById("modalBox").className = "modal modal-lg";
   document.getElementById("modalBox").innerHTML = `
     <div class="modal-head"><div style="width:40px;height:40px;background:#1a73e8;border-radius:10px;display:grid;place-items:center;color:#fff">💾</div>
-      <div><h3 style="font-size:16px">สคริปต์สำรองข้อมูล — วางใน Google Apps Script</h3><div class="hint">รหัสนี้แสดงครั้งเดียว · ปิดหน้าต่างแล้วต้องสร้างใหม่</div></div>
+      <div><h3 style="font-size:16px">สคริปต์สำรองข้อมูล — วางใน Google Apps Script</h3><div class="hint">${keep?"รุ่นล่าสุด · ใช้รหัสเดิมที่จำไว้ในโครงการ (ไม่ต้องสร้างรหัสใหม่)":"รหัสนี้แสดงครั้งเดียว · ปิดหน้าต่างแล้วต้องสร้างใหม่"}</div></div>
       <button class="mclose" onclick="closeModal()">×</button></div>
     <ol style="font-size:13px;line-height:1.9;margin:12px 0 10px 18px;padding:0">
       <li>กด <b>📋 คัดลอกสคริปต์</b></li>
